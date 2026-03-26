@@ -161,7 +161,7 @@ if analyze_button and ld_to_send and svm_to_send:
                                     row = {
                                         "Parámetro": item['parameter'],
                                         "Valor Actual": val_curr,
-                                        "Recomendación": f"✨ **{val_new}**" if has_change else "✅",
+                                        "Recomendación": f"✨ {val_new}" if has_change else "✅",
                                         "Motivo / Justificación": item['reason']
                                     }
                                     table_data.append(row)

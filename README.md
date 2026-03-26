@@ -1,6 +1,6 @@
 # rFactor2 Engineer
 
-rFactor2 Engineer es una aplicación inteligente diseñada para pilotos de rFactor 2 que buscan optimizar su rendimiento en pista mediante el análisis de telemetría y el ajuste preciso del setup del vehículo. La aplicación utiliza agentes de IA (basados en LangChain y modelos Llama 3.3) para procesar archivos de MoTeC (.ld) y archivos de configuración (.svm), proporcionando recomendaciones visuales y detalladas.
+rFactor2 Engineer es una aplicación inteligente diseñada para pilotos de rFactor 2 que buscan optimizar su rendimiento en pista mediante el análisis de telemetría y el ajuste preciso del setup del vehículo. La aplicación utiliza agentes de IA (basados en LangChain con soporte para modelos locales gratuitos vía Ollama o en la nube vía Groq) para procesar archivos de MoTeC (.ld) y archivos de configuración (.svm), proporcionando recomendaciones visuales y detalladas.
 
 ## ✨ Características Principales
 
@@ -10,7 +10,11 @@ rFactor2 Engineer es una aplicación inteligente diseñada para pilotos de rFact
   - 🔴 **Rojo**: Pérdida por mala conducción.
   - 🟡 **Amarillo**: Pérdida por deficiencia en el setup.
   - 🟠 **Naranja**: Pérdida combinada (conducción y setup).
-- **Agentes de IA Expertos**: 
+- **Agentes de IA Flexibles**: 
+  - **Free API (Nuevo - Recomendado)**: Utiliza el motor `g4f` para acceder a modelos potentes como GPT-4o de forma gratuita y sin necesidad de registro o API keys. Mucho más rápido que el modo local.
+  - **Local Directo**: Descarga automática de modelos ligeros mediante `GPT4All`.
+  - Soporte para **Ollama** (Modelos locales externos).
+  - Soporte para **Groq** (Modelos en la nube).
   - Ingeniero de Pista (Conducción).
   - Mecánico de Competición (Setup).
 - **Reporte de Setup Completo**: Recomendaciones detalladas para cada parámetro del setup, justificando tanto los cambios como la decisión de mantener ciertos valores.
@@ -22,7 +26,7 @@ rFactor2_engineer/
 ├── app/
 │   ├── main.py                # Servidor API FastAPI
 │   ├── core/
-│   │   ├── ai_agents.py       # Lógica de agentes de IA (LangChain + Groq)
+│   │   ├── ai_agents.py       # Lógica de agentes de IA (LangChain)
 │   │   └── telemetry_parser.py # Decodificadores de archivos .ld, .svm
 ├── frontend/
 │   └── streamlit_app.py       # Interfaz de usuario interactiva
@@ -36,7 +40,9 @@ rFactor2_engineer/
 ### 1. Requisitos Previos
 
 - Python 3.9 o superior.
-- Una cuenta en [Groq Cloud](https://console.groq.com/) para obtener una API Key (modelo Llama 3.3 gratuito).
+- **Opción A (Recomendada - Local Directo):** No requiere nada. El sistema descargará un modelo ligero (`orca-mini`) automáticamente al primer inicio.
+- **Opción B (Local con Ollama):** [Ollama](https://ollama.com/) instalado y el modelo `llama3` descargado (`ollama run llama3`).
+- **Opción C (Nube):** Una cuenta en [Groq Cloud](https://console.groq.com/) para obtener una API Key.
 
 ### 2. Instalación de Dependencias
 
@@ -48,10 +54,31 @@ pip install -r requirements.txt
 
 ### 3. Configuración
 
-Crea un archivo `.env` en la raíz del proyecto con tu clave de API de Groq:
+Crea o edita el archivo `.env` en la raíz del proyecto. 
 
+**Para usar Free API (Default - GPT-4o gratis y rápido, sin login):**
 ```text
+LLM_PROVIDER="free-api"
+```
+**Para usar Local Directo (Modelo descargado auto):**
+```text
+LLM_PROVIDER="local"
+LOCAL_MODEL_NAME="Llama-3.2-3B-Instruct-Q4_0.gguf"
+LOCAL_MODEL_PATH="./models"
+```
+
+**Para usar Ollama (Local externo):**
+```text
+LLM_PROVIDER="ollama"
+OLLAMA_MODEL="llama3"
+OLLAMA_BASE_URL="http://localhost:11434"
+```
+
+**Para usar Groq (Nube):**
+```text
+LLM_PROVIDER="groq"
 GROQ_API_KEY=tu_api_key_aqui
+GROQ_MODEL="llama-3.3-70b-versatile"
 ```
 
 ### 4. Lanzar la Aplicación
@@ -73,6 +100,12 @@ Abre otra terminal y ejecuta:
 streamlit run frontend/streamlit_app.py
 ```
 La aplicación se abrirá automáticamente en tu navegador (por defecto en `http://localhost:8501`).
+
+**Notas importantes:**
+- El backend inicia **rápidamente** (LLM carga lazy solo en primera análisis).
+- Primera `/analyze` puede tardar **1-2 min** (init LLM + pruebas de proveedores gratuitos con timeout).
+- Si lento/falla: Cambia en `.env` a `LLM_PROVIDER="local"` (descarga modelo 2GB auto) o instala Ollama.
+- Ver docs API en `http://localhost:8000/docs`.
 
 ## 🛠️ Uso
 

@@ -159,7 +159,7 @@ async def analyze_telemetry(
 
         # Preparar resumen para la IA (Patrones por sectores para la sesión completa)
         n = len(clean_df)
-        n_sectors = 20
+        n_sectors = 15 # Reducir a 15 zonas para ahorrar tokens
         sector_summaries = []
         for i in range(n_sectors):
             start_idx = (i*n)//n_sectors
@@ -167,18 +167,18 @@ async def analyze_telemetry(
             sector_df = clean_df.iloc[start_idx : end_idx]
             
             stats = {
-                "Speed_Max": float(sector_df.filter(like='Speed').max().iloc[0]) if not sector_df.filter(like='Speed').empty else 0.0,
-                "Speed_Min": float(sector_df.filter(like='Speed').min().iloc[0]) if not sector_df.filter(like='Speed').empty else 0.0,
-                "Throttle_Avg": float(sector_df.filter(like='Throttle').mean().iloc[0]) if not sector_df.filter(like='Throttle').empty else 0.0,
-                "Brake_Max": float(sector_df.filter(like='Brake').max().iloc[0]) if not sector_df.filter(like='Brake').empty else 0.0,
-                "RPM_Avg": float(sector_df.filter(like='RPM').mean().iloc[0]) if not sector_df.filter(like='RPM').empty else 0.0,
-                "Wear_Avg_Sector": float(sector_df.filter(like='Wear').mean().iloc[0]) if not sector_df.filter(like='Wear').empty else 0.0
+                "S_Max": round(float(sector_df.filter(like='Speed').max().iloc[0]), 1) if not sector_df.filter(like='Speed').empty else 0.0,
+                "S_Min": round(float(sector_df.filter(like='Speed').min().iloc[0]), 1) if not sector_df.filter(like='Speed').empty else 0.0,
+                "T_Avg": round(float(sector_df.filter(like='Throttle').mean().iloc[0]), 1) if not sector_df.filter(like='Throttle').empty else 0.0,
+                "B_Max": round(float(sector_df.filter(like='Brake').max().iloc[0]), 1) if not sector_df.filter(like='Brake').empty else 0.0,
+                "RPM_Avg": int(sector_df.filter(like='RPM').mean().iloc[0]) if not sector_df.filter(like='RPM').empty else 0,
+                "W_Avg": round(float(sector_df.filter(like='Wear').mean().iloc[0]), 2) if not sector_df.filter(like='Wear').empty else 0.0
             }
-            sector_summaries.append(f"ZONA {i+1}: {json.dumps(stats)}")
+            sector_summaries.append(f"Z{i+1}:{json.dumps(stats)}")
         
         summary = f"CIRCUITO: {circuit_name}\n"
-        summary += f"ESTADÍSTICAS SESIÓN: {json.dumps(session_stats)}\n"
-        summary += "PATRONES DETECTADOS POR ZONAS (20 DIVISIONES):\n" + "\n".join(sector_summaries)
+        summary += f"ESTADÍSTICAS: {json.dumps(session_stats)}\n"
+        summary += "PATRONES:\n" + "\n".join(sector_summaries)
         
         # Llamada asíncrona al análisis multi-agente
         ai_result = await ai_engineer.analyze(summary, setup_dict, circuit_name=circuit_name, session_stats=session_stats)
@@ -207,7 +207,12 @@ async def analyze_telemetry(
             session_stats=session_stats
         )
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        error_msg = str(e)
+        if "connection attempts failed" in error_msg.lower() or "connection error" in error_msg.lower():
+            detail = "Error de conexión con el modelo local (Ollama). Asegúrate de que Ollama esté instalado, ejecutándose y con el modelo 'llama3' descargado."
+        else:
+            detail = error_msg
+        raise HTTPException(status_code=500, detail=detail)
     finally:
         # Opcional: limpiar archivos después del análisis
         # shutil.rmtree(upload_dir)

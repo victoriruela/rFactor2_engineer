@@ -18,7 +18,9 @@
     "LEFTREAR": "Neumático Trasero Izquierdo",
     "RIGHTREAR": "Neumático Trasero Derecho",
     "LEFTFENDER": "Paragolpe Izquierdo",
-    "RIGHTFENDER": "Paragolpe Derecho"
+    "RIGHTFENDER": "Paragolpe Derecho",
+    "AERODYNAMICS": "Aerodinámica",
+    "TIRES": "Neumáticos"
   },
   "parameters": {
     "FuelSetting": "Carga de Combustible",
@@ -71,6 +73,9 @@
     "SlowReboundSetting": "Ajuste de Rebote Lento",
     "Rear3rdFastReboundSetting": "Ajuste de Rebote Rápido del Tercer Elemento trasero",
     "DiffPreloadSetting": "Ajuste de Precarga del Diferencial",
-    "ChassisAdj00Setting": "Ajuste de la Configuración del Chasis 00"
+    "ChassisAdj00Setting": "Ajuste de la Configuración del Chasis 00",
+    "TirePressure": "Presión de neumático",
+    "FrontWing": "Alerón delantero",
+    "RearWing": "Alerón trasero"
   }
 }
