@@ -1,0 +1,12 @@
+fastapi
+uvicorn
+streamlit
+python-multipart
+pandas
+numpy
+langchain>=1.2.0
+langchain-core>=0.3.0
+langchain-groq
+python-dotenv
+matplotlib
+plotly
