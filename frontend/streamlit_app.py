@@ -57,26 +57,32 @@ def _lap_xy(lap_df, x_col, y_col):
         return [], []
     
     # IMPORTANTE: Los datos ya vienen ordenados por Session_Elapsed_Time desde get_mat_dataframe.
-    # No re-ordenamos por x_col (Lap_Distance) para mantener la secuencia temporal real.
     x_arr = lap_df[x_col].values
     y_arr = lap_df[y_col].values
 
     if len(x_arr) < 2:
         return x_arr.tolist(), y_arr.tolist()
 
-    # Detectar saltos en el eje X (distancia o GPS)
-    # Si Lap_Distance salta de 4000 a 0, o viceversa, es un salto de vuelta o error.
-    # Usamos un umbral basado en el rango total si es posible, o un valor fijo razonable.
-    x_range = np.ptp(x_arr) if len(x_arr) > 0 else 0
-    threshold = max(x_range * 0.05, 50.0) # 5% del circuito o 50m
-
+    # Detectar saltos en el eje X
+    # Para Lap_Distance, un salto de >100m en 1 paso temporal es sospechoso.
+    # O un salto atrás (>0).
     xs, ys = [], []
     for i in range(len(x_arr)):
         if i > 0:
-            # Si hay un salto brusco hacia adelante o atrás en X, romper la línea
-            if abs(x_arr[i] - x_arr[i-1]) > threshold:
-                xs.append(None)
-                ys.append(None)
+            diff = x_arr[i] - x_arr[i-1]
+            # Si hay un salto brusco hacia adelante (>200m) o CUALQUIER salto atrás
+            # en la distancia de la vuelta, rompemos la línea.
+            if x_col == 'Lap_Distance':
+                if diff < -1.0 or diff > 200.0:
+                    xs.append(None)
+                    ys.append(None)
+            else:
+                # Para GPS (Lon/Lat), usamos un umbral dinámico basado en el rango
+                x_range = np.ptp(x_arr) if len(x_arr) > 0 else 0
+                threshold = max(x_range * 0.05, 0.001)
+                if abs(diff) > threshold:
+                    xs.append(None)
+                    ys.append(None)
         
         xv = float(x_arr[i])
         yv = float(y_arr[i])
