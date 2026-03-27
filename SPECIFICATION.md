@@ -7,7 +7,7 @@ rFactor2 Engineer es una aplicación diseñada para ayudar a pilotos de rFactor 
 - **Frontend**: Streamlit. Elegido por su rapidez de desarrollo y capacidad para mostrar gráficos de datos de forma interactiva.
 - **Backend API**: FastAPI. Para gestionar el procesamiento de archivos y la lógica de los agentes de IA.
 - **Procesamiento de Telemetría**: Librerías especializadas (como `motec-decoder` o implementación propia) para leer archivos binarios `.ld`.
-- **Agentes de IA**: LangChain utilizando Free API (vía g4f/GPT-4o) para máxima velocidad y calidad sin costes. También soporta descarga directa de modelos locales (GPT4All), Ollama local externo o modelos en la nube (Groq).
+- **Agentes de IA**: LangChain con Ollama ejecutando el modelo local `Llama-3.2-3B-Instruct-Q4_0.gguf`. El sistema arranca Ollama automáticamente y registra el modelo desde el archivo `.gguf` si es necesario.
 
 ## Funcionalidades
 1. **Carga de Archivos**: Soporte para archivos `.ld` y `.svm`.

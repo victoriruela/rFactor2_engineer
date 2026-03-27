@@ -3,176 +3,270 @@ import xml.etree.ElementTree as ET
 import os
 import struct
 import numpy as np
+import csv
+import scipy.io
+
+
+def parse_mat_file(file_path):
+    """
+    Parsea un archivo .mat (Matlab) exportado desde MoTeC i2.
+    Extrae los canales y los alinea en un DataFrame de pandas.
+    """
+    try:
+        # Cargar archivo .mat con estructura simplificada
+        mat = scipy.io.loadmat(file_path, struct_as_record=False, squeeze_me=True)
+        
+        channels = {}
+        for key in mat.keys():
+            if key.startswith('__'):
+                continue
+            
+            # Cada entrada suele ser una mat_struct con campos 'Value', 'Time', 'Units'
+            obj = mat[key]
+            if hasattr(obj, 'Value'):
+                channels[key] = obj.Value
+        
+        if not channels:
+            raise ValueError("No se encontraron canales válidos en el archivo .mat")
+
+        # Alinear canales (usar la longitud de 'Session_Elapsed_Time' si existe, o el máximo)
+        base_col = 'Session_Elapsed_Time' if 'Session_Elapsed_Time' in channels else next(iter(channels))
+        max_len = len(channels[base_col])
+        
+        aligned = {}
+        for k, v in channels.items():
+            if not isinstance(v, (np.ndarray, list)):
+                continue
+            
+            if len(v) == max_len:
+                aligned[k] = v
+            else:
+                # Si la longitud difiere, rellenamos con NaN o truncamos
+                # Para telemetría de MoTeC, suelen estar alineados si vienen del mismo export
+                if len(v) > max_len:
+                    aligned[k] = v[:max_len]
+                else:
+                    padded = np.full(max_len, np.nan)
+                    padded[:len(v)] = v
+                    aligned[k] = padded
+        
+        df = pd.DataFrame(aligned)
+        
+        # Renombrar canales comunes para consistencia si es necesario
+        rename_map = {
+            'GPS_Latitude': 'GPS Latitude',
+            'GPS_Longitude': 'GPS Longitude',
+            'Throttle_Pos': 'Throttle',
+            'Brake_Pos': 'Brake',
+            'Steering_Wheel_Position': 'Steering',
+            'Engine_RPM': 'RPM',
+            'Ground_Speed': 'Speed'
+        }
+        df = df.rename(columns={k: v for k, v in rename_map.items() if k in df.columns})
+
+        # Suavizado de GPS
+        for col in ['GPS Latitude', 'GPS Longitude']:
+            if col in df.columns:
+                df[col] = df[col].astype(float)
+                df[col] = df[col].replace(0, np.nan).ffill().bfill()
+                median = df[col].median()
+                std = df[col].std()
+                if std > 0:
+                    df[col] = df[col].mask((df[col] - median).abs() > 1.5 * std, median)
+                df[col] = df[col].rolling(window=11, center=True).mean().bfill().ffill()
+
+        return df
+
+    except Exception as e:
+        raise ValueError(f"Error parseando .mat: {str(e)}")
+
+
+def parse_csv_file(file_path):
+    """
+    Parsea un archivo CSV exportado desde MoTeC (1000Hz).
+    Las primeras 12 líneas son metadatos, la línea 13 son los encabezados,
+    la línea 14 son las unidades, y los datos empiezan en la línea 15.
+    Devuelve un DataFrame de pandas con los canales.
+    """
+    try:
+        # Leer metadatos (primeras 14 líneas: 12 de metadatos + 2 vacías)
+        with open(file_path, 'r', encoding='utf-8') as f:
+            reader = csv.reader(f)
+            for _ in range(14):
+                next(reader, None)
+            headers = next(reader, None)  # línea 15 (0-indexed 14): encabezados
+            units = next(reader, None)    # línea 16 (0-indexed 15): unidades
+
+        if not headers:
+            raise ValueError("No se encontraron encabezados en el CSV.")
+
+        # Limpiar encabezados de comillas y espacios
+        headers = [h.strip() for h in headers]
+
+        # Leer datos desde la línea 17 (0-indexed 16) en adelante
+        df = pd.read_csv(file_path, skiprows=16, header=None, names=headers,
+                         low_memory=False)
+
+        # Convertir columnas numéricas
+        for col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors='coerce')
+
+        # Eliminar filas completamente vacías
+        df = df.dropna(how='all')
+
+        if df.empty:
+            raise ValueError("El archivo CSV no contiene datos válidos.")
+
+        # Suavizado de GPS
+        for col in ['GPS Latitude', 'GPS Longitude']:
+            if col in df.columns:
+                df[col] = df[col].astype(float)
+                df[col] = df[col].replace(0, np.nan).ffill().bfill()
+                median = df[col].median()
+                std = df[col].std()
+                if std > 0:
+                    df[col] = df[col].mask((df[col] - median).abs() > 1.5 * std, median)
+                df[col] = df[col].rolling(window=11, center=True).mean().bfill().ffill()
+
+        return df
+
+    except Exception as e:
+        raise ValueError(f"Error parseando CSV: {str(e)}")
+
+
+def _parse_ld_channels(file_path):
+    """
+    Parsea los canales de un archivo .ld de MoTeC (formato rFactor 2).
+    Devuelve un dict {nombre: array_numpy_float} con valores físicos escalados.
+    """
+    with open(file_path, 'rb') as f:
+        f.seek(0, os.SEEK_END)
+        file_size = f.tell()
+
+        # Leer puntero al primer canal (offset 8)
+        f.seek(8)
+        chan_ptr = struct.unpack('<I', f.read(4))[0]
+
+        if chan_ptr == 0 or chan_ptr >= file_size:
+            raise ValueError("Puntero de canal inválido en el archivo .ld")
+
+        channels = {}
+        pos = chan_ptr
+
+        for _ in range(512):
+            if pos == 0 or pos + 124 > file_size:
+                break
+
+            f.seek(pos)
+            hdr = f.read(124)
+
+            # Layout de cabecera de canal (124 bytes):
+            # 0:  prev_ptr (4)
+            # 4:  next_ptr (4)
+            # 8:  data_ptr (4)   - offset absoluto al inicio de los datos
+            # 12: n_samples (4)  - número de muestras
+            # 14: d_type (2)     - tipo de dato: 0=uint16, 3=float32
+            # 16: freq_num (2)   - numerador de frecuencia
+            # 18: freq_den (2)   - denominador de frecuencia
+            # 20: scale_mul (2)  - multiplicador de escala
+            # 22: scale_div (2)  - divisor de escala
+            # 32: name_long (32) - nombre largo del canal
+            # 64: name_short (8) - nombre corto
+            # 72: units (8)      - unidades
+            # 88: min_raw (2)    - valor raw mínimo (no usado en escala)
+            # 90: max_raw (2)    - valor raw máximo (no usado en escala)
+            #
+            # Fórmula de escala: physical = (raw - 32768) * scale_mul / scale_div / 10
+
+            next_ptr  = struct.unpack('<I', hdr[4:8])[0]
+            data_ptr  = struct.unpack('<I', hdr[8:12])[0]
+            n_samples = struct.unpack('<I', hdr[12:16])[0]
+            d_type    = struct.unpack('<H', hdr[14:16])[0]
+            scale_mul = struct.unpack('<H', hdr[20:22])[0]
+            scale_div = struct.unpack('<H', hdr[22:24])[0]
+            name_long = hdr[32:64].split(b'\x00')[0].decode('ascii', errors='ignore').strip()
+
+            if not name_long:
+                if next_ptr == 0 or next_ptr >= file_size:
+                    break
+                pos = next_ptr
+                continue
+
+            # Leer datos
+            if n_samples > 0 and data_ptr > 0:
+                size_per = 4 if d_type == 3 else 2
+                if data_ptr + n_samples * size_per <= file_size:
+                    try:
+                        f.seek(data_ptr)
+                        raw_bytes = f.read(n_samples * size_per)
+                        if len(raw_bytes) == n_samples * size_per:
+                            if d_type == 3:
+                                # float32: ya es valor físico directo
+                                arr = np.array(struct.unpack(f'<{n_samples}f', raw_bytes), dtype=np.float32)
+                            else:
+                                # uint16: aplicar escala
+                                arr_raw = np.array(struct.unpack(f'<{n_samples}H', raw_bytes), dtype=np.float64)
+                                if scale_mul > 0 and scale_div > 0:
+                                    arr = (arr_raw - 32768.0) * scale_mul / scale_div / 10.0
+                                else:
+                                    arr = arr_raw - 32768.0
+                            channels[name_long] = arr
+                    except Exception:
+                        pass
+
+            if next_ptr == 0 or next_ptr >= file_size:
+                break
+            pos = next_ptr
+
+    return channels
+
 
 def parse_ld_file(file_path):
     """
     Parsea un archivo .ld de MoTeC (binario) y extrae los datos de los canales.
-    Soporta formatos MoTeC LD v1.1 y posteriores.
+    Devuelve un DataFrame de pandas con los canales escalados a valores físicos.
     """
     try:
-        with open(file_path, 'rb') as f:
-            f.seek(0, os.SEEK_END)
-            file_size = f.tell()
-            
-            if file_size < 68:
-                raise ValueError("El archivo .ld es demasiado pequeño.")
-            
-            f.seek(0)
-            magic = struct.unpack('<I', f.read(4))[0]
-            
-            if magic == 0x40: # MoTeC LD v1.1 (Común en rFactor 2)
-                f.seek(8)
-                next_chan_ptr = struct.unpack('<I', f.read(4))[0]
-                chan_header_struct = '<IIIHHH' # MoTeC v1.1 structure
-                chan_header_size = 18
-            else: # MoTeC LD v2.x
-                f.seek(64)
-                next_chan_ptr = struct.unpack('<I', f.read(4))[0]
-                chan_header_struct = '<IIIHHH' # Similar but offset might differ
-                chan_header_size = 18
-            
-            channels_data = {}
-            
-            for _ in range(512):
-                if next_chan_ptr == 0 or next_chan_ptr >= file_size:
-                    break
-                
-                f.seek(next_chan_ptr)
-                # La cabecera MoTeC v1.1 es de 128 bytes.
-                header_bytes = f.read(128)
-                if len(header_bytes) < 64:
-                    break
-                
-                # MoTeC v1.1: next_ptr(4), data_ptr(4), n_samples(4), reserved(2), d_type(2), freq(2)
-                # El d_type 3 es float32, 1 o 0 es int16
-                next_ptr_v1, data_ptr, n_samples, _, d_type, freq = struct.unpack('<IIIHHH', header_bytes[:18])
-                name = header_bytes[32:64].split(b'\x00')[0].decode('ascii', errors='ignore').strip()
-                
-                # MoTeC v1.1 rFactor 2: Siguiente puntero a menudo en offset 124
-                next_ptr_v2 = struct.unpack('<I', header_bytes[124:128])[0]
-                next_ptr = next_ptr_v1 if next_ptr_v1 != 0 else next_ptr_v2
-                
-                # Validar datos y extraer
-                if n_samples > 0 and data_ptr > 0:
-                    # MoTeC v1.1 Ground Speed tiene d_type 0 en offset 14
-                    # Si d_type es 3 es float32, si es 0 es int16
-                    # Pero en rFactor 2 a veces los datos están escalados.
-                    
-                    if d_type == 3: # float32
-                        size = 4
-                        fmt = f'<{n_samples}f'
-                    else: # int16 por defecto para v1.1
-                        size = 2
-                        fmt = f'<{n_samples}h'
-                    
-                    if data_ptr + (n_samples * size) <= file_size:
-                        try:
-                            f.seek(data_ptr)
-                            chan_bytes = f.read(n_samples * size)
-                            if len(chan_bytes) == n_samples * size:
-                                data = struct.unpack(fmt, chan_bytes)
-                                # Conversión básica para canales conocidos si son int16
-                                if d_type != 3:
-                                    # Velocidad en rFactor 2 MoTeC suele estar en km/h * 10 o m/s * 10
-                                    # Si vemos valores enormes como 13384 para algo que debería ser 0-300, 
-                                    # es posible que necesite un factor. 
-                                    # Por ahora lo dejamos crudo pero el agente lo interpretará.
-                                    pass
-                                channels_data[name] = data
-                        except Exception:
-                            pass
-                
-                next_chan_ptr = next_ptr
-            
-            # Si solo extrajo 1 canal o ninguno, escaneo de seguridad para rFactor 2
-            if len(channels_data) < 2:
-                f.seek(8)
-                start_search = struct.unpack('<I', f.read(4))[0]
-                if start_search > 0 and start_search < 100000:
-                    f.seek(start_search)
-                    search_area = f.read(20000) 
-                    
-                    i = 0
-                    while i < len(search_area) - 128:
-                        cand_next, cand_data, cand_samples = struct.unpack('<III', search_area[i:i+12])
-                        if 10 < cand_samples < 1000000 and start_search < cand_data < file_size:
-                            cand_name = search_area[i+32:i+64].split(b'\x00')[0].decode('ascii', errors='ignore').strip()
-                            if cand_name and len(cand_name) > 2 and cand_name not in channels_data:
-                                if all(32 <= ord(c) <= 126 for c in cand_name):
-                                    # Para evitar nombres que son sufijos de otros canales encontrados por el escaneo de 4 en 4
-                                    # (e.g. 'nd Speed' de 'Ground Speed'), comprobamos si el bloque actual es coherente.
-                                    # En MoTeC v1.1, los nombres están alineados en bloques de 128 o 248.
-                                    # Pero como no sabemos la alineación exacta, filtramos por calidad.
-                                    is_duplicate_suffix = any(cand_name != existing and existing.endswith(cand_name) for existing in channels_data)
-                                    if not is_duplicate_suffix:
-                                        try:
-                                            f.seek(cand_data)
-                                            cand_type = struct.unpack('<H', search_area[i+14:i+16])[0]
-                                            size = 4 if cand_type == 3 else 2
-                                            fmt = f'<{cand_samples}f' if cand_type == 3 else f'<{cand_samples}h'
-                                            if cand_data + (cand_samples * size) <= file_size:
-                                                chan_bytes = f.read(cand_samples * size)
-                                                if len(chan_bytes) == cand_samples * size:
-                                                    channels_data[cand_name] = struct.unpack(fmt, chan_bytes)
-                                                    i += 124 # Saltar al final del bloque probable
-                                        except Exception: pass
-                        i += 4
-            
-            if not channels_data:
-                raise ValueError("No se pudieron extraer canales de telemetría del archivo .ld. Formato no soportado o archivo dañado.")
-                
-            # Limpieza de nombres de canales (algunos vienen con basura o espacios extra)
-            clean_channels = {}
-            for k, v in channels_data.items():
-                # Limpiar caracteres no imprimibles y basura al inicio
-                clean_name = "".join(c for c in k if 32 <= ord(c) <= 126).strip()
-                # Quitar prefijos comunes de basura en rFactor 2
-                for prefix in ['s', 'd', 'el ', 'e ']:
-                    if clean_name.startswith(prefix) and len(clean_name) > len(prefix):
-                        # Solo quitar si el resto parece un nombre válido
-                        if clean_name[len(prefix):][0].isupper():
-                            clean_name = clean_name[len(prefix):]
-                
-                if clean_name == "Longitude": clean_name = "GPS Longitude"
-                if clean_name == "Latitude": clean_name = "GPS Latitude"
-                clean_channels[clean_name] = list(v)
+        channels = _parse_ld_channels(file_path)
 
-            # Alinear canales a la misma longitud y renombrar duplicados
-            if not clean_channels:
-                raise ValueError("No se pudieron procesar canales limpios del archivo .ld.")
+        if not channels:
+            raise ValueError("No se pudieron extraer canales de telemetría del archivo .ld.")
 
-            min_len = min(len(v) for v in clean_channels.values())
-            for k in clean_channels:
-                clean_channels[k] = clean_channels[k][:min_len]
-                
-            df = pd.DataFrame(clean_channels)
-            
-            # Suavizado de GPS para evitar picos que rompen el mapa
-            for col in ['GPS Latitude', 'GPS Longitude']:
-                if col in df.columns:
-                    # Rellenar ceros si existen (suelen ser fallos de señal)
-                    # Convertir a float por si acaso
-                    df[col] = df[col].astype(float)
-                    
-                    # En rF2, a veces las coordenadas vienen escaladas por 10^7
-                    if df[col].abs().max() > 1000:
-                        df[col] = df[col] / 10000000.0
-                        
-                    df[col] = df[col].replace(0, np.nan).ffill().bfill()
-                    
-                    # Filtro de outliers (Z-score básico sobre la serie)
-                    median = df[col].median()
-                    std = df[col].std()
-                    if std > 0:
-                        # Si el valor se aleja mucho de la mediana, es probablemente un error de captura
-                        # Bajamos el umbral a 1.5 para ser más agresivos con el ruido de GPS rF2
-                        df[col] = df[col].mask((df[col] - median).abs() > 1.5 * std, median)
-                    
-                    # Suavizado suave para el trazado
-                    df[col] = df[col].rolling(window=11, center=True).mean().bfill().ffill()
-            
-            return df
-            
+        # Renombrar canales de GPS
+        if 'Longitude' in channels and 'GPS Longitude' not in channels:
+            channels['GPS Longitude'] = channels.pop('Longitude')
+        if 'Latitude' in channels and 'GPS Latitude' not in channels:
+            channels['GPS Latitude'] = channels.pop('Latitude')
+
+        # Alinear canales: usar la longitud máxima, rellenar con NaN los más cortos
+        max_len = max(len(v) for v in channels.values())
+        aligned = {}
+        for k, v in channels.items():
+            if len(v) == max_len:
+                aligned[k] = v
+            else:
+                padded = np.full(max_len, np.nan)
+                padded[:len(v)] = v
+                aligned[k] = padded
+
+        df = pd.DataFrame(aligned)
+
+        # Suavizado de GPS
+        for col in ['GPS Latitude', 'GPS Longitude']:
+            if col in df.columns:
+                df[col] = df[col].astype(float)
+                # Eliminar ceros (fallos de señal)
+                df[col] = df[col].replace(0, np.nan).ffill().bfill()
+                # Filtro de outliers
+                median = df[col].median()
+                std = df[col].std()
+                if std > 0:
+                    df[col] = df[col].mask((df[col] - median).abs() > 1.5 * std, median)
+                # Suavizado
+                df[col] = df[col].rolling(window=11, center=True).mean().bfill().ffill()
+
+        return df
+
     except Exception as e:
         raise ValueError(f"Error parseando .ld: {str(e)}")
 
@@ -191,20 +285,20 @@ def parse_svm_file(file_path):
         except UnicodeError:
             with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
                 content = f.readlines()
-        
+
         current_section = None
         for line in content:
             line = line.strip()
             if not line or line.startswith('//'):
                 continue
-            
+
             if '[' in line and ']' in line:
                 current_section = line[1:-1]
                 setup[current_section] = {}
             elif '=' in line and current_section:
                 key, value = line.split('=', 1)
                 setup[current_section][key.strip()] = value.strip()
-        
+
         if not setup:
             raise ValueError("El archivo .svm parece estar vacío o no contiene secciones de setup válidas.")
         return setup

@@ -1,79 +1,128 @@
 import json
 import re
 import asyncio
-from langchain_groq import ChatGroq
+import subprocess
+import time
+import os
+import requests
 from langchain_ollama import ChatOllama
-from langchain_community.llms import GPT4All
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import PromptTemplate
-import os
-import g4f
-import g4f.debug
-from dotenv import load_dotenv
 
-load_dotenv()
+# --- CONFIGURACIÓN OLLAMA ---
+OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+OLLAMA_MODEL_TAG = os.getenv("OLLAMA_MODEL", "llama3.2:3b")
 
-# --- CONFIGURACIÓN G4F ---
-g4f.debug.logging = False
+
+def list_available_models():
+    """Devuelve la lista de modelos disponibles en Ollama."""
+    _ensure_ollama_running()
+    try:
+        r = requests.get(f"{OLLAMA_BASE_URL}/api/tags", timeout=5)
+        if r.status_code == 200:
+            return [m["name"] for m in r.json().get("models", [])]
+    except Exception:
+        pass
+    return []
+
+def _find_ollama_exe():
+    """Busca el ejecutable de ollama en ubicaciones conocidas."""
+    for candidate in [
+        "ollama",
+        os.path.join(os.environ.get("LOCALAPPDATA", ""), "Programs", "Ollama", "ollama.exe"),
+        os.path.join(os.environ.get("ProgramFiles", ""), "Ollama", "ollama.exe"),
+    ]:
+        if candidate == "ollama" or os.path.isfile(candidate):
+            try:
+                subprocess.run([candidate, "--version"], capture_output=True, timeout=5)
+                return candidate
+            except Exception:
+                continue
+    return None
 
 # --- PROMPTS ---
 
 DRIVING_PROMPT = """
-Eres un ingeniero de pista experto en rFactor 2.
-Analiza los datos de telemetría de la sesión completa:
+Eres un ingeniero de pista experto en rFactor 2. Analiza los datos de telemetría VUELTA A VUELTA y CURVA A CURVA, y responde en CASTELLANO.
+
+Tienes acceso a los DATOS COMPLETOS de telemetría submuestreados (~50 puntos por vuelta) con todos los canales relevantes.
+Estos datos incluyen velocidad, throttle, freno, dirección, RPM, marchas, fuerzas G, temperaturas, desgaste, presiones, etc.
+Cada fila tiene la columna "Vuelta" y "Lap Distance" (distancia recorrida en la vuelta).
+
+DATOS DE TELEMETRÍA:
 {telemetry_summary}
-Estadísticas generales: {session_stats}
 
-Identifica los puntos exactos donde el piloto está perdiendo tiempo por MALA CONDUCCIÓN, buscando patrones que se repiten a lo largo de las vueltas.
-No te inventes datos. Usa únicamente la información proporcionada.
-Responde SIEMPRE en CASTELLANO. IMPORTANTE: Sé directo y breve, no te enrolles.
+ESTADÍSTICAS DE SESIÓN:
+{session_stats}
 
-Para cada punto indica:
-1. Localización (Curva X o Nombre de la Curva).
-2. Motivo técnico (Ej: Frenar demasiado tarde, no usar todo el ancho de pista, mala gestión de RPM, exceso de deslizamiento).
-3. Cómo mejorarlo de forma específica.
+ANÁLISIS REQUERIDO:
+1. Examina los datos punto a punto para identificar el comportamiento en las CURVAS. Compara cómo el piloto toma la misma curva en diferentes vueltas usando la columna "Lap Distance" para ubicarte.
+2. Identifica problemas específicos en curvas (frenadas tardías, falta de velocidad de paso por curva, aceleraciones bruscas que causan sobreviraje, etc.)
+3. Compara la EVOLUCIÓN: ¿mejora o empeora el rendimiento en sectores específicos del circuito?
+4. Identifica patrones: ¿el desgaste o temperatura afectan al rendimiento en las últimas vueltas?
 
-Formato de respuesta:
-- Curva X: [Motivo] -> [Mejora]
+Escribe EXACTAMENTE 5 puntos de mejora. Cada punto debe ser ÚNICO y diferente a los demás.
+Formato obligatorio para cada punto:
+- Vuelta N (Distancia Xm): [análisis de curva con valores numéricos REALES] → [acción correctiva específica]
+
+Reglas ESTRICTAS:
+- USA valores numéricos REALES de los datos (velocidad, frenada %, throttle %, RPM, G Force, etc.)
+- Céntrate en COMPARAR curvas entre vueltas.
+- PROHIBIDO repetir ideas.
+- Sin introducción, sin conclusión, solo los 5 puntos.
 """
 
 SECTION_AGENT_PROMPT = """
-SITUACIÓN: Circuito de {circuit_name} en rFactor 2.
-RESUMEN TELEMETRÍA: {telemetry_summary}
-VALORES ACTUALES ({section_name}): {section_data}
-CONTEXTO ADICIONAL (Otras secciones relacionadas): {context_data}
+Eres un Ingeniero Especialista en {section_name} para rFactor 2. Circuito: {circuit_name}.
 
-Tu tarea es actuar como un Ingeniero Especialista en {section_name}. Analiza CADA parámetro.
-Debes ser CRÍTICO y buscar patrones en la telemetría de toda la sesión.
+Tienes acceso a los DATOS COMPLETOS de telemetría submuestreados (~50 puntos por vuelta) con todos los canales.
+Analiza el comportamiento del coche CURVA A CURVA, comparando las mismas distancias ("Lap Distance") entre diferentes vueltas.
 
-Instrucciones estrictas:
-1. Incluye TODOS los parámetros de {section_data}.
-2. Si un parámetro no cambia, explica técnicamente por qué el valor actual es ya óptimo.
-3. No sugieras cambios dinámicos "en pista" (como ajustar alerones o muelles mientras el coche corre). Los cambios son para el setup en el garaje.
+DATOS DE TELEMETRÍA COMPLETOS:
+{telemetry_summary}
+
+PARÁMETROS ACTUALES DE {section_name}: {section_data}
+
+TU MISIÓN:
+Como experto en esta sección, debes evaluar CÓMO cada parámetro actual influye en el comportamiento visto en la telemetría.
+1. Examina cómo afecta el setup al comportamiento en las CURVAS. ¿Hay subviraje o sobreviraje excesivo en curvas lentas vs rápidas?
+2. Compara la evolución entre vueltas: ¿empeoran las temperaturas o presiones afectando al grip en curva?
+3. Propón cambios CONCRETOS con valores numéricos basados en lo que observas en los datos.
+4. Si consideras que no hay cambios necesarios, JUSTIFÍCALO con datos (ej: "Las temperaturas se mantienen estables en 90°C en todas las vueltas").
+
+Reglas:
+1. Cada "reason" DEBE citar valores numéricos REALES y comparar el comportamiento en curvas entre vueltas.
+2. Explica el MOTIVO técnico de cada cambio: por qué ese valor nuevo corregirá el comportamiento observado en la curva.
+3. Debes proporcionar un razonamiento para CADA parámetro que consideres relevante, incluso si no lo cambias.
 4. Responde SIEMPRE en CASTELLANO.
-5. Devuelve ÚNICAMENTE el JSON puro, sin texto adicional antes ni después.
+5. Devuelve ÚNICAMENTE JSON puro.
 
 JSON puro:
 {{
   "items": [
-    {{ "parameter": "NombreOriginal", "new_value": "ValorRecomendado", "reason": "Justificación técnica" }}
+    {{ "parameter": "NombreOriginal", "new_value": "ValorRecomendado", "reason": "Justificación técnica citando curvas, vueltas y valores numéricos reales" }}
   ]
 }}
 """
 
 TIRES_SUSPENSION_ANALYSIS_PROMPT = """
-Eres un Ingeniero Especialista en Neumáticos y Suspensión de rFactor 2.
-CIRCUITO: {circuit_name}
-RESUMEN TELEMETRÍA: {telemetry_summary}
-DATOS DE SETUP (5 SECCIONES): {setup_data}
+Eres un Ingeniero Especialista en Neumáticos y Suspensión de rFactor 2. Circuito: {circuit_name}.
 
-Analiza en conjunto las 4 secciones de neumáticos y la de suspensión. Busca patrones de desgaste, temperaturas y comportamiento mecánico.
-Propón cambios específicos para optimizar el paso por curva y la estabilidad.
+Analiza los DATOS COMPLETOS de telemetría submuestreados. Céntrate en el comportamiento en las CURVAS y la comparación entre vueltas.
+Observa temperaturas (Tyre Temp FL/FR/RL/RR), presiones, alturas (Ride Height), y suspensión (Susp Pos, Susp Force).
 
-Instrucciones:
-1. Analiza los parámetros de las 5 secciones.
-2. No sugieras cambios dinámicos "en pista" (como ajustar alerones o muelles mientras el coche corre). Los cambios son para el setup en el garaje.
-3. Responde en CASTELLANO.
+DATOS DE TELEMETRÍA COMPLETOS:
+{telemetry_summary}
+
+SETUP ACTUAL: {setup_data}
+
+TU TAREA:
+1. Identifica problemas de temperatura o desgaste comparando el inicio y el final de la sesión.
+2. Analiza el balance del coche en curvas: ¿las alturas son correctas? ¿hay "bottoming" (golpeo del fondo contra el suelo)?
+3. Propón cambios para optimizar el grip en curva y la estabilidad.
+4. Cita valores numéricos REALES (ej: "En la curva de la distancia 1500m, la suspensión delantera llega al tope en la vuelta 5").
+
+Responde en CASTELLANO y devuelve ÚNICAMENTE JSON.
 
 JSON puro:
 {{
@@ -81,7 +130,7 @@ JSON puro:
     {{
       "name": "NombreSeccionInterno",
       "items": [
-        {{ "parameter": "NombreOriginal", "new_value": "ValorRecomendado", "reason": "Justificación técnica" }}
+        {{ "parameter": "NombreOriginal", "new_value": "ValorRecomendado", "reason": "Justificación técnica con datos de curvas y vueltas" }}
       ]
     }}
   ]
@@ -89,18 +138,22 @@ JSON puro:
 """
 
 TIRES_SUSPENSION_VALIDATION_PROMPT = """
-Eres el Ingeniero Jefe de Dinámica Vehicular. 
-Debes validar y mejorar las propuestas del primer ingeniero para las secciones de Neumáticos y Suspensión.
-CIRCUITO: {circuit_name}
-RESUMEN TELEMETRÍA: {telemetry_summary}
-DATOS ORIGINALES: {original_setup}
+Eres el Ingeniero Jefe de Dinámica Vehicular. Circuito: {circuit_name}.
+
+Tienes acceso a los DATOS COMPLETOS de telemetría submuestreados. Úsalos para validar y complementar las propuestas.
+
+DATOS DE TELEMETRÍA COMPLETOS:
+{telemetry_summary}
+DATOS ORIGINALES DEL SETUP: {original_setup}
 PROPUESTAS DEL PRIMER INGENIERO: {first_proposals}
 
 Tu tarea:
-1. Revisa si las propuestas son coherentes.
-2. Añade nuevas propuestas si crees que falta algo importante.
-3. Asegura que NO haya sugerencias de cambios imposibles de realizar en pista (ajustes de setup fijo).
-4. Responde en CASTELLANO.
+1. Valida cada propuesta del primer ingeniero contra los datos reales. ¿Los datos respaldan el cambio?
+2. AÑADE propuestas para parámetros que el primer ingeniero NO haya cubierto (presiones, camber, toe, altura, muelles, amortiguadores).
+3. Si el primer ingeniero no propuso cambios suficientes, AÑADE al menos 3 cambios adicionales con valores concretos.
+4. Cada "reason" DEBE citar valores numéricos REALES de la telemetría que justifiquen el cambio.
+5. Explica el MOTIVO técnico de cada valor nuevo propuesto.
+6. Responde en CASTELLANO.
 
 JSON puro:
 {{
@@ -108,7 +161,7 @@ JSON puro:
     {{
       "name": "NombreSeccionInterno",
       "items": [
-        {{ "parameter": "NombreOriginal", "new_value": "ValorRecomendado", "reason": "Justificación final validada" }}
+        {{ "parameter": "NombreOriginal", "new_value": "ValorRecomendado", "reason": "Justificación con datos reales de telemetría" }}
       ]
     }}
   ]
@@ -120,14 +173,22 @@ Eres el Ingeniero Jefe de Competición. Tu responsabilidad es dar la palabra fin
 Recibes informes de los especialistas de cada área y del equipo de Neumáticos y Suspensión.
 
 CIRCUITO: {circuit_name}
-RESUMEN TELEMETRÍA: {telemetry_summary}
+
+Tienes acceso a los DATOS COMPLETOS de telemetría submuestreados para verificar las propuestas de los especialistas.
+
+DATOS DE TELEMETRÍA COMPLETOS:
+{telemetry_summary}
 
 Informes de especialistas:
 {specialist_reports}
 
-Debes devolver el setup completo final, asegurando que todas las recomendaciones son coherentes.
-ADVERTENCIA: No permitas sugerencias de cambios "en pista" para parámetros que solo se ajustan en el garaje (alerones, suspensiones, etc.). Todo el setup es para ser aplicado antes de salir a pista.
-Responde SIEMPRE en CASTELLANO.
+Tu tarea:
+1. Revisa cada propuesta de los especialistas y verifica que los datos de telemetría la respaldan.
+2. Asegura coherencia entre todas las recomendaciones (ej: no subir presiones si ya hay sobrecalentamiento).
+3. Cada "reason" DEBE explicar el MOTIVO técnico del cambio citando datos reales de la telemetría.
+4. PROHIBIDO poner "reason" genéricos como "mejora el rendimiento". Cada razón debe ser específica.
+5. Todo el setup es para ser aplicado en el garaje antes de salir a pista.
+6. Responde SIEMPRE en CASTELLANO.
 
 JSON puro:
 {{
@@ -136,7 +197,7 @@ JSON puro:
       {{
         "name": "NombreSeccionInterno",
         "items": [
-          {{ "parameter": "NombreOriginal", "new_value": "ValorFinal", "reason": "Justificación final del Jefe de Ingenieros" }}
+          {{ "parameter": "NombreOriginal", "new_value": "ValorFinal", "reason": "Justificación técnica con datos reales de telemetría" }}
         ]
       }}
     ]
@@ -156,133 +217,62 @@ Devuelve un JSON con las traducciones (Usa nombres naturales en castellano):
 }}
 """
 
-class G4FLLM:
-    """Wrapper minimalista para g4f compatible con el flujo de AIAngineer"""
-    def __init__(self, model=None):
-        # Usar un modelo y proveedor por defecto que suela ser más estable
-        self.model = model or "gpt-4o"
-    
-    async def ainvoke(self, input_data):
-        # El input de LangChain suele ser un PromptValue o string
-        prompt = str(input_data)
-        
-        # Lista de proveedores solo estables y rápidos
-        candidate_providers = [
-            "PollinationsAI",
-            "DeepInfra"
-        ]
-        
-        providers = []
-        for p_name in candidate_providers:
-            if hasattr(g4f.Provider, p_name):
-                providers.append(getattr(g4f.Provider, p_name))
-        
-        # Opción automática desactivada para mayor velocidad
-        #providers.append(None)
-        
-        last_error = None
-        for provider in providers:
-            provider_name = provider.__name__ if provider else "Auto"
+
+def _ensure_ollama_running():
+    """Arranca el servidor ollama si no está disponible."""
+    try:
+        r = requests.get(f"{OLLAMA_BASE_URL}/api/tags", timeout=3)
+        if r.status_code == 200:
+            return True
+    except Exception:
+        pass
+
+    print("Ollama no está corriendo. Intentando arrancar...")
+    ollama_exe = _find_ollama_exe()
+    if not ollama_exe:
+        print("ADVERTENCIA: ollama no está instalado en el sistema.")
+        return False
+    try:
+        subprocess.Popen(
+            [ollama_exe, "serve"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+        )
+        for _ in range(15):
+            time.sleep(1)
             try:
-                # Intentar primero con el modelo solicitado
-                # Si falla, intentaremos con el modelo por defecto del proveedor
-                models_to_try = [self.model, ""]
-                
-                for model_name in models_to_try:
-                    try:
-                        response = await asyncio.wait_for(
-                            g4f.ChatCompletion.create_async(
-                                model=model_name,
-                                provider=provider,
-                                messages=[{"role": "user", "content": prompt}],
-                            ),
-                            timeout=15.0
-                        )
-                        if response and len(str(response)) > 10:
-                            # Si el proveedor devuelve HTML (error común), lo ignoramos
-                            if str(response).strip().startswith("<!DOCTYPE"):
-                                continue
-                            return str(response)
-                    except (asyncio.TimeoutError, Exception):
-                        continue
-                        
-            except Exception as e:
-                last_error = e
-                continue
-                
-        print(f"Error en G4F (todos los proveedores fallaron): {last_error}")
-        return f"Error en el modelo gratuito: {last_error}. Prueba a cambiar el LLM_PROVIDER en el .env si el problema persiste."
+                r = requests.get(f"{OLLAMA_BASE_URL}/api/tags", timeout=2)
+                if r.status_code == 200:
+                    print("Ollama arrancado correctamente.")
+                    return True
+            except Exception:
+                pass
+    except FileNotFoundError:
+        print("ADVERTENCIA: no se pudo arrancar ollama.")
+    return False
 
-    def __or__(self, other):
-        # Soporte básico para el operador pipe de LangChain
-        return G4FChain(self, other)
 
-class G4FChain:
-    def __init__(self, llm, next_component):
-        self.llm = llm
-        self.next_component = next_component
 
-    async def ainvoke(self, inputs):
-        # Si el componente anterior es un PromptTemplate
-        if hasattr(self.llm, "format"):
-            prompt = self.llm.format(**inputs)
-            response = await self.next_component.ainvoke(prompt)
-            return response
-        
-        # Flujo estándar: Prompt | LLM | Parser
-        # Aquí inputs son los argumentos para el prompt
-        prompt_tmpl = self.llm # Asumimos que es el PromptTemplate
-        prompt_str = prompt_tmpl.format(**inputs)
-        
-        # Llamar al LLM (next_component es el G4FLLM en este caso o el Parser)
-        if isinstance(self.next_component, G4FLLM):
-            res = await self.next_component.ainvoke(prompt_str)
-            return res
-        return None
 
 class AIAngineer:
     def __init__(self):
-        self.provider = os.getenv("LLM_PROVIDER", "free-api").lower()
         self.llm = None
         self.output_parser = StrOutputParser()
         self.mapping_path = "app/core/param_mapping.json"
         self.mapping = self._load_mapping()
 
-    def _init_llm(self):
-        if self.provider == "groq":
-            self.llm = ChatGroq(
-                api_key=os.getenv("GROQ_API_KEY", "TU_API_KEY"),
-                model_name=os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
-            )
-        elif self.provider == "ollama":
-            self.llm = ChatOllama(
-                model=os.getenv("OLLAMA_MODEL", "llama3"),
-                base_url=os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
-            )
-        elif self.provider == "free-api":
-            # Nuevo proveedor gratuito sin login
-            self.llm = G4FLLM()
-        else:
-            # Proveedor LOCAL (Descarga directa mediante GPT4All)
-            model_name = os.getenv("LOCAL_MODEL_NAME", "Llama-3.2-3B-Instruct-Q4_0.gguf")
-            model_path = os.getenv("LOCAL_MODEL_PATH", "./models")
-            if not os.path.exists(model_path):
-                os.makedirs(model_path)
-            
-            full_path = os.path.join(model_path, model_name)
-            print(f"Usando modelo local: {full_path}")
-            
-            # Intentar inicializar gpt4all directamente para asegurar la descarga y carga
-            from gpt4all import GPT4All as GPT4AllModel
-            # Esto descargará el modelo si no existe
-            _ = GPT4AllModel(model_name=model_name, model_path=model_path, allow_download=True)
-
-            self.llm = GPT4All(
-                model=full_path,
-                allow_download=False, # Ya está descargado
-                verbose=True,
-                n_ctx=4096 # Aumentar ventana de contexto a 4096
-            )
+    def _init_llm(self, model_tag=None):
+        _ensure_ollama_running()
+        tag = model_tag or OLLAMA_MODEL_TAG
+        self.llm = ChatOllama(
+            model=tag,
+            base_url=OLLAMA_BASE_URL,
+            num_predict=4096,
+            temperature=0.3,
+        )
+        self._current_model = tag
+        print(f"LLM listo: ollama/{tag}")
 
     def _load_mapping(self):
         if os.path.exists(self.mapping_path):
@@ -309,37 +299,38 @@ class AIAngineer:
         return self.mapping.get(item_type + "s", {}).get(key, key)
 
     async def _get_json_from_llm(self, prompt, inputs):
-        if self.provider == "free-api":
-            # Manejo especial para G4F ya que no es un objeto LangChain completo
-            prompt_tmpl = PromptTemplate.from_template(prompt)
-            prompt_str = prompt_tmpl.format(**inputs)
-            response = await self.llm.ainvoke(prompt_str)
-        else:
-            prompt_tmpl = PromptTemplate.from_template(prompt)
-            chain = prompt_tmpl | self.llm | self.output_parser
-            try:
-                response = await chain.ainvoke(inputs)
-            except Exception as e:
-                response = ""
-                print(f"Error en LLM: {e}")
+        prompt_tmpl = PromptTemplate.from_template(prompt)
+        chain = prompt_tmpl | self.llm | self.output_parser
+        try:
+            response = await chain.ainvoke(inputs)
+        except Exception as e:
+            print(f"Error en LLM: {e}")
+            return None
 
         try:
-            # Buscar el bloque JSON más externo
-            json_match = re.search(r'(\{.*\})', response, re.DOTALL)
-            if json_match:
-                try:
-                    return json.loads(json_match.group(1))
-                except json.JSONDecodeError:
-                    # Intentar limpiar si hay comas finales o problemas menores
-                    cleaned = re.sub(r',\s*\}', '}', json_match.group(1))
-                    cleaned = re.sub(r',\s*\]', ']', cleaned)
-                    return json.loads(cleaned)
+            # Buscar el primer objeto JSON completo y válido
+            start = response.find('{')
+            if start != -1:
+                depth = 0
+                for i, ch in enumerate(response[start:], start):
+                    if ch == '{':
+                        depth += 1
+                    elif ch == '}':
+                        depth -= 1
+                        if depth == 0:
+                            candidate = response[start:i+1]
+                            try:
+                                return json.loads(candidate)
+                            except json.JSONDecodeError:
+                                cleaned = re.sub(r',\s*\}', '}', candidate)
+                                cleaned = re.sub(r',\s*\]', ']', cleaned)
+                                try:
+                                    return json.loads(cleaned)
+                                except json.JSONDecodeError:
+                                    pass
+                            break
         except Exception as e:
-            error_msg = str(e)
-            if "Connection error" in error_msg or "all connection attempts failed" in error_msg.lower():
-                print(f"CRÍTICO: No se pudo conectar con {self.provider.upper()}.")
-            else:
-                print(f"Error en LLM JSON: {e}")
+            print(f"Error en LLM JSON: {e}")
         return None
 
     async def update_mappings(self, setup_data):
@@ -349,7 +340,7 @@ class AIAngineer:
             for k in p.keys():
                 if k not in self.mapping.get("parameters", {}):
                     new_params.append(k)
-        
+
         new_params = list(set(new_params))
 
         if new_sections or new_params:
@@ -362,126 +353,152 @@ class AIAngineer:
                 self.mapping["parameters"].update(translation.get("parameters", {}))
                 self._save_mapping()
 
-    async def analyze(self, telemetry_summary, setup_data, circuit_name="Desconocido", session_stats=None):
-        if self.llm is None:
+    async def analyze(self, telemetry_summary, setup_data, circuit_name="Desconocido", session_stats=None, model_tag=None):
+        if self.llm is None or (model_tag and getattr(self, '_current_model', None) != model_tag):
             print("Inicializando LLM...")
-            self._init_llm()
-            print(f"LLM listo con proveedor: {self.provider}")
+            self._init_llm(model_tag)
+
         # 1. Actualizar mapeos si hay nuevos parámetros
         await self.update_mappings(setup_data)
 
         # 2. Análisis de Conducción
-        if self.provider == "free-api":
-            prompt_tmpl = PromptTemplate.from_template(DRIVING_PROMPT)
-            prompt_str = prompt_tmpl.format(
-                telemetry_summary=telemetry_summary, 
-                circuit_name=circuit_name,
-                session_stats=str(session_stats or {})
-            )
-            driving_analysis = await self.llm.ainvoke(prompt_str)
-        else:
-            driving_prompt = PromptTemplate.from_template(DRIVING_PROMPT)
-            driving_chain = driving_prompt | self.llm | self.output_parser
+        driving_prompt = PromptTemplate.from_template(DRIVING_PROMPT)
+        driving_chain = driving_prompt | self.llm | self.output_parser
+        try:
             driving_analysis = await driving_chain.ainvoke({
-                "telemetry_summary": telemetry_summary, 
-                "circuit_name": circuit_name,
-                "session_stats": str(session_stats or {})
+                "telemetry_summary": telemetry_summary,
+                "session_stats": json.dumps(session_stats or {}, indent=2)
             })
+            print(f"[DEBUG driving_analysis] {repr(driving_analysis[:300])}")
+        except Exception as e:
+            print(f"Error en driving_chain: {e}")
+            driving_analysis = "No se pudo obtener el análisis de conducción."
 
         # 3. Análisis de Setup Jerárquico
         specialist_reports = []
         tires_susp_sections = ["FRONTLEFT", "FRONTRIGHT", "REARLEFT", "REARRIGHT", "LEFTFRONT", "RIGHTFRONT", "LEFTREAR", "RIGHTREAR", "SUSPENSION"]
-        
-        # Preparar datos para neumáticos y suspensión (5 secciones)
+
         tires_susp_setup = {s: setup_data[s] for s in setup_data if s in tires_susp_sections}
-        
-        # FLUJO NUEVO: Dos agentes secuenciales para Neumáticos y Suspensión
-        # Agente 1: Propuesta inicial
+
+        # Agente 1: Propuesta inicial neumáticos/suspensión (vía JSON)
         first_tires_susp_report = await self._get_json_from_llm(TIRES_SUSPENSION_ANALYSIS_PROMPT, {
-            "setup_data": str(tires_susp_setup),
+            "setup_data": json.dumps(tires_susp_setup, indent=2),
             "telemetry_summary": telemetry_summary,
             "circuit_name": circuit_name
         })
-        
+        print(f"[DEBUG first_tires_susp_report] {repr(str(first_tires_susp_report)[:300])}")
+
         # Agente 2: Validación y mejora
         final_tires_susp_report = await self._get_json_from_llm(TIRES_SUSPENSION_VALIDATION_PROMPT, {
-            "original_setup": str(tires_susp_setup),
-            "first_proposals": json.dumps(first_tires_susp_report) if first_tires_susp_report else "Sin propuestas",
+            "original_setup": json.dumps(tires_susp_setup, indent=2),
+            "first_proposals": json.dumps(first_tires_susp_report, indent=2) if first_tires_susp_report else "Sin propuestas",
             "telemetry_summary": telemetry_summary,
             "circuit_name": circuit_name
         })
-        
+        print(f"[DEBUG final_tires_susp_report] {repr(str(final_tires_susp_report)[:300])}")
+
         if final_tires_susp_report:
             specialist_reports.extend(final_tires_susp_report.get("sections", []))
         elif first_tires_susp_report:
             specialist_reports.extend(first_tires_susp_report.get("sections", []))
-        
+
         # Analizar otras secciones (Aerodinámica, Motor, etc.)
         for section_name, section_data in setup_data.items():
             if section_name in tires_susp_sections:
-                continue # Ya procesadas arriba
-                
+                continue
+
             friendly_section = self._get_friendly_name(section_name, 'section')
             report = await self._get_json_from_llm(SECTION_AGENT_PROMPT, {
                 "section_name": friendly_section,
                 "telemetry_summary": telemetry_summary,
-                "section_data": str(section_data),
+                "section_data": json.dumps(section_data, indent=2),
                 "context_data": "N/A",
                 "circuit_name": circuit_name
             })
             if report:
+                print(f"[DEBUG {section_name}_report] {repr(str(report)[:300])}")
                 specialist_reports.append({"name": section_name, "items": report.get("items", [])})
 
-        # Ingeniero Jefe de Ingenieros (Paso final)
-        final_setup_json = await self._get_json_from_llm(CHIEF_ENGINEER_PROMPT, {
-            "specialist_reports": json.dumps(specialist_reports),
+        # Ingeniero Jefe (paso final de consolidación)
+        chief_engineer_report = await self._get_json_from_llm(CHIEF_ENGINEER_PROMPT, {
+            "specialist_reports": json.dumps(specialist_reports, indent=2),
             "telemetry_summary": telemetry_summary,
             "circuit_name": circuit_name
         })
+        print(f"[DEBUG chief_engineer_report] {repr(str(chief_engineer_report)[:300])}")
 
         # 4. Formatear respuesta para el frontal
+        # Construimos un mapa de todas las recomendaciones de los especialistas para asegurar que no se pierdan
+        all_reco_map = {} # section_name -> { param_name -> item }
+        
+        # Primero llenamos con los informes de los especialistas
+        for s_report in specialist_reports:
+            s_name = s_report.get("name", "")
+            if s_name not in all_reco_map:
+                all_reco_map[s_name] = {}
+            for item in s_report.get("items", []):
+                p_name = item.get("parameter", "")
+                all_reco_map[s_name][p_name] = item
+
+        # Si el Ingeniero Jefe dio recomendaciones finales, estas tienen prioridad (sobreescriben o añaden)
+        if chief_engineer_report and "full_setup" in chief_engineer_report:
+            chief_sections = chief_engineer_report["full_setup"].get("sections", [])
+            for c_section in chief_sections:
+                s_name = c_section.get("name", "")
+                if not s_name: continue
+                if s_name not in all_reco_map:
+                    all_reco_map[s_name] = {}
+                for item in c_section.get("items", []):
+                    p_name = item.get("parameter", "")
+                    # El ingeniero jefe tiene la última palabra
+                    all_reco_map[s_name][p_name] = item
+
         full_setup_recommendations = {"sections": []}
-        
-        # Obtener secciones del Jefe de Ingenieros o fallback a especialistas
-        final_sections_raw = []
-        if final_setup_json and "full_setup" in final_setup_json:
-            final_sections_raw = final_setup_json["full_setup"].get("sections", [])
-        
-        # Si el jefe de ingenieros no devolvió secciones, usamos los reportes individuales
-        if not final_sections_raw:
-            final_sections_raw = specialist_reports
 
-        # Mapear secciones finales para fácil acceso
-        final_sections_map = {s.get("name", ""): s for s in final_sections_raw}
-
-        # Iterar sobre TODAS las secciones originales del setup
         for section_name, orig_section_data in setup_data.items():
             friendly_section = self._get_friendly_name(section_name, 'section')
             items = []
-            
-            # Buscar si el Ingeniero Jefe tiene recomendaciones para esta sección
-            reco_section = final_sections_map.get(section_name)
-            reco_map = {str(item.get('parameter', '')): item for item in reco_section.get('items', [])} if reco_section else {}
+
+            # Buscamos recomendaciones tanto por nombre técnico como amigable (por si acaso el LLM usó el amigable)
+            reco_dict = all_reco_map.get(section_name, {})
+            if not reco_dict:
+                # Intentar buscar por nombre amigable si el LLM se confundió
+                for k, v in all_reco_map.items():
+                    if k.lower() == friendly_section.lower():
+                        reco_dict = v
+                        break
 
             for param_key, current_val in orig_section_data.items():
-                # Ocultar relaciones de marchas fijas
                 if param_key.startswith("Gear") and "Setting" in param_key:
                     num_part = param_key.replace("Gear", "").replace("Setting", "")
                     if num_part.isdigit(): continue
 
-                reco = reco_map.get(param_key)
+                friendly_param = self._get_friendly_name(param_key)
+                
+                # Buscar recomendación por clave técnica o nombre amigable
+                reco = reco_dict.get(param_key)
+                if not reco:
+                    for pk, rv in reco_dict.items():
+                        if pk.lower() == friendly_param.lower():
+                            reco = rv
+                            break
+
                 clean_curr = self._clean_value(current_val)
                 
-                # Intentar limpiar también el valor recomendado
-                reco_val = self._clean_value(reco['new_value']) if reco else clean_curr
-                
+                if reco:
+                    reco_val = self._clean_value(reco.get('new_value', clean_curr))
+                    reason = reco.get('reason', "Sin cambios requeridos.")
+                else:
+                    reco_val = clean_curr
+                    reason = "Analizado por el equipo de ingeniería. No se detectaron anomalías que requieran cambios en este parámetro."
+
                 items.append({
-                    "parameter": self._get_friendly_name(param_key),
+                    "parameter": friendly_param,
                     "current": clean_curr,
                     "new": reco_val,
-                    "reason": reco['reason'] if reco else "Analizado por el Ingeniero Jefe. Sin cambios requeridos."
+                    "reason": reason
                 })
-            
+
             if items:
                 full_setup_recommendations["sections"].append({
                     "name": friendly_section,
@@ -490,6 +507,7 @@ class AIAngineer:
 
         return {
             "driving_analysis": driving_analysis,
-            "setup_analysis": "Análisis completo realizado por el equipo de ingenieros de pista.",
-            "full_setup": full_setup_recommendations
+            "setup_analysis": "Análisis completo realizado por el equipo de ingenieros de pista. Se han evaluado todos los canales de telemetría curva a curva.",
+            "full_setup": full_setup_recommendations,
+            "agent_reports": specialist_reports
         }
