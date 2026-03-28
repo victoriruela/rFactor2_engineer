@@ -668,21 +668,62 @@ def plot_all_laps_interactive(all_lap_figs, laps, lap_options, fastest_lap):
 
 def parse_svm_content(file_bytes):
     setup = {}
-    try:
-        content = file_bytes.decode('utf-16')
-    except Exception:
-        content = file_bytes.decode('utf-8', errors='ignore')
+    # Intentar decodificar con diferentes codificaciones
+    content = None
+    
+    # Heurística para UTF-16 con BOM
+    if file_bytes.startswith((b'\xff\xfe', b'\xfe\xff')):
+        try:
+            content = file_bytes.decode('utf-16')
+        except Exception:
+            pass
+
+    if content is None:
+        try:
+            # Intentar UTF-8 primero (es más estricto que latin-1)
+            content = file_bytes.decode('utf-8')
+        except Exception:
+            try:
+                # Si falla UTF-8, podría ser latin-1 (común en rF2 por símbolos como °)
+                content = file_bytes.decode('latin-1')
+            except Exception:
+                # Último recurso
+                content = file_bytes.decode('utf-8', errors='ignore')
 
     current_section = None
     for line in content.splitlines():
         line = line.strip()
-        if not line or line.startswith('//'): continue
+        if not line: continue
+        
+        # Detectar sección [SECCION]
         if '[' in line and ']' in line:
-            current_section = line[line.index('[') + 1:line.index(']')]
-            setup[current_section] = {}
-        elif '=' in line and current_section:
-            k, v = line.split('=', 1)
-            setup[current_section][k.strip()] = v.strip()
+            # Ignorar si es un comentario que no parece sección
+            if line.startswith('//') and not ('[' in line[0:5]): # Heurística simple
+                pass 
+            else:
+                try:
+                    start = line.index('[') + 1
+                    end = line.index(']')
+                    current_section = line[start:end].strip()
+                    if current_section not in setup:
+                        setup[current_section] = {}
+                    continue
+                except ValueError:
+                    continue
+
+        # Detectar parámetros k=v
+        if '=' in line and current_section:
+            # Limpiar posible comentario al inicio (rFactor2 comenta valores por defecto)
+            clean_line = line
+            if clean_line.startswith('//'):
+                clean_line = clean_line[2:].strip()
+            
+            if '=' in clean_line:
+                k, v = clean_line.split('=', 1)
+                key = k.strip()
+                # Si ya existe (p.ej. uno real y uno comentado), preferimos el real (no comentado)
+                if key not in setup[current_section] or not line.startswith('//'):
+                    setup[current_section][key] = v.strip()
     return setup
 
 def save_reasoning_to_history(reasoning):
@@ -800,9 +841,9 @@ with st.sidebar:
             st.session_state.clear()
             st.rerun()
 
-        # Botón Nueva sesión cargando memoria (SOLO si ya se analizó)
-        if is_analyzed:
-            if st.button("🔄 Nueva sesión cargando memoria", use_container_width=True):
+    # Botón Nueva sesión cargando memoria (SOLO si ya se analizó)
+    if is_analyzed or 'ai_analysis_data' in st.session_state:
+        if st.button("🔄 Nueva sesión cargando memoria", use_container_width=True):
                 # 1. Guardar razonamiento actual
                 data = st.session_state.get('ai_analysis_data', {})
                 reasoning = data.get('chief_reasoning', '')
