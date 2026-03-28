@@ -191,7 +191,8 @@ def plot_interactive_telemetry(lap_data):
         .tab.active {{ border: 1px solid #444; border-bottom: 1px solid #111; background: #222; font-weight: bold; color: white; }}
         .tab-content {{ display: none; }}
         .tab-content.active {{ display: block; }}
-        .chart-wrapper {{ position: relative; width: 100%; margin-bottom: 5px; box-sizing: border-box; cursor: crosshair; }}
+        .chart-wrapper {{ position: relative; width: 100%; margin-bottom: 5px; box-sizing: border-box; cursor: grab; }}
+        .chart-wrapper:active {{ cursor: grabbing; }}
         .chart-wrapper canvas.red-line {{ position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 10; }}
         #map-container {{ width: 100%; margin-bottom: 15px; border: 1px solid #333; }}
     </style>
