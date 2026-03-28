@@ -84,7 +84,8 @@ def get_models():
 async def analyze_telemetry(
     telemetry_file: UploadFile = File(...),
     svm_file: UploadFile = File(...),
-    model: Optional[str] = Form(None)
+    model: Optional[str] = Form(None),
+    previous_reasoning: Optional[str] = Form(None)
 ):
     session_id = str(uuid.uuid4())
     upload_dir = f"data/{session_id}"
@@ -99,6 +100,14 @@ async def analyze_telemetry(
         shutil.copyfileobj(svm_file.file, buffer)
 
     try:
+        # 0. Procesar razonamientos previos si existen
+        prev_reasoning_list = None
+        if previous_reasoning:
+            try:
+                prev_reasoning_list = json.loads(previous_reasoning)
+            except:
+                prev_reasoning_list = [previous_reasoning]
+
         # 1. Parsear archivos
         try:
             if tele_path.lower().endswith('.mat'):
@@ -417,7 +426,13 @@ async def analyze_telemetry(
         summary += telemetry_csv_for_ai
         
         # Llamada asíncrona al análisis multi-agente
-        ai_result = await ai_engineer.analyze(summary, setup_dict, circuit_name=circuit_name, session_stats=session_stats, model_tag=model or None)
+        ai_result = await ai_engineer.analyze(
+            summary, setup_dict, 
+            circuit_name=circuit_name, 
+            session_stats=session_stats, 
+            model_tag=model or None,
+            previous_reasoning=prev_reasoning_list
+        )
         
         # 4. Generar puntos de interés en el mapa
         issues_on_map = [
@@ -480,6 +495,31 @@ async def reanalyze_section(req: ReanalyzeRequest):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/cleanup")
+async def cleanup_data():
+    """Borra todos los archivos .svm y .mat de la carpeta data."""
+    if not os.path.exists(DATA_DIR):
+        return {"status": "ok", "message": "No data directory"}
+    
+    deleted_count = 0
+    for root, dirs, files in os.walk(DATA_DIR):
+        for file in files:
+            if file.lower().endswith(('.mat', '.svm')):
+                try:
+                    os.remove(os.path.join(root, file))
+                    deleted_count += 1
+                except Exception as e:
+                    print(f"Error borrando {file}: {e}")
+    
+    # Opcionalmente borrar carpetas vacías
+    for root, dirs, files in os.walk(DATA_DIR, topdown=False):
+        for name in dirs:
+            dir_path = os.path.join(root, name)
+            if not os.listdir(dir_path):
+                os.rmdir(dir_path)
+
+    return {"status": "ok", "deleted_files": deleted_count}
 
 if __name__ == "__main__":
     import uvicorn

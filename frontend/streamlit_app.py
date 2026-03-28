@@ -672,20 +672,74 @@ def parse_svm_content(file_bytes):
             setup[current_section][k.strip()] = v.strip()
     return setup
 
+def save_reasoning_to_history(reasoning):
+    """Guarda el razonamiento del ingeniero jefe en un archivo local."""
+    history_file = "reasoning_history.json"
+    history = []
+    if os.path.exists(history_file):
+        try:
+            with open(history_file, "r", encoding="utf-8") as f:
+                history = _json.load(f)
+        except:
+            history = []
+    
+    history.append(reasoning)
+    # Mantener solo los últimos 5 para no saturar el contexto
+    if len(history) > 5:
+        history = history[-5:]
+        
+    with open(history_file, "w", encoding="utf-8") as f:
+        _json.dump(history, f, ensure_ascii=False, indent=2)
+
+def load_reasoning_history():
+    """Carga el historial de razonamientos."""
+    history_file = "reasoning_history.json"
+    if os.path.exists(history_file):
+        try:
+            with open(history_file, "r", encoding="utf-8") as f:
+                return _json.load(f)
+        except:
+            return []
+    return []
+
+def clear_reasoning_history():
+    """Borra el historial de razonamientos."""
+    history_file = "reasoning_history.json"
+    if os.path.exists(history_file):
+        try:
+            os.remove(history_file)
+        except:
+            pass
+
+def cleanup_server_data():
+    """Llama al endpoint de limpieza del backend."""
+    try:
+        requests.post("http://localhost:8000/cleanup", timeout=5)
+    except:
+        pass
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Barra lateral
 # ─────────────────────────────────────────────────────────────────────────────
 with st.sidebar:
     st.header("Carga de Datos")
-    data_source = st.radio("Fuente de datos", ["Subir archivos", "Sesiones anteriores"])
+    
+    # Estado para controlar si hay una sesión activa y analizada
+    is_analyzed = 'ai_analysis_data' in st.session_state
+
+    # Para controlar si ya se han cargado archivos pero no analizado
+    if 'selected_session_name' not in st.session_state:
+        st.session_state['selected_session_name'] = None
 
     tele_to_send = None
     svm_to_send = None
     tele_name = None
     svm_name = None
 
-    if data_source == "Subir archivos":
+    # Lógica de visualización de la barra lateral
+    if not st.session_state['selected_session_name']:
+        # ESTADO 1: No hay archivos cargados
         uploaded_files = st.file_uploader(
             "Sube archivos .mat y .svm", type=["mat", "svm", "csv"],
             accept_multiple_files=True
@@ -704,45 +758,57 @@ with st.sidebar:
                 if ("mat" in files or "csv" in files) and "svm" in files
             ]
             if valid_sessions:
-                selected_session = st.selectbox("Selecciona sesión subida", valid_sessions)
-                ext_found = "mat" if "mat" in sessions[selected_session] else "csv"
-                tele_obj = sessions[selected_session][ext_found]
-                svm_obj = sessions[selected_session]["svm"]
-                tele_to_send = tele_obj.getvalue()
-                svm_to_send = svm_obj.getvalue()
-                tele_name = tele_obj.name
-                svm_name = svm_obj.name
-                st.success(f"Sesión '{selected_session}' cargada.")
+                selected_label = st.selectbox("Selecciona sesión subida", valid_sessions)
+                if st.button("Cargar sesión"):
+                    ext_found = "mat" if "mat" in sessions[selected_label] else "csv"
+                    tele_obj = sessions[selected_label][ext_found]
+                    svm_obj = sessions[selected_label]["svm"]
+                    
+                    # Guardar en session_state para persistencia entre reruns
+                    st.session_state['tele_to_send'] = tele_obj.getvalue()
+                    st.session_state['svm_to_send'] = svm_obj.getvalue()
+                    st.session_state['tele_name'] = tele_obj.name
+                    st.session_state['svm_name'] = svm_obj.name
+                    st.session_state['selected_session_name'] = selected_label
+                    st.rerun()
     else:
-        try:
-            sessions_resp = requests.get("http://localhost:8000/sessions", timeout=5)
-            if sessions_resp.status_code == 200:
-                past_sessions = sessions_resp.json().get("sessions", [])
-                if past_sessions:
-                    session_options = {
-                        f"{s['display_name']} ({s['id'][:8]})": s for s in past_sessions
-                    }
-                    selected_label = st.selectbox("Selecciona sesión guardada", list(session_options.keys()))
-                    selected_s = session_options[selected_label]
-                    sid = selected_s['id']
-                    t_name = selected_s['telemetry']
-                    s_name = selected_s['svm']
-                    t_resp = requests.get(f"http://localhost:8000/sessions/{sid}/file/{t_name}")
-                    s_resp = requests.get(f"http://localhost:8000/sessions/{sid}/file/{s_name}")
-                    if t_resp.status_code == 200 and s_resp.status_code == 200:
-                        tele_to_send = t_resp.content
-                        svm_to_send = s_resp.content
-                        tele_name = t_name
-                        svm_name = s_name
-                        st.success(f"Sesión '{selected_label}' cargada desde el servidor.")
-                    else:
-                        st.error("Error al descargar archivos de la sesión.")
-                else:
-                    st.info("No hay sesiones guardadas en el servidor.")
-            else:
-                st.error("Error al obtener sesiones del servidor.")
-        except Exception as e:
-            st.error(f"Error de conexión con el backend: {e}")
+        # ESTADO 2 o 3: Sesión cargada (con o sin análisis)
+        st.info(f"Sesión activa: **{st.session_state['selected_session_name']}**")
+        
+        # Botón Nueva sesión (siempre presente si hay algo cargado)
+        if st.button("🆕 Nueva sesión", use_container_width=True):
+            # 1. Borrar historial de memoria
+            clear_reasoning_history()
+            
+            # 2. Limpiar datos en servidor
+            cleanup_server_data()
+            
+            # 3. Limpiar estado y recargar
+            st.session_state.clear()
+            st.rerun()
+
+        # Botón Nueva sesión cargando memoria (SOLO si ya se analizó)
+        if is_analyzed:
+            if st.button("🔄 Nueva sesión cargando memoria", use_container_width=True):
+                # 1. Guardar razonamiento actual
+                data = st.session_state.get('ai_analysis_data', {})
+                reasoning = data.get('chief_reasoning', '')
+                if reasoning:
+                    save_reasoning_to_history(reasoning)
+                
+                # 2. Limpiar datos en servidor
+                cleanup_server_data()
+                
+                # 3. Limpiar estado y recargar
+                st.session_state.clear()
+                st.rerun()
+
+    # Recuperar datos de la sesión si existen
+    if st.session_state.get('selected_session_name'):
+        tele_to_send = st.session_state.get('tele_to_send')
+        svm_to_send = st.session_state.get('svm_to_send')
+        tele_name = st.session_state.get('tele_name')
+        svm_name = st.session_state.get('svm_name')
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Contenido principal
@@ -866,6 +932,12 @@ if tele_to_send and svm_to_send:
                             data_form = {}
                             if sel_model:
                                 data_form["model"] = sel_model
+                            
+                            # Cargar historial de razonamientos si existe
+                            history = load_reasoning_history()
+                            if history:
+                                data_form["previous_reasoning"] = _json.dumps(history)
+
                             response = requests.post(
                                 "http://localhost:8000/analyze",
                                 files=files, data=data_form

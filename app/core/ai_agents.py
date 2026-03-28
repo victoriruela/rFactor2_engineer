@@ -43,11 +43,10 @@ def _find_ollama_exe():
 # --- PROMPTS ---
 
 DRIVING_PROMPT = """
-Eres un ingeniero de pista experto en rFactor 2. Analiza los datos de telemetría VUELTA A VUELTA y CURVA A CURVA, y responde en CASTELLANO.
+Eres un ingeniero de pista experto en rFactor 2. Analiza los datos de telemetría VUELTA A VUELTA y CURVA A CURVA para evaluar la técnica de conducción del piloto. Responde en CASTELLANO.
 
-Tienes acceso a los DATOS COMPLETOS de telemetría submuestreados (~50 puntos por vuelta) con todos los canales relevantes.
-Estos datos incluyen velocidad, throttle, freno, dirección, RPM, marchas, fuerzas G, temperaturas, desgaste, presiones, etc.
-Cada fila tiene la columna "Vuelta" y "Lap Distance" (distancia recorrida en la vuelta).
+IMPORTANTE: Tu análisis debe centrarse EXCLUSIVAMENTE en la conducción (frenada, trazada, uso del acelerador, marchas, etc.). 
+PROHIBIDO sugerir cambios en el setup del coche. Tu trabajo es decir al piloto qué está haciendo mal y cómo mejorar su técnica, no qué cambiar en el coche.
 
 DATOS DE TELEMETRÍA:
 {telemetry_summary}
@@ -59,16 +58,17 @@ ANÁLISIS REQUERIDO:
 1. Examina los datos punto a punto para identificar el comportamiento en las CURVAS. Compara cómo el piloto toma la misma curva en diferentes vueltas usando la columna "Lap Distance" para ubicarte.
 2. Identifica problemas específicos en curvas (frenadas tardías, falta de velocidad de paso por curva, aceleraciones bruscas que causan sobreviraje, etc.)
 3. Compara la EVOLUCIÓN: ¿mejora o empeora el rendimiento en sectores específicos del circuito?
-4. Identifica patrones: ¿el desgaste o temperatura afectan al rendimiento en las últimas vueltas?
+4. Identifica patrones: ¿el desgaste o temperatura afectan al rendimiento en las últimas vueltas por la forma de conducir?
 
-Escribe EXACTAMENTE 5 puntos de mejora. Cada punto debe ser ÚNICO y diferente a los demás.
+Escribe EXACTAMENTE 5 puntos de mejora DE CONDUCCIÓN. Cada punto debe ser ÚNICO y diferente a los demás.
 Formato obligatorio para cada punto:
-- Vuelta N (Distancia Xm): [análisis de curva con valores numéricos REALES] → [acción correctiva específica]
+- Vuelta N (Distancia Xm): [análisis de curva con valores numéricos REALES de conducción] → [acción correctiva específica de CONDUCCIÓN]
 
 Reglas ESTRICTAS:
 - USA valores numéricos REALES de los datos (velocidad, frenada %, throttle %, RPM, G Force, etc.)
 - Céntrate en COMPARAR curvas entre vueltas.
 - PROHIBIDO repetir ideas.
+- PROHIBIDO sugerir cambios de setup (presiones, muelles, alerones, etc.).
 - Sin introducción, sin conclusión, solo los 5 puntos.
 """
 
@@ -96,8 +96,8 @@ IMPORTANTE:
 - Si no hay cambios necesarios en ningún parámetro, devuelve un JSON con "items" vacío y un campo "summary" explicando por qué.
 
 Reglas:
-1. Cada "reason" DEBE citar valores numéricos REALES y comparar el comportamiento en curvas entre vueltas.
-2. Explica el MOTIVO técnico de cada cambio: por qué ese valor nuevo corregirá el comportamiento observado en la curva.
+1. Cada "reason" DEBE ser una explicación técnica EXTREMADAMENTE DETALLADA (mínimo 2-3 frases), citando valores numéricos REALES y comparando el comportamiento en curvas entre vueltas.
+2. Explica el mecanismo físico: CÓMO el cambio de ese parámetro específico solucionará el problema de telemetría detectado.
 3. Responde SIEMPRE en CASTELLANO.
 4. Devuelve ÚNICAMENTE JSON puro.
 5. RESTRICCIONES DE VALORES:
@@ -109,19 +109,17 @@ Reglas:
 JSON puro:
 {{
   "items": [
-    {{ "parameter": "NombreOriginal", "new_value": "ValorRecomendado", "reason": "Justificación técnica citando curvas, vueltas y valores numéricos reales" }}
+    {{ "parameter": "NombreOriginal", "new_value": "ValorRecomendado", "reason": "Justificación técnica muy detallada, citando curvas (Lap Distance), vueltas y valores numéricos reales de telemetría. Explica el porqué técnico del cambio." }}
   ],
-  "summary": "Resumen breve de los cambios propuestos o justificación de por qué no se necesitan cambios"
+  "summary": "Resumen técnico de los cambios propuestos o justificación detallada de por qué no se necesitan cambios"
 }}
 """
 
 CHIEF_ENGINEER_PROMPT = """
-Eres el Ingeniero Jefe de Competición de un equipo de rFactor 2. Tu responsabilidad es CONSOLIDAR y dar la palabra final sobre el setup completo.
-Recibes informes de TODOS los ingenieros especialistas de cada sección (aerodinámica, motor, suspensión delantera izquierda, suspensión delantera derecha, suspensión trasera izquierda, suspensión trasera derecha, etc.).
+Eres el Ingeniero Jefe de Competición de un equipo de rFactor 2. Tu responsabilidad es CONSOLIDAR el setup completo.
+Recibes informes de ingenieros especialistas para cada sección del coche.
 
 CIRCUITO: {circuit_name}
-
-Tienes acceso a los DATOS COMPLETOS de telemetría submuestreados para verificar las propuestas de los especialistas.
 
 DATOS DE TELEMETRÍA COMPLETOS:
 {telemetry_summary}
@@ -129,52 +127,35 @@ DATOS DE TELEMETRÍA COMPLETOS:
 SETUP ACTUAL COMPLETO:
 {current_setup}
 
-Informes de TODOS los especialistas:
+Informes de los especialistas:
 {specialist_reports}
 
 {memory_context}
 
-TU ROL COMO INGENIERO JEFE:
-Tu trabajo NO es simplemente copiar lo que dicen los especialistas. Debes:
-
-1. VISIÓN GLOBAL: Analiza TODAS las propuestas en conjunto. ¿Son coherentes entre sí? ¿Hay contradicciones?
-2. SIMETRÍA Y ASIMETRÍA:
-   - En circuitos normales, los valores de suspensión, amortiguación, ride height, etc. deben ser SIMÉTRICOS entre izquierda y derecha del mismo eje (FRONTLEFT ≈ FRONTRIGHT, REARLEFT ≈ REARRIGHT).
-   - Solo se justifica asimetría si el circuito tiene mayoría de curvas en una dirección y la telemetría lo confirma.
-   - Si un lado tiene valores más duros que el otro, verifica que sea el lado que recibe las mayores cargas laterales según la telemetría (G Force Lat).
-   - PROHIBIDO invertir la relación de dureza entre lados sin justificación clara basada en cargas laterales.
-   - Ejemplo: Si FRONTLEFT tiene SpringSetting=223 N/mm y FRONTRIGHT=219 N/mm, y las mayores cargas laterales van al lado izquierdo, NO propongas que FRONTRIGHT sea más duro que FRONTLEFT.
-3. CORRELACIÓN ENTRE EJES: Verifica que los cambios propuestos para el eje delantero sean coherentes con los del eje trasero.
-   - Si se endurece la suspensión delantera, ¿tiene sentido lo propuesto para la trasera?
-   - ¿El balance de rigidez delantero/trasero es correcto para el comportamiento observado?
-4. COHERENCIA CRUZADA: Verifica que los cambios de una sección no contradigan los de otra.
-   - Ej: No tiene sentido bajar la altura al suelo si la suspensión ya está haciendo "bottoming".
-   - Ej: No subir presiones de neumáticos si ya hay sobrecalentamiento.
-5. RESTRICCIONES DE VALORES:
-   - Parámetros DISCRETOS (solo valores enteros): FuelSetting, BrakeDuctSetting, RadiatorSetting, BoostSetting, RevLimitSetting, EngineBrakeSetting. NUNCA propongas valores decimales para estos.
-   - Parámetros CONTINUOS (permiten decimales): CamberSetting, ToeSetting, PressureSetting, SpringSetting, PackerSetting, SlowBumpSetting, SlowReboundSetting, FastBumpSetting, FastReboundSetting, RideHeightSetting.
-   - NO propongas cambiar la cantidad de combustible (FuelSetting) salvo que haya un problema claro de peso.
-   - Los cambios deben ser PROPORCIONADOS al problema. No hagas cambios drásticos sin justificación clara.
-6. MODIFICAR PROPUESTAS: Si algún especialista propone algo incorrecto o incoherente con el resto, MODIFÍCALO y explica por qué.
-7. Solo incluye en la respuesta los parámetros que REALMENTE necesiten cambios. Si un parámetro está bien, NO lo incluyas.
-8. Cada "reason" DEBE explicar el MOTIVO técnico del cambio citando datos reales de la telemetría.
-9. PROHIBIDO poner "reason" genéricos como "mejora el rendimiento". Cada razón debe ser ESPECÍFICA con valores numéricos.
-10. Todo el setup es para ser aplicado en el garaje antes de salir a pista.
-11. Responde SIEMPRE en CASTELLANO.
+TU ROL COMO INGENIERO JEFE (REGLAS DE ORO):
+1. SER PERMISIVO: Los especialistas son expertos en su área. Tu labor NO es filtrar por sistema, sino ELIMINAR O MODIFICAR SOLO aquello que sea incoherente, peligroso o contradictorio. Si una propuesta de un especialista tiene sentido técnico basado en la telemetría, DEBES incluirla.
+2. RESPETAR LAS EXPLICACIONES: 
+   - Si aceptas el cambio de un especialista SIN modificar el valor propuesto, DEBES usar la explicación (reason) íntegra del especialista, o ampliarla. No la resumas.
+   - Si modificas el valor o descartas una propuesta, DEBES dar una explicación (reason) detallada de por qué tu decisión es mejor para el balance global del coche.
+3. VISIÓN GLOBAL Y COHERENCIA: Verifica que los cambios no se contradigan entre ejes (delantero/trasero) o secciones.
+4. SIMETRÍA:
+   - Mantén simetría (FRONTLEFT ≈ FRONTRIGHT, etc.) a menos que la telemetría (G Force Lat, temperaturas asimétricas) justifique claramente una asimetría por el diseño del circuito.
+5. EXPLICACIONES DETALLADAS: El piloto necesita entender el "porqué". Evita frases cortas. Cita siempre valores de telemetría.
+6. IMPORTANTE: El nombre de la sección en el JSON ("name") DEBE ser el nombre interno (ej: "FRONTLEFT", "SUSPENSION").
 
 JSON puro:
 {{
   "full_setup": {{
     "sections": [
       {{
-        "name": "NombreSeccionInterno",
+        "name": "FRONTLEFT",
         "items": [
-          {{ "parameter": "NombreOriginal", "new_value": "ValorFinal", "reason": "Justificación técnica con datos reales de telemetría, explicando coherencia con el resto del setup" }}
+          {{ "parameter": "CamberSetting", "new_value": "-3.2", "reason": "COPIA AQUÍ LA RAZÓN DEL ESPECIALISTA SI NO MODIFICAS EL VALOR, O EXPLICA TU CAMBIO DETALLADAMENTE..." }}
         ]
       }}
     ]
   }},
-  "chief_reasoning": "Razonamiento global del ingeniero jefe sobre la coherencia del setup, inconsistencias detectadas y correcciones aplicadas"
+  "chief_reasoning": "Resumen global de la estrategia de setup adoptada y correcciones importantes realizadas a las propuestas de los especialistas."
 }}
 """
 
@@ -223,18 +204,19 @@ Reglas para las justificaciones ("reason"):
 - DEBE explicar qué problema de la telemetría se corrige con este cambio.
 - PROHIBIDO poner razones genéricas como "mejora el rendimiento" o "optimiza el comportamiento".
 - Responde SIEMPRE en CASTELLANO.
+12. IMPORTANTE: El nombre de la sección en el JSON ("name") DEBE ser EXACTAMENTE el nombre interno (ej: "FRONTLEFT", "SUSPENSION", "ENGINE"). NO uses nombres amigables aquí.
 
 JSON puro:
 {{
   "sections": [
     {{
-      "name": "NombreSeccionInterno",
+      "name": "FRONTLEFT",
       "items": [
-        {{ "parameter": "NombreOriginal", "new_value": "ValorFinal", "reason": "Justificación técnica DETALLADA citando valores numéricos reales de la telemetría, curvas y vueltas concretas, y explicando por qué este valor es mejor que el propuesto anteriormente" }}
+        {{ "parameter": "CamberSetting", "new_value": "-3.2", "reason": "Justificación técnica DETALLADA citando valores numéricos reales..." }}
       ]
     }}
   ],
-  "chief_reasoning": "Razonamiento global detallado del ingeniero jefe sobre las correcciones aplicadas respecto a la propuesta anterior, citando datos de telemetría y explicando la coherencia del setup"
+  "chief_reasoning": "Razonamiento global detallado del ingeniero jefe sobre las correcciones aplicadas..."
 }}
 """
 
@@ -498,7 +480,7 @@ class AIAngineer:
 
         return full_setup_recommendations
 
-    async def analyze(self, telemetry_summary, setup_data, circuit_name="Desconocido", session_stats=None, model_tag=None):
+    async def analyze(self, telemetry_summary, setup_data, circuit_name="Desconocido", session_stats=None, model_tag=None, previous_reasoning=None):
         if self.llm is None or (model_tag and getattr(self, '_current_model', None) != model_tag):
             print("Inicializando LLM...")
             self._init_llm(model_tag)
@@ -552,13 +534,21 @@ class AIAngineer:
         # Preparar resumen del setup actual para el ingeniero jefe
         current_setup_summary = self._build_current_setup_summary(setup_data)
 
+        # Preparar contexto de memoria de sesiones anteriores si existe
+        memory_context = ""
+        if previous_reasoning:
+            memory_context = "### HISTORIAL DE RAZONAMIENTOS DE SESIONES ANTERIORES ###\n"
+            for i, r in enumerate(previous_reasoning):
+                memory_context += f"Sesión previa {i+1}:\n{r}\n---\n"
+            memory_context += "TEN EN CUENTA estos razonamientos previos para tus decisiones en esta nueva sesión. No repitas errores y busca la evolución del setup."
+
         # Ingeniero Jefe (paso final de consolidación)
         chief_engineer_report = await self._get_json_from_llm(CHIEF_ENGINEER_PROMPT, {
             "specialist_reports": json.dumps(specialist_reports, indent=2),
             "telemetry_summary": telemetry_summary,
             "circuit_name": circuit_name,
             "current_setup": current_setup_summary,
-            "memory_context": ""
+            "memory_context": memory_context
         })
         print(f"[DEBUG chief_engineer_report] {repr(str(chief_engineer_report)[:300])}")
 
@@ -584,11 +574,25 @@ class AIAngineer:
                 s_name = c_section.get("name", "")
                 if not s_name:
                     continue
-                if s_name not in all_reco_map:
-                    all_reco_map[s_name] = {}
+                # Asegurar que el nombre de la sección sea el interno (mapeado de vuelta si el LLM usó el amigable)
+                internal_name = s_name
+                # Intento de corrección si el LLM ignoró el prompt y envió el nombre amigable
+                inv_sections = {v: k for k, v in self.mapping.get("sections", {}).items()}
+                if s_name in inv_sections:
+                    internal_name = inv_sections[s_name]
+                
+                if internal_name not in all_reco_map:
+                    all_reco_map[internal_name] = {}
+                
                 for item in c_section.get("items", []):
                     p_name = item.get("parameter", "")
-                    all_reco_map[s_name][p_name] = item
+                    # Intento de corrección si el LLM usó el nombre amigable del parámetro
+                    internal_p_name = p_name
+                    inv_params = {v: k for k, v in self.mapping.get("parameters", {}).items()}
+                    if p_name in inv_params:
+                        internal_p_name = inv_params[p_name]
+                    
+                    all_reco_map[internal_name][internal_p_name] = item
         else:
             # Fallback: usar informes de especialistas si el jefe no respondió
             for s_report in specialist_reports:
@@ -692,11 +696,25 @@ class AIAngineer:
             s_name = sec.get("name", "")
             if not s_name:
                 continue
-            if s_name not in new_reco_map:
-                new_reco_map[s_name] = {}
+            
+            # Asegurar que el nombre de la sección sea el interno
+            internal_name = s_name
+            inv_sections = {v: k for k, v in self.mapping.get("sections", {}).items()}
+            if s_name in inv_sections:
+                internal_name = inv_sections[s_name]
+
+            if internal_name not in new_reco_map:
+                new_reco_map[internal_name] = {}
+            
             for item in sec.get("items", []):
                 p_name = item.get("parameter", "")
-                new_reco_map[s_name][p_name] = item
+                # Asegurar que el nombre del parámetro sea el interno
+                internal_p_name = p_name
+                inv_params = {v: k for k, v in self.mapping.get("parameters", {}).items()}
+                if p_name in inv_params:
+                    internal_p_name = inv_params[p_name]
+                
+                new_reco_map[internal_name][internal_p_name] = item
 
         # Re-formatear solo las secciones afectadas
         updated_sections = self._format_full_setup(new_reco_map, {s: setup_data[s] for s in sections_to_reanalyze if s in setup_data})
