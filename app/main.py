@@ -25,19 +25,6 @@ class AnalysisResponse(BaseModel):
     telemetry_summary_sent: str = "" # Resumen enviado a la IA
     chief_reasoning: str = "" # Razonamiento del ingeniero jefe
 
-class ReanalyzeRequest(BaseModel):
-    section_key: str
-    telemetry_summary: str
-    setup_data: Dict[str, Any]
-    previous_full_setup: Dict[str, Any]
-    circuit_name: str = "Desconocido"
-    model: Optional[str] = None
-
-class ReanalyzeResponse(BaseModel):
-    updated_sections: List[Dict[str, Any]]
-    chief_reasoning: str
-    sections_reanalyzed: List[str]
-
 from app.core.ai_agents import AIAngineer, list_available_models
 
 ai_engineer = AIAngineer()
@@ -84,8 +71,7 @@ def get_models():
 async def analyze_telemetry(
     telemetry_file: UploadFile = File(...),
     svm_file: UploadFile = File(...),
-    model: Optional[str] = Form(None),
-    previous_reasoning: Optional[str] = Form(None)
+    model: Optional[str] = Form(None)
 ):
     session_id = str(uuid.uuid4())
     upload_dir = f"data/{session_id}"
@@ -100,14 +86,6 @@ async def analyze_telemetry(
         shutil.copyfileobj(svm_file.file, buffer)
 
     try:
-        # 0. Procesar razonamientos previos si existen
-        prev_reasoning_list = None
-        if previous_reasoning:
-            try:
-                prev_reasoning_list = json.loads(previous_reasoning)
-            except:
-                prev_reasoning_list = [previous_reasoning]
-
         # 1. Parsear archivos
         try:
             if tele_path.lower().endswith('.mat'):
@@ -430,8 +408,7 @@ async def analyze_telemetry(
             summary, setup_dict, 
             circuit_name=circuit_name, 
             session_stats=session_stats, 
-            model_tag=model or None,
-            previous_reasoning=prev_reasoning_list
+            model_tag=model or None
         )
         
         # 4. Generar puntos de interés en el mapa
@@ -476,25 +453,6 @@ async def analyze_telemetry(
         # Opcional: limpiar archivos después del análisis
         # shutil.rmtree(upload_dir)
         pass
-
-@app.post("/reanalyze_section", response_model=ReanalyzeResponse)
-async def reanalyze_section(req: ReanalyzeRequest):
-    try:
-        result = await ai_engineer.reanalyze_section(
-            section_key=req.section_key,
-            telemetry_summary=req.telemetry_summary,
-            setup_data=req.setup_data,
-            previous_full_setup=req.previous_full_setup,
-            circuit_name=req.circuit_name,
-            model_tag=req.model or None
-        )
-        if not result:
-            raise HTTPException(status_code=500, detail="El ingeniero jefe no pudo completar el re-análisis.")
-        return ReanalyzeResponse(**result)
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/cleanup")
 async def cleanup_data():

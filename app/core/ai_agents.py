@@ -159,67 +159,6 @@ JSON puro:
 }}
 """
 
-CHIEF_REANALYZE_PROMPT = """
-Eres el Ingeniero Jefe de Competición de un equipo de rFactor 2.
-Se te pide RE-ANALIZAR una o varias secciones del setup porque el equipo no está convencido con los cambios propuestos anteriormente.
-
-CIRCUITO: {circuit_name}
-
-DATOS DE TELEMETRÍA COMPLETOS:
-{telemetry_summary}
-
-SETUP ACTUAL COMPLETO:
-{current_setup}
-
-SECCIONES A RE-ANALIZAR: {sections_to_reanalyze}
-
-DATOS ACTUALES DE ESAS SECCIONES:
-{sections_data}
-
-PROPUESTAS ANTERIORES QUE SE QUIEREN REVISAR:
-{previous_proposals}
-
-RAZONAMIENTOS PREVIOS DE LOS INGENIEROS ESPECIALISTAS:
-{agent_reports_context}
-
-HISTORIAL COMPLETO DE DECISIONES Y RAZONAMIENTOS DEL INGENIERO JEFE:
-{decision_history}
-
-TU MISIÓN:
-1. Revisa críticamente las propuestas anteriores teniendo en cuenta TODOS los razonamientos previos de los especialistas y tus propias decisiones anteriores.
-2. Analiza la telemetría de nuevo con ojo fresco, buscando detalles que se hayan podido pasar por alto. CITA valores numéricos concretos de la telemetría en cada justificación.
-3. SIMETRÍA: Si estás re-analizando secciones de neumáticos o suspensión, DEBES considerar las 5 secciones juntas (FRONTLEFT, FRONTRIGHT, REARLEFT, REARRIGHT, SUSPENSION) para no crear inconsistencias.
-4. Propón un MEJOR ajuste, diferente al anterior si es posible, o confirma el anterior si realmente es el óptimo.
-5. Solo incluye parámetros que REALMENTE necesiten cambios. Si un parámetro ya tenía un buen valor propuesto anteriormente, NO lo incluyas (se mantendrá la propuesta anterior).
-6. RESTRICCIONES DE VALORES:
-   - Parámetros DISCRETOS (solo valores enteros): FuelSetting, BrakeDuctSetting, RadiatorSetting, BoostSetting, RevLimitSetting, EngineBrakeSetting.
-   - Parámetros CONTINUOS (permiten decimales): CamberSetting, ToeSetting, PressureSetting, SpringSetting, PackerSetting, SlowBumpSetting, SlowReboundSetting, FastBumpSetting, FastReboundSetting, RideHeightSetting.
-   - NO propongas cambiar la cantidad de combustible (FuelSetting) salvo que haya un problema claro de peso.
-   - PROHIBIDO invertir relaciones de dureza entre lados sin justificación basada en cargas laterales (G Force Lat).
-
-Reglas para las justificaciones ("reason"):
-- Cada "reason" DEBE ser una explicación técnica DETALLADA y ESPECÍFICA, igual de completa que en el análisis inicial.
-- DEBE citar valores numéricos REALES de la telemetría (velocidades, temperaturas, presiones, fuerzas G, etc.).
-- DEBE explicar POR QUÉ el nuevo valor es mejor que el anterior, referenciando curvas y vueltas concretas.
-- DEBE explicar qué problema de la telemetría se corrige con este cambio.
-- PROHIBIDO poner razones genéricas como "mejora el rendimiento" o "optimiza el comportamiento".
-- Responde SIEMPRE en CASTELLANO.
-12. IMPORTANTE: El nombre de la sección en el JSON ("name") DEBE ser EXACTAMENTE el nombre interno (ej: "FRONTLEFT", "SUSPENSION", "ENGINE"). NO uses nombres amigables aquí.
-
-JSON puro:
-{{
-  "sections": [
-    {{
-      "name": "FRONTLEFT",
-      "items": [
-        {{ "parameter": "CamberSetting", "new_value": "-3.2", "reason": "Justificación técnica DETALLADA citando valores numéricos reales..." }}
-      ]
-    }}
-  ],
-  "chief_reasoning": "Razonamiento global detallado del ingeniero jefe sobre las correcciones aplicadas..."
-}}
-"""
-
 TRANSLATOR_PROMPT = """
 Eres un experto en localización de simuladores de carreras.
 Debes traducir y hacer "amigables" los siguientes parámetros y secciones de rFactor 2.
@@ -480,7 +419,7 @@ class AIAngineer:
 
         return full_setup_recommendations
 
-    async def analyze(self, telemetry_summary, setup_data, circuit_name="Desconocido", session_stats=None, model_tag=None, previous_reasoning=None):
+    async def analyze(self, telemetry_summary, setup_data, circuit_name="Desconocido", session_stats=None, model_tag=None):
         if self.llm is None or (model_tag and getattr(self, '_current_model', None) != model_tag):
             print("Inicializando LLM...")
             self._init_llm(model_tag)
@@ -534,21 +473,13 @@ class AIAngineer:
         # Preparar resumen del setup actual para el ingeniero jefe
         current_setup_summary = self._build_current_setup_summary(setup_data)
 
-        # Preparar contexto de memoria de sesiones anteriores si existe
-        memory_context = ""
-        if previous_reasoning:
-            memory_context = "### HISTORIAL DE RAZONAMIENTOS DE SESIONES ANTERIORES ###\n"
-            for i, r in enumerate(previous_reasoning):
-                memory_context += f"Sesión previa {i+1}:\n{r}\n---\n"
-            memory_context += "TEN EN CUENTA estos razonamientos previos para tus decisiones en esta nueva sesión. No repitas errores y busca la evolución del setup."
-
         # Ingeniero Jefe (paso final de consolidación)
         chief_engineer_report = await self._get_json_from_llm(CHIEF_ENGINEER_PROMPT, {
             "specialist_reports": json.dumps(specialist_reports, indent=2),
             "telemetry_summary": telemetry_summary,
             "circuit_name": circuit_name,
             "current_setup": current_setup_summary,
-            "memory_context": memory_context
+            "memory_context": "N/A"
         })
         print(f"[DEBUG chief_engineer_report] {repr(str(chief_engineer_report)[:300])}")
 
@@ -611,116 +542,4 @@ class AIAngineer:
             "full_setup": full_setup_recommendations,
             "agent_reports": specialist_reports,
             "chief_reasoning": chief_reasoning
-        }
-
-    async def reanalyze_section(self, section_key, telemetry_summary, setup_data, previous_full_setup, circuit_name="Desconocido", model_tag=None):
-        """Re-analiza una sección específica usando el ingeniero jefe.
-        Si la sección es de neumáticos/suspensión, re-analiza las 5 secciones juntas."""
-        if self.llm is None or (model_tag and getattr(self, '_current_model', None) != model_tag):
-            self._init_llm(model_tag)
-
-        # Determinar qué secciones re-analizar
-        if section_key.upper() in TIRE_SUSP_SECTIONS:
-            sections_to_reanalyze = [s for s in TIRE_SUSP_SECTIONS if s in setup_data]
-        else:
-            sections_to_reanalyze = [section_key]
-
-        # Preparar datos de las secciones a re-analizar
-        sections_data = {}
-        for s in sections_to_reanalyze:
-            if s in setup_data:
-                filtered = {k: self._clean_value(v) for k, v in setup_data[s].items()
-                           if not (k.startswith('Gear') and 'Setting' in k)}
-                sections_data[s] = filtered
-
-        # Extraer propuestas anteriores de esas secciones
-        previous_proposals = {}
-        if previous_full_setup and "sections" in previous_full_setup:
-            for sec in previous_full_setup["sections"]:
-                sk = sec.get("section_key", "")
-                if sk in sections_to_reanalyze:
-                    changed = [it for it in sec.get("items", [])
-                              if str(it.get("current", "")) != str(it.get("new", ""))]
-                    if changed:
-                        previous_proposals[sk] = changed
-
-        # Construir historial de decisiones completo (con razonamientos de agentes)
-        decision_history = ""
-        if self.chief_memory:
-            entries = []
-            for mem in self.chief_memory:
-                entry = f"[{mem.get('timestamp', '')}] {mem.get('action', '')}:\n  Razonamiento: {mem.get('reasoning', '')}"
-                if mem.get('agent_reports'):
-                    entry += f"\n  Informes de especialistas: {mem['agent_reports']}"
-                entries.append(entry)
-            decision_history = "\n\n".join(entries)
-        else:
-            decision_history = "No hay decisiones anteriores registradas."
-
-        # Contexto de informes de agentes especialistas
-        agent_reports_context = ""
-        if self._agent_reports_cache:
-            agent_reports_context = json.dumps(self._agent_reports_cache, indent=2, default=str)
-        else:
-            agent_reports_context = "No hay informes de especialistas disponibles."
-
-        current_setup_summary = self._build_current_setup_summary(setup_data)
-
-        friendly_names = [self._get_friendly_name(s, 'section') for s in sections_to_reanalyze]
-
-        result = await self._get_json_from_llm(CHIEF_REANALYZE_PROMPT, {
-            "circuit_name": circuit_name,
-            "telemetry_summary": telemetry_summary,
-            "current_setup": current_setup_summary,
-            "sections_to_reanalyze": ", ".join(friendly_names),
-            "sections_data": json.dumps(sections_data, indent=2),
-            "previous_proposals": json.dumps(previous_proposals, indent=2, default=str),
-            "agent_reports_context": agent_reports_context,
-            "decision_history": decision_history
-        })
-
-        if not result:
-            return None
-
-        # Guardar en memoria
-        chief_reasoning = result.get("chief_reasoning", "")
-        self.chief_memory.append({
-            "action": f"re-análisis de {', '.join(friendly_names)}",
-            "reasoning": chief_reasoning,
-            "timestamp": time.strftime("%H:%M:%S")
-        })
-
-        # Construir mapa de recomendaciones actualizado
-        new_reco_map = {}
-        for sec in result.get("sections", []):
-            s_name = sec.get("name", "")
-            if not s_name:
-                continue
-            
-            # Asegurar que el nombre de la sección sea el interno
-            internal_name = s_name
-            inv_sections = {v: k for k, v in self.mapping.get("sections", {}).items()}
-            if s_name in inv_sections:
-                internal_name = inv_sections[s_name]
-
-            if internal_name not in new_reco_map:
-                new_reco_map[internal_name] = {}
-            
-            for item in sec.get("items", []):
-                p_name = item.get("parameter", "")
-                # Asegurar que el nombre del parámetro sea el interno
-                internal_p_name = p_name
-                inv_params = {v: k for k, v in self.mapping.get("parameters", {}).items()}
-                if p_name in inv_params:
-                    internal_p_name = inv_params[p_name]
-                
-                new_reco_map[internal_name][internal_p_name] = item
-
-        # Re-formatear solo las secciones afectadas
-        updated_sections = self._format_full_setup(new_reco_map, {s: setup_data[s] for s in sections_to_reanalyze if s in setup_data})
-
-        return {
-            "updated_sections": updated_sections.get("sections", []),
-            "chief_reasoning": chief_reasoning,
-            "sections_reanalyzed": sections_to_reanalyze
         }

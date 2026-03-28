@@ -726,45 +726,6 @@ def parse_svm_content(file_bytes):
                     setup[current_section][key] = v.strip()
     return setup
 
-def save_reasoning_to_history(reasoning):
-    """Guarda el razonamiento del ingeniero jefe en un archivo local."""
-    history_file = "reasoning_history.json"
-    history = []
-    if os.path.exists(history_file):
-        try:
-            with open(history_file, "r", encoding="utf-8") as f:
-                history = _json.load(f)
-        except:
-            history = []
-    
-    history.append(reasoning)
-    # Mantener solo los últimos 5 para no saturar el contexto
-    if len(history) > 5:
-        history = history[-5:]
-        
-    with open(history_file, "w", encoding="utf-8") as f:
-        _json.dump(history, f, ensure_ascii=False, indent=2)
-
-def load_reasoning_history():
-    """Carga el historial de razonamientos."""
-    history_file = "reasoning_history.json"
-    if os.path.exists(history_file):
-        try:
-            with open(history_file, "r", encoding="utf-8") as f:
-                return _json.load(f)
-        except:
-            return []
-    return []
-
-def clear_reasoning_history():
-    """Borra el historial de razonamientos."""
-    history_file = "reasoning_history.json"
-    if os.path.exists(history_file):
-        try:
-            os.remove(history_file)
-        except:
-            pass
-
 def cleanup_server_data():
     """Llama al endpoint de limpieza del backend."""
     try:
@@ -831,31 +792,12 @@ with st.sidebar:
         
         # Botón Nueva sesión (siempre presente si hay algo cargado)
         if st.button("🆕 Nueva sesión", use_container_width=True):
-            # 1. Borrar historial de memoria
-            clear_reasoning_history()
-            
-            # 2. Limpiar datos en servidor
+            # 1. Limpiar datos en servidor
             cleanup_server_data()
             
-            # 3. Limpiar estado y recargar
+            # 2. Limpiar estado y recargar
             st.session_state.clear()
             st.rerun()
-
-    # Botón Nueva sesión cargando memoria (SOLO si ya se analizó)
-    if is_analyzed or 'ai_analysis_data' in st.session_state:
-        if st.button("🔄 Nueva sesión cargando memoria", use_container_width=True):
-                # 1. Guardar razonamiento actual
-                data = st.session_state.get('ai_analysis_data', {})
-                reasoning = data.get('chief_reasoning', '')
-                if reasoning:
-                    save_reasoning_to_history(reasoning)
-                
-                # 2. Limpiar datos en servidor
-                cleanup_server_data()
-                
-                # 3. Limpiar estado y recargar
-                st.session_state.clear()
-                st.rerun()
 
     # Recuperar datos de la sesión si existen
     if st.session_state.get('selected_session_name'):
@@ -987,11 +929,6 @@ if tele_to_send and svm_to_send:
                             if sel_model:
                                 data_form["model"] = sel_model
                             
-                            # Cargar historial de razonamientos si existe
-                            history = load_reasoning_history()
-                            if history:
-                                data_form["previous_reasoning"] = _json.dumps(history)
-
                             response = requests.post(
                                 "http://localhost:8000/analyze",
                                 files=files, data=data_form
@@ -1048,64 +985,6 @@ if tele_to_send and svm_to_send:
                                         st.table(df_ai.set_index("Parámetro"))
                                     else:
                                         st.caption("No se recomiendan cambios en esta sección.")
-
-                                    # Botón de re-consulta al ingeniero jefe
-                                    if s_key and st.button(f"🔄 Re-consultar al Ingeniero Jefe", key=f"reanalyze_{s_key}_{sec_idx}"):
-                                        with st.spinner(f"El Ingeniero Jefe está re-analizando {s_name}…"):
-                                            try:
-                                                reanalyze_resp = requests.post(
-                                                    "http://localhost:8000/reanalyze_section",
-                                                    json={
-                                                        "section_key": s_key,
-                                                        "telemetry_summary": st.session_state.get('ai_telemetry_summary', ''),
-                                                        "setup_data": st.session_state.get('ai_setup_data', {}),
-                                                        "previous_full_setup": data.get('full_setup', {}),
-                                                        "circuit_name": st.session_state.get('ai_circuit_name', 'Desconocido'),
-                                                        "model": st.session_state.get('ai_model')
-                                                    },
-                                                    timeout=120
-                                                )
-                                                if reanalyze_resp.status_code == 200:
-                                                    reanalyze_data = reanalyze_resp.json()
-                                                    # Merge inteligente: solo actualizar parámetros que cambian
-                                                    updated_secs = reanalyze_data.get('updated_sections', [])
-                                                    current_sections = data['full_setup']['sections']
-                                                    for upd_sec in updated_secs:
-                                                        upd_key = upd_sec.get('section_key', '')
-                                                        # Construir mapa de nuevos items por param_key
-                                                        new_items_map = {}
-                                                        for it in upd_sec.get('items', []):
-                                                            pk = it.get('param_key', it.get('parameter', ''))
-                                                            new_items_map[pk] = it
-                                                        for i, cs in enumerate(current_sections):
-                                                            if cs.get('section_key', '') == upd_key:
-                                                                # Merge: mantener items existentes, actualizar solo los que cambian
-                                                                merged_items = []
-                                                                for existing_it in cs.get('items', []):
-                                                                    epk = existing_it.get('param_key', existing_it.get('parameter', ''))
-                                                                    if epk in new_items_map:
-                                                                        new_it = new_items_map[epk]
-                                                                        # Marcar como re-consultado con 🚀
-                                                                        new_it['reanalyzed'] = True
-                                                                        merged_items.append(new_it)
-                                                                        del new_items_map[epk]
-                                                                    else:
-                                                                        # Mantener el item existente sin cambios
-                                                                        merged_items.append(existing_it)
-                                                                # Añadir items nuevos que no existían antes
-                                                                for remaining in new_items_map.values():
-                                                                    remaining['reanalyzed'] = True
-                                                                    merged_items.append(remaining)
-                                                                cs['items'] = merged_items
-                                                                break
-                                                    st.session_state['ai_analysis_data'] = data
-                                                    if reanalyze_data.get('chief_reasoning'):
-                                                        st.success(f"**Nuevo razonamiento del Ingeniero Jefe:** {reanalyze_data['chief_reasoning']}")
-                                                    st.rerun()
-                                                else:
-                                                    st.error("Error en el re-análisis.")
-                                            except Exception as e:
-                                                st.error(f"Error: {e}")
             else:
                 st.warning("No se encontraron vueltas completas.")
         else:
