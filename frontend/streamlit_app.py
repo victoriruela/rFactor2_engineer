@@ -896,11 +896,21 @@ if tele_to_send and svm_to_send:
                                 friendly_param = _mapping.get("parameters", {}).get(k, k)
                                 # Si el parámetro es numérico y no tiene mapeo amigable, 
                                 # o si queremos forzar que ignore claves técnicas internas
-                                if k in ("VehicleClassSetting", "UpgradeSetting") or k.startswith("ChassisAdj") and k not in _mapping.get("parameters", {}):
+                                if k in ("VehicleClassSetting", "UpgradeSetting"):
                                     continue
+                                
+                                # Filtramos "Ajuste de Chasis XX" por nombre amigable o técnico
+                                if friendly_param.startswith("Ajuste de Chasis") or k.startswith("ChassisAdj"):
+                                    continue
+
+                                clean_v = _clean_svm_value(v)
+                                # No mostrar si el valor está vacío
+                                if not clean_v:
+                                    continue
+
                                 rows.append({
                                     "Parámetro": friendly_param,
-                                    "Valor": _clean_svm_value(v)
+                                    "Valor": clean_v
                                 })
                             if rows:
                                 df_setup = pd.DataFrame(rows)
