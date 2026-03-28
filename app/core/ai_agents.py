@@ -88,15 +88,19 @@ Como experto en esta sección, debes evaluar CÓMO cada parámetro actual influy
 1. Examina cómo afecta el setup al comportamiento en las CURVAS. ¿Hay subviraje o sobreviraje excesivo en curvas lentas vs rápidas?
 2. Compara la evolución entre vueltas: ¿empeoran las temperaturas o presiones afectando al grip en curva?
 3. Propón cambios CONCRETOS con valores numéricos basados en lo que observas en los datos.
-4. Si consideras que no hay cambios necesarios, JUSTIFÍCALO con datos (ej: "Las temperaturas se mantienen estables en 90°C en todas las vueltas").
+
+IMPORTANTE:
+- Solo propón cambios en los parámetros que REALMENTE necesiten ser modificados.
+- Si un parámetro está bien configurado según la telemetría, NO lo incluyas en la respuesta.
+- Puedes proponer cambios en todos, algunos o NINGUNO de los parámetros.
+- Si no hay cambios necesarios en ningún parámetro, devuelve un JSON con "items" vacío y un campo "summary" explicando por qué.
 
 Reglas:
 1. Cada "reason" DEBE citar valores numéricos REALES y comparar el comportamiento en curvas entre vueltas.
 2. Explica el MOTIVO técnico de cada cambio: por qué ese valor nuevo corregirá el comportamiento observado en la curva.
-3. Debes proporcionar un razonamiento para CADA parámetro que consideres relevante, incluso si no lo cambias.
-4. Responde SIEMPRE en CASTELLANO.
-5. Devuelve ÚNICAMENTE JSON puro.
-6. RESTRICCIONES DE VALORES:
+3. Responde SIEMPRE en CASTELLANO.
+4. Devuelve ÚNICAMENTE JSON puro.
+5. RESTRICCIONES DE VALORES:
    - Parámetros DISCRETOS (solo valores enteros): FuelSetting, BrakeDuctSetting, RadiatorSetting, BoostSetting, RevLimitSetting, EngineBrakeSetting. Solo puedes proponer valores enteros (ej: de 5 a 6, NUNCA de 5 a 5.5).
    - Parámetros CONTINUOS (permiten decimales): CamberSetting, ToeSetting, PressureSetting, SpringSetting, PackerSetting, SlowBumpSetting, SlowReboundSetting, FastBumpSetting, FastReboundSetting, RideHeightSetting, y similares.
    - NO propongas cambiar la cantidad de combustible (FuelSetting) salvo que haya un problema claro de peso.
@@ -106,7 +110,8 @@ JSON puro:
 {{
   "items": [
     {{ "parameter": "NombreOriginal", "new_value": "ValorRecomendado", "reason": "Justificación técnica citando curvas, vueltas y valores numéricos reales" }}
-  ]
+  ],
+  "summary": "Resumen breve de los cambios propuestos o justificación de por qué no se necesitan cambios"
 }}
 """
 
@@ -121,30 +126,41 @@ Tienes acceso a los DATOS COMPLETOS de telemetría submuestreados para verificar
 DATOS DE TELEMETRÍA COMPLETOS:
 {telemetry_summary}
 
+SETUP ACTUAL COMPLETO:
+{current_setup}
+
 Informes de TODOS los especialistas:
 {specialist_reports}
+
+{memory_context}
 
 TU ROL COMO INGENIERO JEFE:
 Tu trabajo NO es simplemente copiar lo que dicen los especialistas. Debes:
 
 1. VISIÓN GLOBAL: Analiza TODAS las propuestas en conjunto. ¿Son coherentes entre sí? ¿Hay contradicciones?
-2. CORRELACIÓN ENTRE EJES: Verifica que los cambios propuestos para el eje delantero sean coherentes con los del eje trasero.
+2. SIMETRÍA Y ASIMETRÍA:
+   - En circuitos normales, los valores de suspensión, amortiguación, ride height, etc. deben ser SIMÉTRICOS entre izquierda y derecha del mismo eje (FRONTLEFT ≈ FRONTRIGHT, REARLEFT ≈ REARRIGHT).
+   - Solo se justifica asimetría si el circuito tiene mayoría de curvas en una dirección y la telemetría lo confirma.
+   - Si un lado tiene valores más duros que el otro, verifica que sea el lado que recibe las mayores cargas laterales según la telemetría (G Force Lat).
+   - PROHIBIDO invertir la relación de dureza entre lados sin justificación clara basada en cargas laterales.
+   - Ejemplo: Si FRONTLEFT tiene SpringSetting=223 N/mm y FRONTRIGHT=219 N/mm, y las mayores cargas laterales van al lado izquierdo, NO propongas que FRONTRIGHT sea más duro que FRONTLEFT.
+3. CORRELACIÓN ENTRE EJES: Verifica que los cambios propuestos para el eje delantero sean coherentes con los del eje trasero.
    - Si se endurece la suspensión delantera, ¿tiene sentido lo propuesto para la trasera?
    - ¿El balance de rigidez delantero/trasero es correcto para el comportamiento observado?
-   - ¿Los cambios de camber/toe son simétricos izquierda-derecha cuando deben serlo?
-3. COHERENCIA CRUZADA: Verifica que los cambios de una sección no contradigan los de otra.
+4. COHERENCIA CRUZADA: Verifica que los cambios de una sección no contradigan los de otra.
    - Ej: No tiene sentido bajar la altura al suelo si la suspensión ya está haciendo "bottoming".
    - Ej: No subir presiones de neumáticos si ya hay sobrecalentamiento.
-4. RESTRICCIONES DE VALORES:
+5. RESTRICCIONES DE VALORES:
    - Parámetros DISCRETOS (solo valores enteros): FuelSetting, BrakeDuctSetting, RadiatorSetting, BoostSetting, RevLimitSetting, EngineBrakeSetting. NUNCA propongas valores decimales para estos.
    - Parámetros CONTINUOS (permiten decimales): CamberSetting, ToeSetting, PressureSetting, SpringSetting, PackerSetting, SlowBumpSetting, SlowReboundSetting, FastBumpSetting, FastReboundSetting, RideHeightSetting.
    - NO propongas cambiar la cantidad de combustible (FuelSetting) salvo que haya un problema claro de peso.
    - Los cambios deben ser PROPORCIONADOS al problema. No hagas cambios drásticos sin justificación clara.
-5. MODIFICAR PROPUESTAS: Si algún especialista propone algo incorrecto o incoherente con el resto, MODIFÍCALO y explica por qué.
-6. Cada "reason" DEBE explicar el MOTIVO técnico del cambio citando datos reales de la telemetría.
-7. PROHIBIDO poner "reason" genéricos como "mejora el rendimiento". Cada razón debe ser ESPECÍFICA con valores numéricos.
-8. Todo el setup es para ser aplicado en el garaje antes de salir a pista.
-9. Responde SIEMPRE en CASTELLANO.
+6. MODIFICAR PROPUESTAS: Si algún especialista propone algo incorrecto o incoherente con el resto, MODIFÍCALO y explica por qué.
+7. Solo incluye en la respuesta los parámetros que REALMENTE necesiten cambios. Si un parámetro está bien, NO lo incluyas.
+8. Cada "reason" DEBE explicar el MOTIVO técnico del cambio citando datos reales de la telemetría.
+9. PROHIBIDO poner "reason" genéricos como "mejora el rendimiento". Cada razón debe ser ESPECÍFICA con valores numéricos.
+10. Todo el setup es para ser aplicado en el garaje antes de salir a pista.
+11. Responde SIEMPRE en CASTELLANO.
 
 JSON puro:
 {{
@@ -157,7 +173,68 @@ JSON puro:
         ]
       }}
     ]
-  }}
+  }},
+  "chief_reasoning": "Razonamiento global del ingeniero jefe sobre la coherencia del setup, inconsistencias detectadas y correcciones aplicadas"
+}}
+"""
+
+CHIEF_REANALYZE_PROMPT = """
+Eres el Ingeniero Jefe de Competición de un equipo de rFactor 2.
+Se te pide RE-ANALIZAR una o varias secciones del setup porque el equipo no está convencido con los cambios propuestos anteriormente.
+
+CIRCUITO: {circuit_name}
+
+DATOS DE TELEMETRÍA COMPLETOS:
+{telemetry_summary}
+
+SETUP ACTUAL COMPLETO:
+{current_setup}
+
+SECCIONES A RE-ANALIZAR: {sections_to_reanalyze}
+
+DATOS ACTUALES DE ESAS SECCIONES:
+{sections_data}
+
+PROPUESTAS ANTERIORES QUE SE QUIEREN REVISAR:
+{previous_proposals}
+
+RAZONAMIENTOS PREVIOS DE LOS INGENIEROS ESPECIALISTAS:
+{agent_reports_context}
+
+HISTORIAL COMPLETO DE DECISIONES Y RAZONAMIENTOS DEL INGENIERO JEFE:
+{decision_history}
+
+TU MISIÓN:
+1. Revisa críticamente las propuestas anteriores teniendo en cuenta TODOS los razonamientos previos de los especialistas y tus propias decisiones anteriores.
+2. Analiza la telemetría de nuevo con ojo fresco, buscando detalles que se hayan podido pasar por alto. CITA valores numéricos concretos de la telemetría en cada justificación.
+3. SIMETRÍA: Si estás re-analizando secciones de neumáticos o suspensión, DEBES considerar las 5 secciones juntas (FRONTLEFT, FRONTRIGHT, REARLEFT, REARRIGHT, SUSPENSION) para no crear inconsistencias.
+4. Propón un MEJOR ajuste, diferente al anterior si es posible, o confirma el anterior si realmente es el óptimo.
+5. Solo incluye parámetros que REALMENTE necesiten cambios. Si un parámetro ya tenía un buen valor propuesto anteriormente, NO lo incluyas (se mantendrá la propuesta anterior).
+6. RESTRICCIONES DE VALORES:
+   - Parámetros DISCRETOS (solo valores enteros): FuelSetting, BrakeDuctSetting, RadiatorSetting, BoostSetting, RevLimitSetting, EngineBrakeSetting.
+   - Parámetros CONTINUOS (permiten decimales): CamberSetting, ToeSetting, PressureSetting, SpringSetting, PackerSetting, SlowBumpSetting, SlowReboundSetting, FastBumpSetting, FastReboundSetting, RideHeightSetting.
+   - NO propongas cambiar la cantidad de combustible (FuelSetting) salvo que haya un problema claro de peso.
+   - PROHIBIDO invertir relaciones de dureza entre lados sin justificación basada en cargas laterales (G Force Lat).
+
+Reglas para las justificaciones ("reason"):
+- Cada "reason" DEBE ser una explicación técnica DETALLADA y ESPECÍFICA, igual de completa que en el análisis inicial.
+- DEBE citar valores numéricos REALES de la telemetría (velocidades, temperaturas, presiones, fuerzas G, etc.).
+- DEBE explicar POR QUÉ el nuevo valor es mejor que el anterior, referenciando curvas y vueltas concretas.
+- DEBE explicar qué problema de la telemetría se corrige con este cambio.
+- PROHIBIDO poner razones genéricas como "mejora el rendimiento" o "optimiza el comportamiento".
+- Responde SIEMPRE en CASTELLANO.
+
+JSON puro:
+{{
+  "sections": [
+    {{
+      "name": "NombreSeccionInterno",
+      "items": [
+        {{ "parameter": "NombreOriginal", "new_value": "ValorFinal", "reason": "Justificación técnica DETALLADA citando valores numéricos reales de la telemetría, curvas y vueltas concretas, y explicando por qué este valor es mejor que el propuesto anteriormente" }}
+      ]
+    }}
+  ],
+  "chief_reasoning": "Razonamiento global detallado del ingeniero jefe sobre las correcciones aplicadas respecto a la propuesta anterior, citando datos de telemetría y explicando la coherencia del setup"
 }}
 """
 
@@ -209,6 +286,33 @@ def _ensure_ollama_running():
     return False
 
 
+def _extract_numeric(val_str):
+    """Extrae el primer valor numérico de un string como '223 N/mm' -> 223.0, '-3 °' -> -3.0"""
+    val_str = str(val_str).strip()
+    m = re.match(r'^([+-]?\d+\.?\d*)', val_str)
+    if m:
+        return float(m.group(1))
+    return None
+
+
+def _compute_change_pct(current_clean, new_clean):
+    """Calcula el porcentaje de cambio entre valor actual y nuevo.
+    Devuelve string como '(+12.5%)' o '(-5.0%)' o None si no se puede calcular."""
+    curr_num = _extract_numeric(current_clean)
+    new_num = _extract_numeric(new_clean)
+    if curr_num is None or new_num is None:
+        return None
+    if curr_num == new_num:
+        return None
+    if curr_num == 0:
+        return "(nuevo)" if new_num != 0 else None
+    pct = ((new_num - curr_num) / abs(curr_num)) * 100
+    sign = "+" if pct > 0 else ""
+    return f"({sign}{pct:.1f}%)"
+
+
+# Secciones relacionadas con neumáticos/suspensión que deben analizarse juntas
+TIRE_SUSP_SECTIONS = {"FRONTLEFT", "FRONTRIGHT", "REARLEFT", "REARRIGHT", "SUSPENSION"}
 
 
 class AIAngineer:
@@ -217,6 +321,10 @@ class AIAngineer:
         self.output_parser = StrOutputParser()
         self.mapping_path = "app/core/param_mapping.json"
         self.mapping = self._load_mapping()
+        # Memoria del ingeniero jefe: historial de decisiones
+        self.chief_memory = []
+        self._telemetry_cache = ""
+        self._agent_reports_cache = []
 
     def _init_llm(self, model_tag=None):
         _ensure_ollama_running()
@@ -264,7 +372,6 @@ class AIAngineer:
             return None
 
         try:
-            # Buscar el primer objeto JSON completo y válido
             start = response.find('{')
             if start != -1:
                 depth = 0
@@ -309,10 +416,97 @@ class AIAngineer:
                 self.mapping["parameters"].update(translation.get("parameters", {}))
                 self._save_mapping()
 
+    def _build_current_setup_summary(self, setup_data):
+        """Construye un resumen del setup actual completo para el ingeniero jefe."""
+        lines = []
+        for section_name, section_data in setup_data.items():
+            if section_name.upper() in ("BASIC", "LEFTFENDER", "RIGHTFENDER"):
+                continue
+            filtered = {k: self._clean_value(v) for k, v in section_data.items()
+                       if not (k.startswith('Gear') and 'Setting' in k)}
+            if filtered:
+                lines.append(f"\n[{section_name}]")
+                for k, v in filtered.items():
+                    lines.append(f"  {k} = {v}")
+        return "\n".join(lines)
+
+    def _format_full_setup(self, all_reco_map, setup_data):
+        """Formatea las recomendaciones finales con porcentajes de cambio."""
+        full_setup_recommendations = {"sections": []}
+
+        for section_name, orig_section_data in setup_data.items():
+            if section_name.upper() in ("BASIC", "LEFTFENDER", "RIGHTFENDER"):
+                continue
+
+            friendly_section = self._get_friendly_name(section_name, 'section')
+            items = []
+
+            reco_dict = all_reco_map.get(section_name, {})
+            if not reco_dict:
+                for k, v in all_reco_map.items():
+                    if k.lower() == friendly_section.lower() or k.lower() == section_name.lower():
+                        reco_dict = v
+                        break
+                if not reco_dict:
+                    for k, v in all_reco_map.items():
+                        if section_name.lower() in k.lower() or k.lower() in section_name.lower():
+                            reco_dict = v
+                            break
+
+            for param_key, current_val in orig_section_data.items():
+                if param_key.startswith("Gear") and "Setting" in param_key:
+                    continue
+
+                friendly_param = self._get_friendly_name(param_key)
+
+                reco = reco_dict.get(param_key)
+                if not reco:
+                    for pk, rv in reco_dict.items():
+                        if pk.lower() == friendly_param.lower():
+                            reco = rv
+                            break
+
+                clean_curr = self._clean_value(current_val)
+
+                if reco:
+                    reco_val = self._clean_value(reco.get('new_value', clean_curr))
+                    reason = reco.get('reason', "Sin cambios requeridos.")
+                    reason = re.sub(r'\b\d+//', '', reason)
+
+                    # Calcular porcentaje de cambio
+                    pct = _compute_change_pct(clean_curr, reco_val)
+                    display_new = f"{reco_val} {pct}" if pct else reco_val
+                else:
+                    display_new = clean_curr
+                    reason = "Sin cambios requeridos."
+
+                items.append({
+                    "parameter": friendly_param,
+                    "current": clean_curr,
+                    "new": display_new,
+                    "reason": reason,
+                    "section_key": section_name,
+                    "param_key": param_key
+                })
+
+            if items:
+                full_setup_recommendations["sections"].append({
+                    "name": friendly_section,
+                    "section_key": section_name,
+                    "items": items
+                })
+
+        return full_setup_recommendations
+
     async def analyze(self, telemetry_summary, setup_data, circuit_name="Desconocido", session_stats=None, model_tag=None):
         if self.llm is None or (model_tag and getattr(self, '_current_model', None) != model_tag):
             print("Inicializando LLM...")
             self._init_llm(model_tag)
+
+        # Limpiar memoria del ingeniero jefe para nueva sesión de análisis
+        self.chief_memory = []
+        self._telemetry_cache = telemetry_summary
+        self._agent_reports_cache = []
 
         # 1. Actualizar mapeos si hay nuevos parámetros
         await self.update_mappings(setup_data)
@@ -334,16 +528,13 @@ class AIAngineer:
         specialist_reports = []
 
         for section_name, section_data in setup_data.items():
-            # Excluir secciones BASIC, LEFTFENDER y RIGHTFENDER del análisis de agentes
             if section_name.upper() in ("BASIC", "LEFTFENDER", "RIGHTFENDER"):
                 continue
 
-            # Filtrar GearXSetting de la sección driveline antes de enviar al agente
             filtered_data = {k: v for k, v in section_data.items() if not (k.startswith('Gear') and 'Setting' in k)}
             if not filtered_data:
                 continue
 
-            # Limpiar valores raw//clean antes de enviar al LLM para que no incluya // en sus textos
             cleaned_data = {k: self._clean_value(v) for k, v in filtered_data.items()}
 
             friendly_section = self._get_friendly_name(section_name, 'section')
@@ -358,107 +549,160 @@ class AIAngineer:
                 print(f"[DEBUG {section_name}_report] {repr(str(report)[:300])}")
                 specialist_reports.append({"name": section_name, "items": report.get("items", [])})
 
+        # Preparar resumen del setup actual para el ingeniero jefe
+        current_setup_summary = self._build_current_setup_summary(setup_data)
+
         # Ingeniero Jefe (paso final de consolidación)
         chief_engineer_report = await self._get_json_from_llm(CHIEF_ENGINEER_PROMPT, {
             "specialist_reports": json.dumps(specialist_reports, indent=2),
             "telemetry_summary": telemetry_summary,
-            "circuit_name": circuit_name
+            "circuit_name": circuit_name,
+            "current_setup": current_setup_summary,
+            "memory_context": ""
         })
         print(f"[DEBUG chief_engineer_report] {repr(str(chief_engineer_report)[:300])}")
 
-        # 4. Formatear respuesta para el frontal
-        # Construimos un mapa de todas las recomendaciones de los especialistas para asegurar que no se pierdan
-        all_reco_map = {} # section_name -> { param_name -> item }
-        
-        # Primero llenamos con los informes de los especialistas
-        for s_report in specialist_reports:
-            s_name = s_report.get("name", "")
-            if s_name not in all_reco_map:
-                all_reco_map[s_name] = {}
-            for item in s_report.get("items", []):
-                p_name = item.get("parameter", "")
-                all_reco_map[s_name][p_name] = item
+        # Guardar razonamiento del jefe en memoria (con contexto completo)
+        chief_reasoning = ""
+        if chief_engineer_report:
+            chief_reasoning = chief_engineer_report.get("chief_reasoning", "")
+            self._agent_reports_cache = specialist_reports
+            self.chief_memory.append({
+                "action": "análisis_inicial",
+                "reasoning": chief_reasoning,
+                "agent_reports": json.dumps(specialist_reports, indent=2, default=str),
+                "timestamp": time.strftime("%H:%M:%S")
+            })
 
-        # Si el Ingeniero Jefe dio recomendaciones finales, estas tienen prioridad (sobreescriben o añaden)
+        # 4. Formatear respuesta para el frontal
+        all_reco_map = {}
+
+        # Solo usamos las recomendaciones del ingeniero jefe (tiene la última palabra)
         if chief_engineer_report and "full_setup" in chief_engineer_report:
             chief_sections = chief_engineer_report["full_setup"].get("sections", [])
             for c_section in chief_sections:
                 s_name = c_section.get("name", "")
-                if not s_name: continue
+                if not s_name:
+                    continue
                 if s_name not in all_reco_map:
                     all_reco_map[s_name] = {}
                 for item in c_section.get("items", []):
                     p_name = item.get("parameter", "")
-                    # El ingeniero jefe tiene la última palabra
+                    all_reco_map[s_name][p_name] = item
+        else:
+            # Fallback: usar informes de especialistas si el jefe no respondió
+            for s_report in specialist_reports:
+                s_name = s_report.get("name", "")
+                if s_name not in all_reco_map:
+                    all_reco_map[s_name] = {}
+                for item in s_report.get("items", []):
+                    p_name = item.get("parameter", "")
                     all_reco_map[s_name][p_name] = item
 
-        full_setup_recommendations = {"sections": []}
-
-        for section_name, orig_section_data in setup_data.items():
-            # Excluir secciones BASIC, LEFTFENDER y RIGHTFENDER del setup recomendado
-            if section_name.upper() in ("BASIC", "LEFTFENDER", "RIGHTFENDER"):
-                continue
-
-            friendly_section = self._get_friendly_name(section_name, 'section')
-            items = []
-
-            # Buscamos recomendaciones tanto por nombre técnico como amigable (por si acaso el LLM usó el amigable)
-            reco_dict = all_reco_map.get(section_name, {})
-            if not reco_dict:
-                # Intentar buscar por nombre amigable o coincidencia parcial
-                for k, v in all_reco_map.items():
-                    if k.lower() == friendly_section.lower() or k.lower() == section_name.lower():
-                        reco_dict = v
-                        break
-                # Si aún no hay match, buscar por coincidencia parcial (el LLM puede devolver nombres similares)
-                if not reco_dict:
-                    for k, v in all_reco_map.items():
-                        if section_name.lower() in k.lower() or k.lower() in section_name.lower():
-                            reco_dict = v
-                            break
-
-            for param_key, current_val in orig_section_data.items():
-                # Excluir todas las marchas (GearXSetting) de la sección driveline
-                if param_key.startswith("Gear") and "Setting" in param_key:
-                    continue
-
-                friendly_param = self._get_friendly_name(param_key)
-                
-                # Buscar recomendación por clave técnica o nombre amigable
-                reco = reco_dict.get(param_key)
-                if not reco:
-                    for pk, rv in reco_dict.items():
-                        if pk.lower() == friendly_param.lower():
-                            reco = rv
-                            break
-
-                clean_curr = self._clean_value(current_val)
-                
-                if reco:
-                    reco_val = self._clean_value(reco.get('new_value', clean_curr))
-                    reason = reco.get('reason', "Sin cambios requeridos.")
-                    # Limpiar cualquier formato raw//clean residual en el motivo
-                    reason = re.sub(r'\b\d+//', '', reason)
-                else:
-                    reco_val = clean_curr
-                    reason = "Analizado por el equipo de ingeniería. No se detectaron anomalías que requieran cambios en este parámetro."
-
-                items.append({
-                    "parameter": friendly_param,
-                    "current": clean_curr,
-                    "new": reco_val,
-                    "reason": reason
-                })
-
-            if items:
-                full_setup_recommendations["sections"].append({
-                    "name": friendly_section,
-                    "items": items
-                })
+        full_setup_recommendations = self._format_full_setup(all_reco_map, setup_data)
 
         return {
             "driving_analysis": driving_analysis,
             "setup_analysis": "Análisis completo realizado por el equipo de ingenieros de pista. Se han evaluado todos los canales de telemetría curva a curva.",
             "full_setup": full_setup_recommendations,
-            "agent_reports": specialist_reports
+            "agent_reports": specialist_reports,
+            "chief_reasoning": chief_reasoning
+        }
+
+    async def reanalyze_section(self, section_key, telemetry_summary, setup_data, previous_full_setup, circuit_name="Desconocido", model_tag=None):
+        """Re-analiza una sección específica usando el ingeniero jefe.
+        Si la sección es de neumáticos/suspensión, re-analiza las 5 secciones juntas."""
+        if self.llm is None or (model_tag and getattr(self, '_current_model', None) != model_tag):
+            self._init_llm(model_tag)
+
+        # Determinar qué secciones re-analizar
+        if section_key.upper() in TIRE_SUSP_SECTIONS:
+            sections_to_reanalyze = [s for s in TIRE_SUSP_SECTIONS if s in setup_data]
+        else:
+            sections_to_reanalyze = [section_key]
+
+        # Preparar datos de las secciones a re-analizar
+        sections_data = {}
+        for s in sections_to_reanalyze:
+            if s in setup_data:
+                filtered = {k: self._clean_value(v) for k, v in setup_data[s].items()
+                           if not (k.startswith('Gear') and 'Setting' in k)}
+                sections_data[s] = filtered
+
+        # Extraer propuestas anteriores de esas secciones
+        previous_proposals = {}
+        if previous_full_setup and "sections" in previous_full_setup:
+            for sec in previous_full_setup["sections"]:
+                sk = sec.get("section_key", "")
+                if sk in sections_to_reanalyze:
+                    changed = [it for it in sec.get("items", [])
+                              if str(it.get("current", "")) != str(it.get("new", ""))]
+                    if changed:
+                        previous_proposals[sk] = changed
+
+        # Construir historial de decisiones completo (con razonamientos de agentes)
+        decision_history = ""
+        if self.chief_memory:
+            entries = []
+            for mem in self.chief_memory:
+                entry = f"[{mem.get('timestamp', '')}] {mem.get('action', '')}:\n  Razonamiento: {mem.get('reasoning', '')}"
+                if mem.get('agent_reports'):
+                    entry += f"\n  Informes de especialistas: {mem['agent_reports']}"
+                entries.append(entry)
+            decision_history = "\n\n".join(entries)
+        else:
+            decision_history = "No hay decisiones anteriores registradas."
+
+        # Contexto de informes de agentes especialistas
+        agent_reports_context = ""
+        if self._agent_reports_cache:
+            agent_reports_context = json.dumps(self._agent_reports_cache, indent=2, default=str)
+        else:
+            agent_reports_context = "No hay informes de especialistas disponibles."
+
+        current_setup_summary = self._build_current_setup_summary(setup_data)
+
+        friendly_names = [self._get_friendly_name(s, 'section') for s in sections_to_reanalyze]
+
+        result = await self._get_json_from_llm(CHIEF_REANALYZE_PROMPT, {
+            "circuit_name": circuit_name,
+            "telemetry_summary": telemetry_summary,
+            "current_setup": current_setup_summary,
+            "sections_to_reanalyze": ", ".join(friendly_names),
+            "sections_data": json.dumps(sections_data, indent=2),
+            "previous_proposals": json.dumps(previous_proposals, indent=2, default=str),
+            "agent_reports_context": agent_reports_context,
+            "decision_history": decision_history
+        })
+
+        if not result:
+            return None
+
+        # Guardar en memoria
+        chief_reasoning = result.get("chief_reasoning", "")
+        self.chief_memory.append({
+            "action": f"re-análisis de {', '.join(friendly_names)}",
+            "reasoning": chief_reasoning,
+            "timestamp": time.strftime("%H:%M:%S")
+        })
+
+        # Construir mapa de recomendaciones actualizado
+        new_reco_map = {}
+        for sec in result.get("sections", []):
+            s_name = sec.get("name", "")
+            if not s_name:
+                continue
+            if s_name not in new_reco_map:
+                new_reco_map[s_name] = {}
+            for item in sec.get("items", []):
+                p_name = item.get("parameter", "")
+                new_reco_map[s_name][p_name] = item
+
+        # Re-formatear solo las secciones afectadas
+        updated_sections = self._format_full_setup(new_reco_map, {s: setup_data[s] for s in sections_to_reanalyze if s in setup_data})
+
+        return {
+            "updated_sections": updated_sections.get("sections", []),
+            "chief_reasoning": chief_reasoning,
+            "sections_reanalyzed": sections_to_reanalyze
         }

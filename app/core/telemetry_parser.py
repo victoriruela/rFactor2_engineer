@@ -7,6 +7,102 @@ import csv
 import scipy.io
 
 
+def _filter_incomplete_laps(df):
+    """
+    Filtra vueltas incompletas del DataFrame.
+    Una vuelta se considera incompleta si su distancia recorrida es
+    menor que el 100% de la distancia máxima recorrida.
+    También se excluye la vuelta 0 (out-lap).
+    """
+    # Buscar columna de número de vuelta
+    lap_col = None
+    for c in df.columns:
+        if 'lap' in c.lower() and 'number' in c.lower():
+            lap_col = c
+            break
+    if lap_col is None:
+        # Intentar con Lap_Number
+        if 'Lap_Number' in df.columns:
+            lap_col = 'Lap_Number'
+        else:
+            return df
+
+    # Buscar columna de distancia de vuelta
+    dist_col = None
+    for c in df.columns:
+        if 'distance' in c.lower() and 'lap' in c.lower():
+            dist_col = c
+            break
+    if dist_col is None:
+        for c in df.columns:
+            if 'distance' in c.lower():
+                dist_col = c
+                break
+
+    laps = sorted([l for l in df[lap_col].unique() if l > 0])
+    if len(laps) <= 1:
+        # Si solo hay una vuelta, no filtrar
+        return df[df[lap_col] > 0] if 0 in df[lap_col].values else df
+
+    if dist_col is not None:
+        # Calcular distancia recorrida por vuelta
+        lap_distances = {}
+        for lap in laps:
+            lap_df = df[df[lap_col] == lap]
+            if not lap_df.empty:
+                d = lap_df[dist_col].dropna()
+                if not d.empty:
+                    lap_distances[lap] = d.max() - d.min()
+                else:
+                    lap_distances[lap] = 0
+            else:
+                lap_distances[lap] = 0
+
+        max_dist = max(lap_distances.values()) if lap_distances else 0
+        threshold = max_dist * 1.0
+        complete_laps = [l for l, d in lap_distances.items() if d >= threshold]
+    else:
+        # Sin columna de distancia, usar número de muestras como proxy
+        lap_samples = {}
+        for lap in laps:
+            lap_samples[lap] = len(df[df[lap_col] == lap])
+        max_samples = max(lap_samples.values()) if lap_samples else 0
+        threshold = max_samples * 1.0
+        complete_laps = [l for l, s in lap_samples.items() if s >= threshold]
+
+    if not complete_laps:
+        complete_laps = laps
+
+    # Filtrar out-laps/in-laps por duración anómala (primera/última vuelta)
+    # Buscar columna de tiempo
+    time_col = None
+    for c in df.columns:
+        if c == 'Session_Elapsed_Time':
+            time_col = c
+            break
+    if time_col is not None and len(complete_laps) > 2:
+        lap_durations = {}
+        for lap in complete_laps:
+            lap_df = df[df[lap_col] == lap]
+            t = lap_df[time_col].dropna()
+            if not t.empty:
+                lap_durations[lap] = t.max() - t.min()
+            else:
+                lap_durations[lap] = 0
+        # Calcular mediana de duración (excluyendo primera y última)
+        middle_laps = complete_laps[1:-1] if len(complete_laps) > 2 else complete_laps
+        median_dur = np.median([lap_durations[l] for l in middle_laps if lap_durations[l] > 0])
+        if median_dur > 0:
+            # Filtrar vueltas con duración > 110% de la mediana (out-laps/in-laps)
+            dur_threshold = median_dur * 1.10
+            complete_laps = [l for l in complete_laps if lap_durations[l] <= dur_threshold]
+
+    if not complete_laps:
+        complete_laps = laps
+
+    return df[df[lap_col].isin(complete_laps)].reset_index(drop=True)
+
+
 def parse_mat_file(file_path):
     """
     Parsea un archivo .mat (Matlab) exportado desde MoTeC i2.
@@ -74,6 +170,9 @@ def parse_mat_file(file_path):
                 if std > 0:
                     df[col] = df[col].mask((df[col] - median).abs() > 1.5 * std, median)
                 df[col] = df[col].rolling(window=11, center=True).mean().bfill().ffill()
+
+        # Filtrar vueltas incompletas
+        df = _filter_incomplete_laps(df)
 
         return df
 

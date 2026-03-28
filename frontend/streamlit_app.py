@@ -44,10 +44,74 @@ def get_mat_dataframe(file_bytes):
 
         sort_col = 'Session_Elapsed_Time' if 'Session_Elapsed_Time' in df.columns else df.columns[0]
         df = df.sort_values(by=sort_col).reset_index(drop=True)
+
+        # Filtrar vueltas incompletas
+        df = _filter_incomplete_laps_frontend(df)
+
         return df
     except Exception as e:
         st.error(f"Error procesando .mat: {e}")
         return None
+
+
+def _filter_incomplete_laps_frontend(df):
+    """Filtra vueltas incompletas del DataFrame (out-laps, in-laps)."""
+    lap_col = None
+    for c in df.columns:
+        if 'lap' in c.lower() and 'number' in c.lower():
+            lap_col = c
+            break
+    if lap_col is None and 'Lap_Number' in df.columns:
+        lap_col = 'Lap_Number'
+    if lap_col is None:
+        return df
+
+    dist_col = None
+    for c in df.columns:
+        if 'distance' in c.lower() and 'lap' in c.lower():
+            dist_col = c
+            break
+    if dist_col is None:
+        for c in df.columns:
+            if 'distance' in c.lower():
+                dist_col = c
+                break
+
+    laps = sorted([l for l in df[lap_col].unique() if l > 0])
+    if len(laps) <= 1:
+        return df[df[lap_col] > 0] if 0 in df[lap_col].values else df
+
+    if dist_col is not None:
+        lap_distances = {}
+        for lap in laps:
+            d = df.loc[df[lap_col] == lap, dist_col].dropna()
+            lap_distances[lap] = (d.max() - d.min()) if not d.empty else 0
+        max_dist = max(lap_distances.values()) if lap_distances else 0
+        complete_laps = [l for l, d in lap_distances.items() if d >= max_dist * 1.0]
+    else:
+        lap_samples = {lap: len(df[df[lap_col] == lap]) for lap in laps}
+        max_samples = max(lap_samples.values()) if lap_samples else 0
+        complete_laps = [l for l, s in lap_samples.items() if s >= max_samples * 1.0]
+
+    if not complete_laps:
+        complete_laps = laps
+
+    # Filtrar por duración anómala
+    time_col = 'Session_Elapsed_Time' if 'Session_Elapsed_Time' in df.columns else None
+    if time_col and len(complete_laps) > 2:
+        lap_durations = {}
+        for lap in complete_laps:
+            t = df.loc[df[lap_col] == lap, time_col].dropna()
+            lap_durations[lap] = (t.max() - t.min()) if not t.empty else 0
+        middle_laps = complete_laps[1:-1] if len(complete_laps) > 2 else complete_laps
+        median_dur = np.median([lap_durations[l] for l in middle_laps if lap_durations[l] > 0])
+        if median_dur > 0:
+            complete_laps = [l for l in complete_laps if lap_durations[l] <= median_dur * 1.10]
+
+    if not complete_laps:
+        complete_laps = laps
+
+    return df[df[lap_col].isin(complete_laps)].reset_index(drop=True)
 
 
 def _lap_xy(lap_df, x_col, y_col):
@@ -170,24 +234,33 @@ def precompute_all_laps(df, laps):
     return all_data
 
 
-def plot_interactive_telemetry(lap_data):
-    """Renderiza la telemetría interactiva usando un componente HTML/JS con Plotly.js."""
-    if not lap_data:
-        st.warning("No hay datos para esta vuelta.")
+def plot_all_laps_interactive(all_lap_figs, laps, lap_options, fastest_lap):
+    """Renderiza la telemetría interactiva de TODAS las vueltas en un solo componente HTML/JS.
+    El cambio de vuelta se gestiona enteramente en el cliente (JavaScript), sin roundtrip al servidor."""
+    if not all_lap_figs:
+        st.warning("No hay datos de telemetría.")
         return
 
     import json
-    data_json = json.dumps(lap_data)
-    
-    # Altura total estimada para evitar scroll interno molesto
-    # Mapa (200) + 3 gráficos por pestaña (~350 cada uno) + Tabs
-    total_height = 1300 
+    # Convertir claves int a string para JSON
+    all_data_json = json.dumps({str(k): v for k, v in all_lap_figs.items() if v})
+    laps_json = json.dumps([int(l) for l in laps])
+    lap_labels_json = json.dumps(lap_options)
+    fastest_lap_js = int(fastest_lap) if fastest_lap else "null"
+
+    total_height = 1300
 
     html_code = f"""
     <script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
     <style>
         body {{ margin: 0; background: #111; }}
-        .telemetry-container {{ background-color: #111; color: white; font-family: sans-serif; width: 100%; box-sizing: border-box; }}
+        .telemetry-container {{ background-color: #111; color: white; font-family: sans-serif; width: 100%; box-sizing: border-box; display: flex; align-items: flex-start; }}
+        .lap-sidebar {{ width: 90px; min-width: 90px; padding: 5px 5px 5px 0; }}
+        .lap-btn {{ display: block; width: 100%; padding: 4px 6px; margin-bottom: 3px; background: #222; border: 1px solid #444; color: #ccc; cursor: pointer; font-size: 0.7rem; text-align: left; border-radius: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }}
+        .lap-btn:hover {{ background: #333; }}
+        .lap-btn.active {{ background: #444; color: white; font-weight: bold; border-color: #888; }}
+        .lap-btn.fastest {{ color: #ffa500; }}
+        .charts-area {{ flex: 1; min-width: 0; }}
         .tabs {{ display: flex; border-bottom: 1px solid #444; margin-bottom: 10px; }}
         .tab {{ padding: 10px 20px; cursor: pointer; border: 1px solid transparent; color: #ccc; }}
         .tab.active {{ border: 1px solid #444; border-bottom: 1px solid #111; background: #222; font-weight: bold; color: white; }}
@@ -200,48 +273,109 @@ def plot_interactive_telemetry(lap_data):
     </style>
 
     <div class="telemetry-container">
-        <div id="map-container"></div>
-        
-        <div class="tabs">
-            <div class="tab active" onclick="showTab('general', this)">General</div>
-            <div class="tab" onclick="showTab('motor', this)">Motor</div>
-            <div class="tab" onclick="showTab('suspension', this)">Suspensión</div>
-            <div class="tab" onclick="showTab('neumaticos', this)">Neumáticos</div>
-            <div class="tab" onclick="showTab('aero', this)">Aerodinámica</div>
-        </div>
+        <div class="lap-sidebar" id="lap-sidebar"></div>
+        <div class="charts-area">
+            <div id="map-container"></div>
+            
+            <div class="tabs">
+                <div class="tab active" onclick="showTab('general', this)">General</div>
+                <div class="tab" onclick="showTab('motor', this)">Motor</div>
+                <div class="tab" onclick="showTab('suspension', this)">Suspensión</div>
+                <div class="tab" onclick="showTab('neumaticos', this)">Neumáticos</div>
+                <div class="tab" onclick="showTab('aero', this)">Aerodinámica</div>
+            </div>
 
-        <div id="general" class="tab-content active">
-            <div id="wrap-speed" class="chart-wrapper"><div id="chart-speed"></div><canvas class="red-line"></canvas></div>
-            <div id="wrap-controls" class="chart-wrapper"><div id="chart-controls"></div><canvas class="red-line"></canvas></div>
-            <div id="wrap-steer" class="chart-wrapper"><div id="chart-steer"></div><canvas class="red-line"></canvas></div>
-        </div>
-        <div id="motor" class="tab-content">
-            <div id="wrap-rpm" class="chart-wrapper"><div id="chart-rpm"></div><canvas class="red-line"></canvas></div>
-            <div id="wrap-gear" class="chart-wrapper"><div id="chart-gear"></div><canvas class="red-line"></canvas></div>
-        </div>
-        <div id="suspension" class="tab-content">
-            <div id="wrap-susp_pos" class="chart-wrapper"><div id="chart-susp_pos"></div><canvas class="red-line"></canvas></div>
-            <div id="wrap-ride_height" class="chart-wrapper"><div id="chart-ride_height"></div><canvas class="red-line"></canvas></div>
-        </div>
-        <div id="neumaticos" class="tab-content">
-            <div id="wrap-brake_temp" class="chart-wrapper"><div id="chart-brake_temp"></div><canvas class="red-line"></canvas></div>
-            <div id="wrap-tyre_pres" class="chart-wrapper"><div id="chart-tyre_pres"></div><canvas class="red-line"></canvas></div>
-        </div>
-        <div id="aero" class="tab-content">
-            <div id="wrap-aero" class="chart-wrapper"><div id="chart-aero"></div><canvas class="red-line"></canvas></div>
+            <div id="general" class="tab-content active">
+                <div id="wrap-speed" class="chart-wrapper"><div id="chart-speed"></div><canvas class="red-line"></canvas></div>
+                <div id="wrap-controls" class="chart-wrapper"><div id="chart-controls"></div><canvas class="red-line"></canvas></div>
+                <div id="wrap-steer" class="chart-wrapper"><div id="chart-steer"></div><canvas class="red-line"></canvas></div>
+            </div>
+            <div id="motor" class="tab-content">
+                <div id="wrap-rpm" class="chart-wrapper"><div id="chart-rpm"></div><canvas class="red-line"></canvas></div>
+                <div id="wrap-gear" class="chart-wrapper"><div id="chart-gear"></div><canvas class="red-line"></canvas></div>
+            </div>
+            <div id="suspension" class="tab-content">
+                <div id="wrap-susp_pos" class="chart-wrapper"><div id="chart-susp_pos"></div><canvas class="red-line"></canvas></div>
+                <div id="wrap-ride_height" class="chart-wrapper"><div id="chart-ride_height"></div><canvas class="red-line"></canvas></div>
+            </div>
+            <div id="neumaticos" class="tab-content">
+                <div id="wrap-brake_temp" class="chart-wrapper"><div id="chart-brake_temp"></div><canvas class="red-line"></canvas></div>
+                <div id="wrap-tyre_pres" class="chart-wrapper"><div id="chart-tyre_pres"></div><canvas class="red-line"></canvas></div>
+            </div>
+            <div id="aero" class="tab-content">
+                <div id="wrap-aero" class="chart-wrapper"><div id="chart-aero"></div><canvas class="red-line"></canvas></div>
+            </div>
         </div>
     </div>
 
     <script>
-        const lapData = {data_json};
-        const charts = []; // {{el, id, wrapper, canvas}}
+        const allLapData = {all_data_json};
+        const laps = {laps_json};
+        const lapLabels = {lap_labels_json};
+        const fastestLap = {fastest_lap_js};
+        let currentLap = laps[0];
+        let lapData = allLapData[String(currentLap)];
+
+        const charts = [];
         let mapChart = null;
         let isDragging = false;
         let pendingX = null;
         let rafId = null;
         let lastX = 0;
 
-        // Tab switching - simple display toggle + resize visible charts
+        // Build lap sidebar buttons
+        const sidebar = document.getElementById('lap-sidebar');
+        laps.forEach((lap, i) => {{
+            const btn = document.createElement('button');
+            btn.className = 'lap-btn' + (i === 0 ? ' active' : '') + (lap === fastestLap ? ' fastest' : '');
+            btn.textContent = lapLabels[i];
+            btn.dataset.lap = lap;
+            btn.addEventListener('click', () => switchLap(lap));
+            sidebar.appendChild(btn);
+        }});
+
+        function switchLap(lap) {{
+            if (lap === currentLap) return;
+            currentLap = lap;
+            lapData = allLapData[String(lap)];
+            lastX = 0;
+
+            // Update sidebar active state
+            sidebar.querySelectorAll('.lap-btn').forEach(b => {{
+                b.classList.toggle('active', parseInt(b.dataset.lap) === lap);
+            }});
+
+            // Update map
+            if (lapData.map && mapChart) {{
+                Plotly.react(mapChart, [
+                    {{ x: lapData.map.lon, y: lapData.map.lat, mode: 'lines', line: {{ color: '#666', width: 2 }}, hoverinfo: 'skip' }},
+                    {{ x: [lapData.map.lon[0]], y: [lapData.map.lat[0]], mode: 'markers', marker: {{ color: 'red', size: 12, symbol: 'x' }}, name: 'Coche' }}
+                ], mapChart.layout, {{ displayModeBar: false, staticPlot: true }});
+            }}
+
+            // Rebuild map binary search index
+            rebuildMapIndex();
+
+            // Update all charts with new data
+            const newMaxDist = lapData.max_dist;
+            charts.forEach(c => {{
+                const chData = lapData.channels[c.id];
+                if (!chData) return;
+                const traces = chData.map(ch => ({{
+                    x: ch.x, y: ch.y, name: ch.name,
+                    mode: 'lines', line: {{ width: 1.5 }}, connectgaps: false
+                }}));
+                const newLayout = Object.assign({{}}, c.el.layout, {{
+                    xaxis: Object.assign({{}}, c.el.layout.xaxis, {{ range: [0, newMaxDist] }})
+                }});
+                Plotly.react(c.el, traces, newLayout, {{ displayModeBar: false, staticPlot: true }});
+            }});
+
+            // Clear red lines
+            drawAllRedLines();
+        }}
+
+        // Tab switching
         function showTab(tabId, tabEl) {{
             document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
             document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
@@ -259,12 +393,19 @@ def plot_interactive_telemetry(lap_data):
         // Binary search for map position
         let mapDistSorted = null;
         let mapDistIndices = null;
-        if (lapData.map) {{
-            const n = lapData.map.dist.length;
-            mapDistIndices = Array.from({{length: n}}, (_, i) => i);
-            mapDistIndices.sort((a, b) => lapData.map.dist[a] - lapData.map.dist[b]);
-            mapDistSorted = mapDistIndices.map(i => lapData.map.dist[i]);
+
+        function rebuildMapIndex() {{
+            if (lapData.map) {{
+                const n = lapData.map.dist.length;
+                mapDistIndices = Array.from({{length: n}}, (_, i) => i);
+                mapDistIndices.sort((a, b) => lapData.map.dist[a] - lapData.map.dist[b]);
+                mapDistSorted = mapDistIndices.map(i => lapData.map.dist[i]);
+            }} else {{
+                mapDistSorted = null;
+                mapDistIndices = null;
+            }}
         }}
+        rebuildMapIndex();
 
         function findClosestMapIdx(x) {{
             let lo = 0, hi = mapDistSorted.length - 1;
@@ -281,11 +422,11 @@ def plot_interactive_telemetry(lap_data):
             template: "plotly_dark",
             paper_bgcolor: 'rgba(0,0,0,0)',
             plot_bgcolor: 'rgba(0,0,0,0)',
-            margin: {{ l: 60, r: 20, t: 35, b: 40 }},
+            margin: {{ l: 60, r: 20, t: 35, b: 55 }},
             xaxis: {{ title: "Distancia (m)", range: [0, lapData.max_dist], fixedrange: true, gridcolor: '#333' }},
             yaxis: {{ gridcolor: '#333', autorange: true, fixedrange: true }},
             showlegend: true,
-            legend: {{ orientation: "h", y: 1.12, x: 1, xanchor: 'right' }},
+            legend: {{ orientation: "h", y: -0.15, x: 0, xanchor: 'left', font: {{ size: 10 }} }},
             hovermode: false,
             dragmode: false
         }};
@@ -312,7 +453,7 @@ def plot_interactive_telemetry(lap_data):
             }}, {{ displayModeBar: false, staticPlot: true }});
         }}
 
-        // Charts - use staticPlot:true for instant rendering, no WebGL issues
+        // Charts
         const chartIds = [
             'speed', 'controls', 'steer', 'rpm', 'gear',
             'susp_pos', 'ride_height', 'brake_temp', 'tyre_pres', 'aero'
@@ -349,7 +490,6 @@ def plot_interactive_telemetry(lap_data):
             plotPromises.push(p);
             charts.push({{ el: container, id: id, wrapper: wrapper, canvas: canvas }});
 
-            // Drag events on the wrapper (canvas is pointer-events:none)
             wrapper.addEventListener('mousedown', function(e) {{
                 isDragging = true;
                 syncFromEvent(e, container);
@@ -385,15 +525,12 @@ def plot_interactive_telemetry(lap_data):
             drawAllRedLines();
         }}
 
-        // Wait for all plots then resize ALL (temporarily show hidden tabs)
         Promise.all(plotPromises).then(() => {{
             resizeAllCharts();
-            // Also resize after a short delay to catch late iframe width changes
             setTimeout(resizeAllCharts, 100);
             setTimeout(resizeAllCharts, 500);
         }});
 
-        // Use ResizeObserver to catch any container width changes (e.g. when switching laps)
         const ro = new ResizeObserver(() => {{ resizeAllCharts(); }});
         ro.observe(document.querySelector('.telemetry-container'));
 
@@ -421,7 +558,6 @@ def plot_interactive_telemetry(lap_data):
             }}
         }}
 
-        // Draw red line on canvas overlay - extremely fast, no Plotly calls
         function drawRedLine(chart, x) {{
             const canvas = chart.canvas;
             const el = chart.el;
@@ -461,10 +597,8 @@ def plot_interactive_telemetry(lap_data):
 
         function sync(x) {{
             lastX = x;
-            // Draw red lines on canvas overlays (instant, no Plotly overhead)
             drawAllRedLines();
 
-            // Update map marker
             if (mapChart && lapData.map && mapDistSorted) {{
                 const idx = findClosestMapIdx(x);
                 Plotly.restyle(mapChart, {{
@@ -473,13 +607,38 @@ def plot_interactive_telemetry(lap_data):
                 }}, [1]);
             }}
         }}
+        // Keep lap sidebar visible by tracking parent scroll
+        function updateSidebarPosition() {{
+            const sidebar = document.getElementById('lap-sidebar');
+            if (!sidebar) return;
+            const container = document.querySelector('.telemetry-container');
+            if (!container) return;
+            // Get the iframe's position relative to the viewport via parent
+            try {{
+                const iframeRect = window.frameElement ? window.frameElement.getBoundingClientRect() : null;
+                if (iframeRect) {{
+                    // How much of the iframe is scrolled above the viewport
+                    const scrolledAbove = Math.max(0, -iframeRect.top);
+                    sidebar.style.transform = 'translateY(' + scrolledAbove + 'px)';
+                }}
+            }} catch(e) {{}}
+        }}
+        // Listen to parent scroll
+        try {{
+            window.parent.addEventListener('scroll', updateSidebarPosition, true);
+            // Also listen on all scrollable ancestors
+            let el = window.frameElement;
+            while (el) {{
+                el = el.parentElement;
+                if (el) el.addEventListener('scroll', updateSidebarPosition, true);
+            }}
+        }} catch(e) {{}}
+        setInterval(updateSidebarPosition, 100);
     </script>
     """
     import streamlit.components.v1 as components
-    # Forzar que el iframe ocupe todo el ancho disponible
     st.markdown("""
     <style>
-        iframe[title="streamlit_app.plot_interactive_telemetry"] { width: 100% !important; }
         .stHtml iframe, .element-container iframe { width: 100% !important; }
         div[data-testid="stIFrame"] iframe { width: 100% !important; }
     </style>
@@ -499,7 +658,7 @@ def parse_svm_content(file_bytes):
         line = line.strip()
         if not line or line.startswith('//'): continue
         if '[' in line and ']' in line:
-            current_section = line[1:-1]
+            current_section = line[line.index('[') + 1:line.index(']')]
             setup[current_section] = {}
         elif '=' in line and current_section:
             k, v = line.split('=', 1)
@@ -594,22 +753,46 @@ if tele_to_send and svm_to_send:
                 # La clave del cache es el hash del contenido del archivo y la lista de vueltas
                 all_lap_figs = precompute_all_laps(df_local, tuple(laps))
 
+                # Detectar vuelta rápida
+                fastest_lap = None
+                lap_times = {}
+                # Preferir Last_Laptime (más preciso) sobre Session_Elapsed_Time
+                has_last_laptime = 'Last_Laptime' in df_local.columns
+                for l in laps:
+                    lap_df_tmp = df_local[df_local['Lap_Number'] == l]
+                    if not lap_df_tmp.empty:
+                        if has_last_laptime:
+                            lt = lap_df_tmp['Last_Laptime'].iloc[-1]
+                            if lt > 0:
+                                lap_times[l] = float(lt)
+                                continue
+                        # Fallback a Session_Elapsed_Time
+                        if 'Session_Elapsed_Time' in df_local.columns:
+                            lap_times[l] = float(lap_df_tmp['Session_Elapsed_Time'].max() - lap_df_tmp['Session_Elapsed_Time'].min())
+                if lap_times:
+                    fastest_lap = min(lap_times, key=lap_times.get)
+
                 main_tab_tele, main_tab_setup, main_tab_ai = st.tabs(
                     ["📊 Telemetría", "🔧 Setup", "🤖 Análisis AI"]
                 )
 
                 with main_tab_tele:
-                    st.caption(f"Selecciona una vuelta para ver los gráficos pre-cargados.")
-                    
-                    # Usar st.tabs para las vueltas garantiza que todos los gráficos se pinten en el DOM
-                    # y el cambio entre ellos sea instantáneo (manejado por el navegador).
-                    lap_tab_labels = [f"Vuelta {l}" for l in laps]
-                    lap_tabs = st.tabs(lap_tab_labels)
+                    # Formatear tiempos de vuelta
+                    def _fmt_lap_time(seconds):
+                        m = int(seconds // 60)
+                        s = seconds % 60
+                        tenths = int(round((s % 1) * 10))
+                        return f"{m}:{int(s):02}:{tenths}00"
 
-                    for i, lap in enumerate(laps):
-                        with lap_tabs[i]:
-                            # Renderizar telemetría interactiva (JS)
-                            plot_interactive_telemetry(all_lap_figs.get(lap))
+                    lap_options = []
+                    for l in laps:
+                        t_str = ""
+                        if l in lap_times:
+                            t_val = _fmt_lap_time(lap_times[l])
+                            t_str = f" ({t_val})"
+                        lap_options.append(f"V{l}{t_str}")
+
+                    plot_all_laps_interactive(all_lap_figs, laps, lap_options, fastest_lap)
 
                 with main_tab_setup:
                     st.header("Configuración del Coche (.svm)")
@@ -654,6 +837,7 @@ if tele_to_send and svm_to_send:
 
                 with main_tab_ai:
                     st.header("Análisis de Ingeniero Virtual")
+
                     try:
                         models_resp = requests.get("http://localhost:8000/models", timeout=2)
                         available_models = (
@@ -672,46 +856,123 @@ if tele_to_send and svm_to_send:
                                 "telemetry_file": (tele_name, tele_to_send),
                                 "svm_file": (svm_name, svm_to_send),
                             }
-                            data_form = {"model": sel_model} if sel_model else {}
+                            data_form = {}
+                            if sel_model:
+                                data_form["model"] = sel_model
                             response = requests.post(
                                 "http://localhost:8000/analyze",
                                 files=files, data=data_form
                             )
                             if response.status_code == 200:
                                 data = response.json()
-
-                                # ── Análisis del Ingeniero de Conducción ──
-                                st.subheader("🏁 Análisis del Ingeniero de Conducción")
-                                st.info(data['driving_analysis'])
-
-
-                                # ── Setup Completo Recomendado ──
-                                if data.get('full_setup') and data['full_setup'].get('sections'):
-                                    st.subheader("⚙️ Setup Completo Recomendado por los ingenieros")
-                                    for section in data['full_setup']['sections']:
-                                        s_name = section.get('name', 'Sección')
-                                        s_items = section.get('items', [])
-                                        if not s_items:
-                                            continue
-                                        # Separar parámetros con cambios de los que no
-                                        changed_items = [it for it in s_items if str(it.get('current', '')) != str(it.get('new', ''))]
-                                        unchanged_items = [it for it in s_items if str(it.get('current', '')) == str(it.get('new', ''))]
-                                        with st.expander(f"🔩 {s_name} ({len(changed_items)} cambios)", expanded=bool(changed_items)):
-                                            if changed_items:
-                                                rows = []
-                                                for it in changed_items:
-                                                    rows.append({
-                                                        "Parámetro": it.get('parameter', ''),
-                                                        "Actual": it.get('current', ''),
-                                                        "Recomendado": it.get('new', ''),
-                                                        "Motivo": it.get('reason', '')
-                                                    })
-                                                df_ai = pd.DataFrame(rows)
-                                                st.table(df_ai.set_index("Parámetro"))
-                                            else:
-                                                st.caption("No se recomiendan cambios en esta sección.")
+                                # Guardar datos en session_state para re-análisis
+                                st.session_state['ai_analysis_data'] = data
+                                st.session_state['ai_telemetry_summary'] = data.get('telemetry_summary_sent', '')
+                                st.session_state['ai_circuit_name'] = tele_name.split('-')[-2].strip() if '-' in tele_name else "Desconocido"
+                                st.session_state['ai_model'] = sel_model
+                                # Parsear setup_data del .svm para re-análisis
+                                st.session_state['ai_setup_data'] = parse_svm_content(svm_to_send)
                             else:
                                 st.error("Error en el análisis.")
+
+                    # Mostrar resultados (persistentes en session_state)
+                    if 'ai_analysis_data' in st.session_state:
+                        data = st.session_state['ai_analysis_data']
+
+                        # ── Análisis del Ingeniero de Conducción ──
+                        st.subheader("🏁 Análisis del Ingeniero de Conducción")
+                        st.info(data['driving_analysis'])
+
+                        # ── Razonamiento del Ingeniero Jefe ──
+                        if data.get('chief_reasoning'):
+                            st.subheader("🧠 Razonamiento del Ingeniero Jefe")
+                            st.warning(data['chief_reasoning'])
+
+                        # ── Setup Completo Recomendado ──
+                        if data.get('full_setup') and data['full_setup'].get('sections'):
+                            st.subheader("⚙️ Setup Completo Recomendado por los ingenieros")
+                            for sec_idx, section in enumerate(data['full_setup']['sections']):
+                                s_name = section.get('name', 'Sección')
+                                s_key = section.get('section_key', '')
+                                s_items = section.get('items', [])
+                                if not s_items:
+                                    continue
+                                changed_items = [it for it in s_items if str(it.get('current', '')) != str(it.get('new', ''))]
+                                with st.expander(f"🔩 {s_name} ({len(changed_items)} cambios)", expanded=bool(changed_items)):
+                                    if changed_items:
+                                        rows = []
+                                        for it in changed_items:
+                                            param_name = it.get('parameter', '')
+                                            if it.get('reanalyzed'):
+                                                param_name = f"🚀 {param_name}"
+                                            rows.append({
+                                                "Parámetro": param_name,
+                                                "Actual": it.get('current', ''),
+                                                "Recomendado": it.get('new', ''),
+                                                "Motivo": it.get('reason', '')
+                                            })
+                                        df_ai = pd.DataFrame(rows)
+                                        st.table(df_ai.set_index("Parámetro"))
+                                    else:
+                                        st.caption("No se recomiendan cambios en esta sección.")
+
+                                    # Botón de re-consulta al ingeniero jefe
+                                    if s_key and st.button(f"🔄 Re-consultar al Ingeniero Jefe", key=f"reanalyze_{s_key}_{sec_idx}"):
+                                        with st.spinner(f"El Ingeniero Jefe está re-analizando {s_name}…"):
+                                            try:
+                                                reanalyze_resp = requests.post(
+                                                    "http://localhost:8000/reanalyze_section",
+                                                    json={
+                                                        "section_key": s_key,
+                                                        "telemetry_summary": st.session_state.get('ai_telemetry_summary', ''),
+                                                        "setup_data": st.session_state.get('ai_setup_data', {}),
+                                                        "previous_full_setup": data.get('full_setup', {}),
+                                                        "circuit_name": st.session_state.get('ai_circuit_name', 'Desconocido'),
+                                                        "model": st.session_state.get('ai_model')
+                                                    },
+                                                    timeout=120
+                                                )
+                                                if reanalyze_resp.status_code == 200:
+                                                    reanalyze_data = reanalyze_resp.json()
+                                                    # Merge inteligente: solo actualizar parámetros que cambian
+                                                    updated_secs = reanalyze_data.get('updated_sections', [])
+                                                    current_sections = data['full_setup']['sections']
+                                                    for upd_sec in updated_secs:
+                                                        upd_key = upd_sec.get('section_key', '')
+                                                        # Construir mapa de nuevos items por param_key
+                                                        new_items_map = {}
+                                                        for it in upd_sec.get('items', []):
+                                                            pk = it.get('param_key', it.get('parameter', ''))
+                                                            new_items_map[pk] = it
+                                                        for i, cs in enumerate(current_sections):
+                                                            if cs.get('section_key', '') == upd_key:
+                                                                # Merge: mantener items existentes, actualizar solo los que cambian
+                                                                merged_items = []
+                                                                for existing_it in cs.get('items', []):
+                                                                    epk = existing_it.get('param_key', existing_it.get('parameter', ''))
+                                                                    if epk in new_items_map:
+                                                                        new_it = new_items_map[epk]
+                                                                        # Marcar como re-consultado con 🚀
+                                                                        new_it['reanalyzed'] = True
+                                                                        merged_items.append(new_it)
+                                                                        del new_items_map[epk]
+                                                                    else:
+                                                                        # Mantener el item existente sin cambios
+                                                                        merged_items.append(existing_it)
+                                                                # Añadir items nuevos que no existían antes
+                                                                for remaining in new_items_map.values():
+                                                                    remaining['reanalyzed'] = True
+                                                                    merged_items.append(remaining)
+                                                                cs['items'] = merged_items
+                                                                break
+                                                    st.session_state['ai_analysis_data'] = data
+                                                    if reanalyze_data.get('chief_reasoning'):
+                                                        st.success(f"**Nuevo razonamiento del Ingeniero Jefe:** {reanalyze_data['chief_reasoning']}")
+                                                    st.rerun()
+                                                else:
+                                                    st.error("Error en el re-análisis.")
+                                            except Exception as e:
+                                                st.error(f"Error: {e}")
             else:
                 st.warning("No se encontraron vueltas completas.")
         else:

@@ -23,6 +23,20 @@ class AnalysisResponse(BaseModel):
     laps_data: List[Dict[str, Any]] # Datos por vuelta: número, tiempo, stats
     agent_reports: List[Dict[str, Any]] = [] # Informes individuales de agentes
     telemetry_summary_sent: str = "" # Resumen enviado a la IA
+    chief_reasoning: str = "" # Razonamiento del ingeniero jefe
+
+class ReanalyzeRequest(BaseModel):
+    section_key: str
+    telemetry_summary: str
+    setup_data: Dict[str, Any]
+    previous_full_setup: Dict[str, Any]
+    circuit_name: str = "Desconocido"
+    model: Optional[str] = None
+
+class ReanalyzeResponse(BaseModel):
+    updated_sections: List[Dict[str, Any]]
+    chief_reasoning: str
+    sections_reanalyzed: List[str]
 
 from app.core.ai_agents import AIAngineer, list_available_models
 
@@ -433,7 +447,8 @@ async def analyze_telemetry(
             session_stats=session_stats,
             laps_data=convert_to_native(laps_data),
             agent_reports=convert_to_native(ai_result.get("agent_reports", [])),
-            telemetry_summary_sent=summary
+            telemetry_summary_sent=summary,
+            chief_reasoning=ai_result.get("chief_reasoning", "")
         )
     except Exception as e:
         error_msg = str(e)
@@ -446,6 +461,25 @@ async def analyze_telemetry(
         # Opcional: limpiar archivos después del análisis
         # shutil.rmtree(upload_dir)
         pass
+
+@app.post("/reanalyze_section", response_model=ReanalyzeResponse)
+async def reanalyze_section(req: ReanalyzeRequest):
+    try:
+        result = await ai_engineer.reanalyze_section(
+            section_key=req.section_key,
+            telemetry_summary=req.telemetry_summary,
+            setup_data=req.setup_data,
+            previous_full_setup=req.previous_full_setup,
+            circuit_name=req.circuit_name,
+            model_tag=req.model or None
+        )
+        if not result:
+            raise HTTPException(status_code=500, detail="El ingeniero jefe no pudo completar el re-análisis.")
+        return ReanalyzeResponse(**result)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":
     import uvicorn
