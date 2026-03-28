@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="CopilotDiffPersistence">
+    <option name="pendingDiffs">
+      <map>
+        <entry key="$PROJECT_DIR$/app/test_mcp_create_session_fixed.py">
+          <value>
+            <PendingDiffInfo>
+              <option name="filePath" value="$PROJECT_DIR$/app/test_mcp_create_session_fixed.py" />
+              <option name="updatedContent" value="import json&#10;from pathlib import Path&#10;import requests&#10;&#10;path = Path(r&quot;C:\Users\the_h\AppData\Local\github-copilot\intellij\mcp.json&quot;)&#10;cfg = json.loads(path.read_text(encoding='utf-8'))&#10;url = cfg['servers']['asana-mcp']['url']&#10;orig_headers = cfg['servers']['asana-mcp']['requestInit']['headers']&#10;&#10;# Build headers for initial initialization: MUST NOT include Mcp-Session-Id&#10;headers_init = {k: v for k, v in orig_headers.items() if k.lower() != 'mcp-session-id'}&#10;&#10;def do_post(u, payload, headers, timeout=15):&#10;    print('\nPOST -&gt;', u)&#10;    print('Headers:', headers)&#10;    print('Payload:', json.dumps(payload))&#10;    r = requests.post(u, json=payload, headers=headers, timeout=timeout)&#10;    print('Status', r.status_code)&#10;    print('Body', r.text)&#10;    return r&#10;&#10;def main():&#10;    # 1) Initial JSON-RPC initialization - no session id header and no sessionId param&#10;    payload_init = {&quot;jsonrpc&quot;: &quot;2.0&quot;, &quot;method&quot;: &quot;mcp.createSession&quot;, &quot;params&quot;: {}, &quot;id&quot;: 1}&#10;    try:&#10;        r = do_post(url, payload_init, headers_init)&#10;    except Exception as e:&#10;        print('ERROR initial request', e)&#10;        return&#10;&#10;    if r.status_code != 200:&#10;        print('\nInitial request failed; check response above.\nIf you get 400 with message about sessionId, ensure no Mcp-Session-Id header is sent and params is empty.')&#10;        return&#10;&#10;    try:&#10;        body = r.json()&#10;    except Exception:&#10;        print('Response is not JSON; aborting')&#10;        return&#10;&#10;    # Try to extract sessionId from result (common key names: sessionId, session_id)&#10;    sid = None&#10;    if 'result' in body and isinstance(body['result'], dict):&#10;        sid = body['result'].get('sessionId') or body['result'].get('session_id')&#10;&#10;    if not sid:&#10;        print('No sessionId returned in initial response. Response JSON:\n', json.dumps(body, indent=2))&#10;        return&#10;&#10;    print('\nGot sessionId from server:', sid)&#10;&#10;    # 2) Make a follow-up request with Mcp-Session-Id header set (or original header modified)&#10;    headers_with_sid = dict(orig_headers)&#10;    headers_with_sid['Mcp-Session-Id'] = sid&#10;&#10;    # Try a connect/createSession call now that we have the session id&#10;    payload_follow = {&quot;jsonrpc&quot;: &quot;2.0&quot;, &quot;method&quot;: &quot;mcp.connect&quot;, &quot;params&quot;: {&quot;sessionId&quot;: sid}, &quot;id&quot;: 2}&#10;    try:&#10;        r2 = do_post(url, payload_follow, headers_with_sid)&#10;    except Exception as e:&#10;        print('ERROR follow-up request', e)&#10;        return&#10;&#10;    print('\nDone')&#10;&#10;if __name__ == '__main__':&#10;    main()&#10;" />
+            </PendingDiffInfo>
+          </value>
+        </entry>
+      </map>
+    </option>
+  </component>
+</project>
