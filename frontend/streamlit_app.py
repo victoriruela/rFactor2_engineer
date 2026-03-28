@@ -885,7 +885,7 @@ if tele_to_send and svm_to_send:
                         return val_str.strip()
 
                     for section, params in setup_data.items():
-                        if section.upper() in ("BASIC", "LEFTFENDER", "RIGHTFENDER"):
+                        if section.upper() in ("LEFTFENDER", "RIGHTFENDER"):
                             continue
                         friendly_section = _mapping.get("sections", {}).get(section, section)
                         with st.expander(f"🔩 {friendly_section}"):
@@ -894,6 +894,10 @@ if tele_to_send and svm_to_send:
                                 if k.startswith("Gear") and "Setting" in k:
                                     continue
                                 friendly_param = _mapping.get("parameters", {}).get(k, k)
+                                # Si el parámetro es numérico y no tiene mapeo amigable, 
+                                # o si queremos forzar que ignore claves técnicas internas
+                                if k in ("VehicleClassSetting", "UpgradeSetting") or k.startswith("ChassisAdj") and k not in _mapping.get("parameters", {}):
+                                    continue
                                 rows.append({
                                     "Parámetro": friendly_param,
                                     "Valor": _clean_svm_value(v)
