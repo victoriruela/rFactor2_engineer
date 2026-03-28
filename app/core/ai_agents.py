@@ -246,9 +246,9 @@ class AIAngineer:
     def _clean_value(self, val):
         val_str = str(val)
         if "//" in val_str:
-            parts = val_str.split("//")
+            parts = val_str.split("//", 1)
             if len(parts) > 1:
-                return parts[1].split("(")[0].strip()
+                return parts[1].strip()
         return val_str.strip()
 
     def _get_friendly_name(self, key, item_type='parameter'):
@@ -334,8 +334,8 @@ class AIAngineer:
         specialist_reports = []
 
         for section_name, section_data in setup_data.items():
-            # Excluir la sección BASIC del análisis de agentes
-            if section_name.upper() == "BASIC":
+            # Excluir secciones BASIC, LEFTFENDER y RIGHTFENDER del análisis de agentes
+            if section_name.upper() in ("BASIC", "LEFTFENDER", "RIGHTFENDER"):
                 continue
 
             # Filtrar GearXSetting de la sección driveline antes de enviar al agente
@@ -343,11 +343,14 @@ class AIAngineer:
             if not filtered_data:
                 continue
 
+            # Limpiar valores raw//clean antes de enviar al LLM para que no incluya // en sus textos
+            cleaned_data = {k: self._clean_value(v) for k, v in filtered_data.items()}
+
             friendly_section = self._get_friendly_name(section_name, 'section')
             report = await self._get_json_from_llm(SECTION_AGENT_PROMPT, {
                 "section_name": friendly_section,
                 "telemetry_summary": telemetry_summary,
-                "section_data": json.dumps(filtered_data, indent=2),
+                "section_data": json.dumps(cleaned_data, indent=2),
                 "context_data": "N/A",
                 "circuit_name": circuit_name
             })
@@ -392,8 +395,8 @@ class AIAngineer:
         full_setup_recommendations = {"sections": []}
 
         for section_name, orig_section_data in setup_data.items():
-            # Excluir la sección BASIC (Ajustes Básicos) del setup recomendado
-            if section_name.upper() == "BASIC":
+            # Excluir secciones BASIC, LEFTFENDER y RIGHTFENDER del setup recomendado
+            if section_name.upper() in ("BASIC", "LEFTFENDER", "RIGHTFENDER"):
                 continue
 
             friendly_section = self._get_friendly_name(section_name, 'section')
@@ -434,6 +437,8 @@ class AIAngineer:
                 if reco:
                     reco_val = self._clean_value(reco.get('new_value', clean_curr))
                     reason = reco.get('reason', "Sin cambios requeridos.")
+                    # Limpiar cualquier formato raw//clean residual en el motivo
+                    reason = re.sub(r'\b\d+//', '', reason)
                 else:
                     reco_val = clean_curr
                     reason = "Analizado por el equipo de ingeniería. No se detectaron anomalías que requieran cambios en este parámetro."

@@ -5,6 +5,8 @@ import plotly.graph_objects as go
 import numpy as np
 import scipy.io
 import io
+import os
+import json as _json
 
 st.set_page_config(page_title="rFactor2 Engineer", layout="wide")
 
@@ -612,9 +614,43 @@ if tele_to_send and svm_to_send:
                 with main_tab_setup:
                     st.header("Configuración del Coche (.svm)")
                     setup_data = parse_svm_content(svm_to_send)
+                    # Cargar mapping para nombres amigables
+                    _mapping_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "app", "core", "param_mapping.json")
+                    _mapping = {"sections": {}, "parameters": {}}
+                    if os.path.exists(_mapping_path):
+                        try:
+                            with open(_mapping_path, 'r', encoding='utf-8') as _mf:
+                                _mapping = _json.load(_mf)
+                        except Exception:
+                            pass
+
+                    def _clean_svm_value(val):
+                        val_str = str(val)
+                        if "//" in val_str:
+                            parts = val_str.split("//", 1)
+                            if len(parts) > 1:
+                                return parts[1].strip()
+                        return val_str.strip()
+
                     for section, params in setup_data.items():
-                        with st.expander(f"Sección: {section}"):
-                            st.table(pd.DataFrame(list(params.items()), columns=["Parámetro", "Valor"]))
+                        if section.upper() in ("BASIC", "LEFTFENDER", "RIGHTFENDER"):
+                            continue
+                        friendly_section = _mapping.get("sections", {}).get(section, section)
+                        with st.expander(f"🔩 {friendly_section}"):
+                            rows = []
+                            for k, v in params.items():
+                                if k.startswith("Gear") and "Setting" in k:
+                                    continue
+                                friendly_param = _mapping.get("parameters", {}).get(k, k)
+                                rows.append({
+                                    "Parámetro": friendly_param,
+                                    "Valor": _clean_svm_value(v)
+                                })
+                            if rows:
+                                df_setup = pd.DataFrame(rows)
+                                st.table(df_setup.set_index("Parámetro"))
+                            else:
+                                st.caption("No hay parámetros configurados en esta sección.")
 
                 with main_tab_ai:
                     st.header("Análisis de Ingeniero Virtual")
@@ -670,7 +706,8 @@ if tele_to_send and svm_to_send:
                                                         "Recomendado": it.get('new', ''),
                                                         "Motivo": it.get('reason', '')
                                                     })
-                                                st.table(pd.DataFrame(rows))
+                                                df_ai = pd.DataFrame(rows)
+                                                st.table(df_ai.set_index("Parámetro"))
                                             else:
                                                 st.caption("No se recomiendan cambios en esta sección.")
                             else:
