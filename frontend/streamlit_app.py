@@ -86,27 +86,40 @@ def _filter_incomplete_laps_frontend(df):
         for lap in laps:
             d = df.loc[df[lap_col] == lap, dist_col].dropna()
             lap_distances[lap] = (d.max() - d.min()) if not d.empty else 0
-        max_dist = max(lap_distances.values()) if lap_distances else 0
-        complete_laps = [l for l, d in lap_distances.items() if d >= max_dist * 1.0]
+        
+        # Usar el percentil 95 de las distancias para evitar que vueltas incompletas influyan mucho
+        if lap_distances:
+            target_dist = np.percentile(list(lap_distances.values()), 95)
+            # Solo consideramos completas las vueltas que cubren al menos el 98% de la distancia objetivo
+            complete_laps = [l for l, d in lap_distances.items() if d >= target_dist * 0.98]
+        else:
+            complete_laps = []
     else:
         lap_samples = {lap: len(df[df[lap_col] == lap]) for lap in laps}
-        max_samples = max(lap_samples.values()) if lap_samples else 0
-        complete_laps = [l for l, s in lap_samples.items() if s >= max_samples * 1.0]
+        if lap_samples:
+            target_samples = np.percentile(list(lap_samples.values()), 95)
+            complete_laps = [l for l, s in lap_samples.items() if s >= target_samples * 0.95]
+        else:
+            complete_laps = []
 
     if not complete_laps:
         complete_laps = laps
 
-    # Filtrar por duración anómala
+    # Filtrar por duración anómala (vueltas extremadamente lentas como out-laps o errores)
     time_col = 'Session_Elapsed_Time' if 'Session_Elapsed_Time' in df.columns else None
-    if time_col and len(complete_laps) > 2:
+    if time_col and len(complete_laps) > 1:
         lap_durations = {}
         for lap in complete_laps:
             t = df.loc[df[lap_col] == lap, time_col].dropna()
             lap_durations[lap] = (t.max() - t.min()) if not t.empty else 0
-        middle_laps = complete_laps[1:-1] if len(complete_laps) > 2 else complete_laps
-        median_dur = np.median([lap_durations[l] for l in middle_laps if lap_durations[l] > 0])
-        if median_dur > 0:
-            complete_laps = [l for l in complete_laps if lap_durations[l] <= median_dur * 1.10]
+        
+        # Filtramos solo si hay una mediana clara (más de 2 vueltas completas)
+        if len(complete_laps) > 2:
+            middle_laps = complete_laps[1:-1]
+            median_dur = np.median([lap_durations[l] for l in middle_laps if lap_durations[l] > 0])
+            if median_dur > 0:
+                # Permitimos hasta un 50% de margen para no filtrar vueltas lentas legítimas (p.ej. lluvia o errores leves)
+                complete_laps = [l for l in complete_laps if lap_durations[l] <= median_dur * 1.50]
 
     if not complete_laps:
         complete_laps = laps
@@ -131,15 +144,15 @@ def _lap_xy(lap_df, x_col, y_col):
 
     # Detectar saltos en el eje X
     # Para Lap_Distance, un salto de >100m en 1 paso temporal es sospechoso.
-    # O un salto atrás (>0).
+    # O un salto atrás significativo (>10m).
     xs, ys = [], []
     for i in range(len(x_arr)):
         if i > 0:
             diff = x_arr[i] - x_arr[i-1]
-            # Si hay un salto brusco hacia adelante (>200m) o CUALQUIER salto atrás
+            # Si hay un salto brusco hacia adelante (>200m) o un salto atrás (>10m)
             # en la distancia de la vuelta, rompemos la línea.
             if x_col == 'Lap_Distance':
-                if diff < -1.0 or diff > 200.0:
+                if diff < -10.0 or diff > 200.0:
                     xs.append(None)
                     ys.append(None)
             else:
