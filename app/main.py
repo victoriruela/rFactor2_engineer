@@ -71,11 +71,20 @@ def get_models():
 async def analyze_telemetry(
     telemetry_file: UploadFile = File(...),
     svm_file: UploadFile = File(...),
-    model: Optional[str] = Form(None)
+    model: Optional[str] = Form(None),
+    fixed_params: Optional[str] = Form(None)
 ):
     session_id = str(uuid.uuid4())
     upload_dir = f"data/{session_id}"
     os.makedirs(upload_dir, exist_ok=True)
+
+    # Parsear lista de parámetros fijados si existe
+    fixed_params_list = []
+    if fixed_params:
+        try:
+            fixed_params_list = json.loads(fixed_params)
+        except Exception:
+            pass
 
     tele_path = os.path.join(upload_dir, telemetry_file.filename)
     svm_path = os.path.join(upload_dir, svm_file.filename)
@@ -408,7 +417,8 @@ async def analyze_telemetry(
             summary, setup_dict, 
             circuit_name=circuit_name, 
             session_stats=session_stats, 
-            model_tag=model or None
+            model_tag=model or None,
+            fixed_params=fixed_params_list
         )
         
         # 4. Generar puntos de interés en el mapa

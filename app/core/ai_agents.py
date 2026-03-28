@@ -89,6 +89,10 @@ Como experto en esta sección, debes evaluar CÓMO cada parámetro actual influy
 2. Compara la evolución entre vueltas: ¿empeoran las temperaturas o presiones afectando al grip en curva?
 3. Propón cambios CONCRETOS con valores numéricos basados en lo que observas en los datos.
 
+PARÁMETROS FIJOS (REGLA CRÍTICA):
+Los siguientes parámetros NO pueden ser modificados bajo ninguna circunstancia: {fixed_params_prompt}
+DEBES tener en cuenta sus valores actuales para tu análisis global, pero TIENES PROHIBIDO proponer un nuevo valor para ellos. Si crees que uno de estos parámetros es la causa del problema, menciónalo en el análisis de otros parámetros, pero no sugieras cambiarlo.
+
 IMPORTANTE:
 - Solo propón cambios en los parámetros que REALMENTE necesiten ser modificados.
 - Si un parámetro está bien configurado según la telemetría, NO lo incluyas en la respuesta.
@@ -141,7 +145,10 @@ TU ROL COMO INGENIERO JEFE (REGLAS DE ORO):
 4. SIMETRÍA:
    - Mantén simetría (FRONTLEFT ≈ FRONTRIGHT, etc.) a menos que la telemetría (G Force Lat, temperaturas asimétricas) justifique claramente una asimetría por el diseño del circuito.
 5. EXPLICACIONES DETALLADAS: El piloto necesita entender el "porqué". Evita frases cortas. Cita siempre valores de telemetría.
-6. IMPORTANTE: El nombre de la sección en el JSON ("name") DEBE ser el nombre interno (ej: "FRONTLEFT", "SUSPENSION").
+6. PARÁMETROS FIJOS (REGLA CRÍTICA):
+   Los siguientes parámetros han sido fijados por el piloto y NO PUEDEN ser modificados: {fixed_params_prompt}
+   Si un especialista ha propuesto un cambio para uno de estos parámetros, DEBES descartar esa propuesta específica, pero puedes usar su razonamiento para ajustar otros parámetros relacionados que NO estén fijos.
+7. IMPORTANTE: El nombre de la sección en el JSON ("name") DEBE ser el nombre interno (ej: "FRONTLEFT", "SUSPENSION").
 
 JSON puro:
 {{
@@ -419,10 +426,18 @@ class AIAngineer:
 
         return full_setup_recommendations
 
-    async def analyze(self, telemetry_summary, setup_data, circuit_name="Desconocido", session_stats=None, model_tag=None):
+    async def analyze(self, telemetry_summary, setup_data, circuit_name="Desconocido", session_stats=None, model_tag=None, fixed_params=None):
         if self.llm is None or (model_tag and getattr(self, '_current_model', None) != model_tag):
             print("Inicializando LLM...")
             self._init_llm(model_tag)
+
+        # Preparar prompt de parámetros fijos
+        fixed_list = fixed_params or []
+        if fixed_list:
+            friendly_fixed = [self._get_friendly_name(p) for p in fixed_list]
+            fixed_params_prompt = ", ".join([f"{f} ({p})" for f, p in zip(friendly_fixed, fixed_list)])
+        else:
+            fixed_params_prompt = "Ninguno."
 
         # Limpiar memoria del ingeniero jefe para nueva sesión de análisis
         self.chief_memory = []
@@ -464,7 +479,8 @@ class AIAngineer:
                 "telemetry_summary": telemetry_summary,
                 "section_data": json.dumps(cleaned_data, indent=2),
                 "context_data": "N/A",
-                "circuit_name": circuit_name
+                "circuit_name": circuit_name,
+                "fixed_params_prompt": fixed_params_prompt
             })
             if report:
                 print(f"[DEBUG {section_name}_report] {repr(str(report)[:300])}")
@@ -479,7 +495,8 @@ class AIAngineer:
             "telemetry_summary": telemetry_summary,
             "circuit_name": circuit_name,
             "current_setup": current_setup_summary,
-            "memory_context": "N/A"
+            "memory_context": "N/A",
+            "fixed_params_prompt": fixed_params_prompt
         })
         print(f"[DEBUG chief_engineer_report] {repr(str(chief_engineer_report)[:300])}")
 

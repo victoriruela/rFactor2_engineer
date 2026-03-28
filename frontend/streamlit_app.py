@@ -8,6 +8,29 @@ import io
 import os
 import json as _json
 
+FIXED_PARAMS_FILE = "app/core/fixed_params.json"
+
+def load_fixed_params():
+    """Carga los parámetros fijados desde el archivo JSON."""
+    if os.path.exists(FIXED_PARAMS_FILE):
+        try:
+            with open(FIXED_PARAMS_FILE, 'r', encoding='utf-8') as f:
+                return set(_json.load(f))
+        except Exception:
+            pass
+    return set()
+
+def save_fixed_params(params_set):
+    """Guarda los parámetros fijados en el archivo JSON."""
+    try:
+        os.makedirs(os.path.dirname(FIXED_PARAMS_FILE), exist_ok=True)
+        with open(FIXED_PARAMS_FILE, 'w', encoding='utf-8') as f:
+            _json.dump(list(params_set), f, indent=2, ensure_ascii=False)
+        return True
+    except Exception as e:
+        st.error(f"Error al guardar parámetros: {e}")
+        return False
+
 st.set_page_config(page_title="rFactor2 Engineer", layout="wide")
 
 st.title("🏎️ rFactor2 Engineer")
@@ -743,6 +766,10 @@ with st.sidebar:
     # Estado para controlar si hay una sesión activa y analizada
     is_analyzed = 'ai_analysis_data' in st.session_state
 
+    # Inicializar parámetros fijos si no existen
+    if 'fixed_params' not in st.session_state:
+        st.session_state['fixed_params'] = load_fixed_params()
+
     # Para controlar si ya se han cargado archivos pero no analizado
     if 'selected_session_name' not in st.session_state:
         st.session_state['selected_session_name'] = None
@@ -865,6 +892,19 @@ if tele_to_send and svm_to_send:
 
                 with main_tab_setup:
                     st.header("Configuración del Coche (.svm)")
+                    
+                    # Inicializar estado temporal de edición si no existe
+                    if 'temp_fixed_params' not in st.session_state:
+                        st.session_state['temp_fixed_params'] = st.session_state['fixed_params'].copy()
+
+                    def _clean_svm_value(val):
+                        val_str = str(val)
+                        if "//" in val_str:
+                            parts = val_str.split("//", 1)
+                            if len(parts) > 1:
+                                return parts[1].strip()
+                        return val_str.strip()
+
                     setup_data = parse_svm_content(svm_to_send)
                     # Cargar mapping para nombres amigables
                     _mapping_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "app", "core", "param_mapping.json")
@@ -876,47 +916,99 @@ if tele_to_send and svm_to_send:
                         except Exception:
                             pass
 
-                    def _clean_svm_value(val):
-                        val_str = str(val)
-                        if "//" in val_str:
-                            parts = val_str.split("//", 1)
-                            if len(parts) > 1:
-                                return parts[1].strip()
-                        return val_str.strip()
+                    # Formulario para agrupar cambios y evitar recargas por cada clic
+                    with st.form("setup_fixed_params_form", border=False):
+                        # Botón para guardar cambios arriba para accesibilidad
+                        save_col1, save_col2 = st.columns([1.5, 3.5])
+                        with save_col1:
+                            submitted = st.form_submit_button("💾 Guardar parámetros fijados", use_container_width=True)
+                        with save_col2:
+                            st.info("Selecciona los parámetros que quieres fijar para que la IA sepa que no se tienen que modificar y pulsa el botón para guardar todos los cambios.", icon="ℹ️")
 
-                    for section, params in setup_data.items():
-                        if section.upper() in ("LEFTFENDER", "RIGHTFENDER"):
-                            continue
-                        friendly_section = _mapping.get("sections", {}).get(section, section)
-                        with st.expander(f"🔩 {friendly_section}"):
-                            rows = []
-                            for k, v in params.items():
-                                if k.startswith("Gear") and "Setting" in k:
-                                    continue
-                                friendly_param = _mapping.get("parameters", {}).get(k, k)
-                                # Si el parámetro es numérico y no tiene mapeo amigable, 
-                                # o si queremos forzar que ignore claves técnicas internas
-                                if k in ("VehicleClassSetting", "UpgradeSetting"):
-                                    continue
+                        for section, params in setup_data.items():
+                            if section.upper() in ("LEFTFENDER", "RIGHTFENDER"):
+                                continue
+                            friendly_section = _mapping.get("sections", {}).get(section, section)
+                            with st.expander(f"🔩 {friendly_section}"):
+                                rows = []
+                                for k, v in params.items():
+                                    if k.startswith("Gear") and "Setting" in k:
+                                        continue
+                                    friendly_param = _mapping.get("parameters", {}).get(k, k)
+                                    if k in ("VehicleClassSetting", "UpgradeSetting"):
+                                        continue
+                                    
+                                    if friendly_param.startswith("Ajuste de Chasis") or k.startswith("ChassisAdj"):
+                                        continue
+
+                                    clean_v = _clean_svm_value(v)
+                                    if not clean_v:
+                                        continue
+
+                                    is_fixed = k in st.session_state['temp_fixed_params']
+                                    rows.append({
+                                        "Fijar": is_fixed,
+                                        "Parámetro": friendly_param,
+                                        "Valor": clean_v,
+                                        "_internal_key": k
+                                    })
                                 
-                                # Filtramos "Ajuste de Chasis XX" por nombre amigable o técnico
-                                if friendly_param.startswith("Ajuste de Chasis") or k.startswith("ChassisAdj"):
-                                    continue
+                                if rows:
+                                    # Guardar filas para referencia al procesar el formulario
+                                    st.session_state[f"rows_{section}"] = rows
+                                    df_setup = pd.DataFrame(rows)
+                                    # editor sin on_change (se procesa al pulsar el botón del form)
+                                    st.data_editor(
+                                        df_setup,
+                                        column_config={
+                                            "Fijar": st.column_config.CheckboxColumn(
+                                                "Fijar",
+                                                help="Si se marca, la IA no cambiará este valor pero lo usará para el análisis",
+                                                default=False,
+                                            ),
+                                            "Parámetro": st.column_config.TextColumn(disabled=True),
+                                            "Valor": st.column_config.TextColumn(disabled=True),
+                                            "_internal_key": None
+                                        },
+                                        disabled=["Parámetro", "Valor"],
+                                        hide_index=True,
+                                        key=f"editor_{section}",
+                                    )
 
-                                clean_v = _clean_svm_value(v)
-                                # No mostrar si el valor está vacío
-                                if not clean_v:
-                                    continue
-
-                                rows.append({
-                                    "Parámetro": friendly_param,
-                                    "Valor": clean_v
-                                })
-                            if rows:
-                                df_setup = pd.DataFrame(rows)
-                                st.table(df_setup.set_index("Parámetro"))
-                            else:
-                                st.caption("No hay parámetros configurados en esta sección.")
+                        if submitted:
+                            # Procesar todos los editores al enviar el formulario
+                            new_fixed = st.session_state['fixed_params'].copy()
+                            
+                            # Recorrer todas las secciones cargadas
+                            for section in setup_data.keys():
+                                editor_key = f"editor_{section}"
+                                rows_key = f"rows_{section}"
+                                if editor_key in st.session_state and rows_key in st.session_state:
+                                    changes = st.session_state[editor_key]
+                                    rows = st.session_state[rows_key]
+                                    edited_rows = changes.get("edited_rows", {})
+                                    
+                                    # Actualizar basándose en los cambios manuales en el editor
+                                    for idx_str, change in edited_rows.items():
+                                        idx = int(idx_str)
+                                        if idx < len(rows):
+                                            internal_key = rows[idx]["_internal_key"]
+                                            if "Fijar" in change:
+                                                if change["Fijar"]:
+                                                    new_fixed.add(internal_key)
+                                                else:
+                                                    new_fixed.discard(internal_key)
+                            
+                            st.session_state['fixed_params'] = new_fixed
+                            st.session_state['temp_fixed_params'] = new_fixed.copy()
+                            if save_fixed_params(new_fixed):
+                                st.success("¡Parámetros guardados correctamente!")
+                                st.rerun()
+                        
+                        # Si no hay filas en ninguna sección, mostrar mensaje
+                        has_any_rows = any(len(params) > 0 for section, params in setup_data.items() if section.upper() not in ("LEFTFENDER", "RIGHTFENDER"))
+                        if not has_any_rows:
+                            st.caption("No hay parámetros configurados disponibles.")
 
                 with main_tab_ai:
                     st.header("Análisis de Ingeniero Virtual")
@@ -942,6 +1034,10 @@ if tele_to_send and svm_to_send:
                             data_form = {}
                             if sel_model:
                                 data_form["model"] = sel_model
+                            
+                            # Enviar lista de parámetros fijados
+                            if 'fixed_params' in st.session_state and st.session_state['fixed_params']:
+                                data_form["fixed_params"] = _json.dumps(list(st.session_state['fixed_params']))
                             
                             response = requests.post(
                                 "http://localhost:8000/analyze",
