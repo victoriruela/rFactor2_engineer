@@ -96,6 +96,11 @@ Reglas:
 3. Debes proporcionar un razonamiento para CADA parámetro que consideres relevante, incluso si no lo cambias.
 4. Responde SIEMPRE en CASTELLANO.
 5. Devuelve ÚNICAMENTE JSON puro.
+6. RESTRICCIONES DE VALORES:
+   - Parámetros DISCRETOS (solo valores enteros): FuelSetting, BrakeDuctSetting, RadiatorSetting, BoostSetting, RevLimitSetting, EngineBrakeSetting. Solo puedes proponer valores enteros (ej: de 5 a 6, NUNCA de 5 a 5.5).
+   - Parámetros CONTINUOS (permiten decimales): CamberSetting, ToeSetting, PressureSetting, SpringSetting, PackerSetting, SlowBumpSetting, SlowReboundSetting, FastBumpSetting, FastReboundSetting, RideHeightSetting, y similares.
+   - NO propongas cambiar la cantidad de combustible (FuelSetting) salvo que haya un problema claro de peso.
+   - Los valores propuestos deben ser REALISTAS y proporcionados al problema detectado.
 
 JSON puro:
 {{
@@ -105,72 +110,9 @@ JSON puro:
 }}
 """
 
-TIRES_SUSPENSION_ANALYSIS_PROMPT = """
-Eres un Ingeniero Especialista en Neumáticos y Suspensión de rFactor 2. Circuito: {circuit_name}.
-
-Analiza los DATOS COMPLETOS de telemetría submuestreados. Céntrate en el comportamiento en las CURVAS y la comparación entre vueltas.
-Observa temperaturas (Tyre Temp FL/FR/RL/RR), presiones, alturas (Ride Height), y suspensión (Susp Pos, Susp Force).
-
-DATOS DE TELEMETRÍA COMPLETOS:
-{telemetry_summary}
-
-SETUP ACTUAL: {setup_data}
-
-TU TAREA:
-1. Identifica problemas de temperatura o desgaste comparando el inicio y el final de la sesión.
-2. Analiza el balance del coche en curvas: ¿las alturas son correctas? ¿hay "bottoming" (golpeo del fondo contra el suelo)?
-3. Propón cambios para optimizar el grip en curva y la estabilidad.
-4. Cita valores numéricos REALES (ej: "En la curva de la distancia 1500m, la suspensión delantera llega al tope en la vuelta 5").
-
-Responde en CASTELLANO y devuelve ÚNICAMENTE JSON.
-
-JSON puro:
-{{
-  "sections": [
-    {{
-      "name": "NombreSeccionInterno",
-      "items": [
-        {{ "parameter": "NombreOriginal", "new_value": "ValorRecomendado", "reason": "Justificación técnica con datos de curvas y vueltas" }}
-      ]
-    }}
-  ]
-}}
-"""
-
-TIRES_SUSPENSION_VALIDATION_PROMPT = """
-Eres el Ingeniero Jefe de Dinámica Vehicular. Circuito: {circuit_name}.
-
-Tienes acceso a los DATOS COMPLETOS de telemetría submuestreados. Úsalos para validar y complementar las propuestas.
-
-DATOS DE TELEMETRÍA COMPLETOS:
-{telemetry_summary}
-DATOS ORIGINALES DEL SETUP: {original_setup}
-PROPUESTAS DEL PRIMER INGENIERO: {first_proposals}
-
-Tu tarea:
-1. Valida cada propuesta del primer ingeniero contra los datos reales. ¿Los datos respaldan el cambio?
-2. AÑADE propuestas para parámetros que el primer ingeniero NO haya cubierto (presiones, camber, toe, altura, muelles, amortiguadores).
-3. Si el primer ingeniero no propuso cambios suficientes, AÑADE al menos 3 cambios adicionales con valores concretos.
-4. Cada "reason" DEBE citar valores numéricos REALES de la telemetría que justifiquen el cambio.
-5. Explica el MOTIVO técnico de cada valor nuevo propuesto.
-6. Responde en CASTELLANO.
-
-JSON puro:
-{{
-  "sections": [
-    {{
-      "name": "NombreSeccionInterno",
-      "items": [
-        {{ "parameter": "NombreOriginal", "new_value": "ValorRecomendado", "reason": "Justificación con datos reales de telemetría" }}
-      ]
-    }}
-  ]
-}}
-"""
-
 CHIEF_ENGINEER_PROMPT = """
-Eres el Ingeniero Jefe de Competición. Tu responsabilidad es dar la palabra final sobre el setup completo.
-Recibes informes de los especialistas de cada área y del equipo de Neumáticos y Suspensión.
+Eres el Ingeniero Jefe de Competición de un equipo de rFactor 2. Tu responsabilidad es CONSOLIDAR y dar la palabra final sobre el setup completo.
+Recibes informes de TODOS los ingenieros especialistas de cada sección (aerodinámica, motor, suspensión delantera izquierda, suspensión delantera derecha, suspensión trasera izquierda, suspensión trasera derecha, etc.).
 
 CIRCUITO: {circuit_name}
 
@@ -179,16 +121,30 @@ Tienes acceso a los DATOS COMPLETOS de telemetría submuestreados para verificar
 DATOS DE TELEMETRÍA COMPLETOS:
 {telemetry_summary}
 
-Informes de especialistas:
+Informes de TODOS los especialistas:
 {specialist_reports}
 
-Tu tarea:
-1. Revisa cada propuesta de los especialistas y verifica que los datos de telemetría la respaldan.
-2. Asegura coherencia entre todas las recomendaciones (ej: no subir presiones si ya hay sobrecalentamiento).
-3. Cada "reason" DEBE explicar el MOTIVO técnico del cambio citando datos reales de la telemetría.
-4. PROHIBIDO poner "reason" genéricos como "mejora el rendimiento". Cada razón debe ser específica.
-5. Todo el setup es para ser aplicado en el garaje antes de salir a pista.
-6. Responde SIEMPRE en CASTELLANO.
+TU ROL COMO INGENIERO JEFE:
+Tu trabajo NO es simplemente copiar lo que dicen los especialistas. Debes:
+
+1. VISIÓN GLOBAL: Analiza TODAS las propuestas en conjunto. ¿Son coherentes entre sí? ¿Hay contradicciones?
+2. CORRELACIÓN ENTRE EJES: Verifica que los cambios propuestos para el eje delantero sean coherentes con los del eje trasero.
+   - Si se endurece la suspensión delantera, ¿tiene sentido lo propuesto para la trasera?
+   - ¿El balance de rigidez delantero/trasero es correcto para el comportamiento observado?
+   - ¿Los cambios de camber/toe son simétricos izquierda-derecha cuando deben serlo?
+3. COHERENCIA CRUZADA: Verifica que los cambios de una sección no contradigan los de otra.
+   - Ej: No tiene sentido bajar la altura al suelo si la suspensión ya está haciendo "bottoming".
+   - Ej: No subir presiones de neumáticos si ya hay sobrecalentamiento.
+4. RESTRICCIONES DE VALORES:
+   - Parámetros DISCRETOS (solo valores enteros): FuelSetting, BrakeDuctSetting, RadiatorSetting, BoostSetting, RevLimitSetting, EngineBrakeSetting. NUNCA propongas valores decimales para estos.
+   - Parámetros CONTINUOS (permiten decimales): CamberSetting, ToeSetting, PressureSetting, SpringSetting, PackerSetting, SlowBumpSetting, SlowReboundSetting, FastBumpSetting, FastReboundSetting, RideHeightSetting.
+   - NO propongas cambiar la cantidad de combustible (FuelSetting) salvo que haya un problema claro de peso.
+   - Los cambios deben ser PROPORCIONADOS al problema. No hagas cambios drásticos sin justificación clara.
+5. MODIFICAR PROPUESTAS: Si algún especialista propone algo incorrecto o incoherente con el resto, MODIFÍCALO y explica por qué.
+6. Cada "reason" DEBE explicar el MOTIVO técnico del cambio citando datos reales de la telemetría.
+7. PROHIBIDO poner "reason" genéricos como "mejora el rendimiento". Cada razón debe ser ESPECÍFICA con valores numéricos.
+8. Todo el setup es para ser aplicado en el garaje antes de salir a pista.
+9. Responde SIEMPRE en CASTELLANO.
 
 JSON puro:
 {{
@@ -197,7 +153,7 @@ JSON puro:
       {{
         "name": "NombreSeccionInterno",
         "items": [
-          {{ "parameter": "NombreOriginal", "new_value": "ValorFinal", "reason": "Justificación técnica con datos reales de telemetría" }}
+          {{ "parameter": "NombreOriginal", "new_value": "ValorFinal", "reason": "Justificación técnica con datos reales de telemetría, explicando coherencia con el resto del setup" }}
         ]
       }}
     ]
@@ -374,44 +330,24 @@ class AIAngineer:
             print(f"Error en driving_chain: {e}")
             driving_analysis = "No se pudo obtener el análisis de conducción."
 
-        # 3. Análisis de Setup Jerárquico
+        # 3. Análisis de Setup por secciones (un agente por cada sección)
         specialist_reports = []
-        tires_susp_sections = ["FRONTLEFT", "FRONTRIGHT", "REARLEFT", "REARRIGHT", "LEFTFRONT", "RIGHTFRONT", "LEFTREAR", "RIGHTREAR", "SUSPENSION"]
 
-        tires_susp_setup = {s: setup_data[s] for s in setup_data if s in tires_susp_sections}
-
-        # Agente 1: Propuesta inicial neumáticos/suspensión (vía JSON)
-        first_tires_susp_report = await self._get_json_from_llm(TIRES_SUSPENSION_ANALYSIS_PROMPT, {
-            "setup_data": json.dumps(tires_susp_setup, indent=2),
-            "telemetry_summary": telemetry_summary,
-            "circuit_name": circuit_name
-        })
-        print(f"[DEBUG first_tires_susp_report] {repr(str(first_tires_susp_report)[:300])}")
-
-        # Agente 2: Validación y mejora
-        final_tires_susp_report = await self._get_json_from_llm(TIRES_SUSPENSION_VALIDATION_PROMPT, {
-            "original_setup": json.dumps(tires_susp_setup, indent=2),
-            "first_proposals": json.dumps(first_tires_susp_report, indent=2) if first_tires_susp_report else "Sin propuestas",
-            "telemetry_summary": telemetry_summary,
-            "circuit_name": circuit_name
-        })
-        print(f"[DEBUG final_tires_susp_report] {repr(str(final_tires_susp_report)[:300])}")
-
-        if final_tires_susp_report:
-            specialist_reports.extend(final_tires_susp_report.get("sections", []))
-        elif first_tires_susp_report:
-            specialist_reports.extend(first_tires_susp_report.get("sections", []))
-
-        # Analizar otras secciones (Aerodinámica, Motor, etc.)
         for section_name, section_data in setup_data.items():
-            if section_name in tires_susp_sections:
+            # Excluir la sección BASIC del análisis de agentes
+            if section_name.upper() == "BASIC":
+                continue
+
+            # Filtrar GearXSetting de la sección driveline antes de enviar al agente
+            filtered_data = {k: v for k, v in section_data.items() if not (k.startswith('Gear') and 'Setting' in k)}
+            if not filtered_data:
                 continue
 
             friendly_section = self._get_friendly_name(section_name, 'section')
             report = await self._get_json_from_llm(SECTION_AGENT_PROMPT, {
                 "section_name": friendly_section,
                 "telemetry_summary": telemetry_summary,
-                "section_data": json.dumps(section_data, indent=2),
+                "section_data": json.dumps(filtered_data, indent=2),
                 "context_data": "N/A",
                 "circuit_name": circuit_name
             })
@@ -456,22 +392,32 @@ class AIAngineer:
         full_setup_recommendations = {"sections": []}
 
         for section_name, orig_section_data in setup_data.items():
+            # Excluir la sección BASIC (Ajustes Básicos) del setup recomendado
+            if section_name.upper() == "BASIC":
+                continue
+
             friendly_section = self._get_friendly_name(section_name, 'section')
             items = []
 
             # Buscamos recomendaciones tanto por nombre técnico como amigable (por si acaso el LLM usó el amigable)
             reco_dict = all_reco_map.get(section_name, {})
             if not reco_dict:
-                # Intentar buscar por nombre amigable si el LLM se confundió
+                # Intentar buscar por nombre amigable o coincidencia parcial
                 for k, v in all_reco_map.items():
-                    if k.lower() == friendly_section.lower():
+                    if k.lower() == friendly_section.lower() or k.lower() == section_name.lower():
                         reco_dict = v
                         break
+                # Si aún no hay match, buscar por coincidencia parcial (el LLM puede devolver nombres similares)
+                if not reco_dict:
+                    for k, v in all_reco_map.items():
+                        if section_name.lower() in k.lower() or k.lower() in section_name.lower():
+                            reco_dict = v
+                            break
 
             for param_key, current_val in orig_section_data.items():
+                # Excluir todas las marchas (GearXSetting) de la sección driveline
                 if param_key.startswith("Gear") and "Setting" in param_key:
-                    num_part = param_key.replace("Gear", "").replace("Setting", "")
-                    if num_part.isdigit(): continue
+                    continue
 
                 friendly_param = self._get_friendly_name(param_key)
                 

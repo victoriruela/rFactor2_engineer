@@ -643,20 +643,36 @@ if tele_to_send and svm_to_send:
                             )
                             if response.status_code == 200:
                                 data = response.json()
-                                st.subheader("Resumen de Análisis")
-                                col1, col2 = st.columns(2)
-                                with col1:
-                                    st.info(data['driving_analysis'])
-                                with col2:
-                                    st.warning(data['setup_analysis'])
-                                st.subheader("Mapa de Problemas")
-                                track_fig = go.Figure()
-                                track_fig.add_trace(go.Scatter(
-                                    x=data['circuit_data']['x'],
-                                    y=data['circuit_data']['y'],
-                                    mode='lines', name='Circuito'
-                                ))
-                                st.plotly_chart(track_fig, use_container_width=True)
+
+                                # ── Análisis del Ingeniero de Conducción ──
+                                st.subheader("🏁 Análisis del Ingeniero de Conducción")
+                                st.info(data['driving_analysis'])
+
+
+                                # ── Setup Completo Recomendado ──
+                                if data.get('full_setup') and data['full_setup'].get('sections'):
+                                    st.subheader("⚙️ Setup Completo Recomendado por los ingenieros")
+                                    for section in data['full_setup']['sections']:
+                                        s_name = section.get('name', 'Sección')
+                                        s_items = section.get('items', [])
+                                        if not s_items:
+                                            continue
+                                        # Separar parámetros con cambios de los que no
+                                        changed_items = [it for it in s_items if str(it.get('current', '')) != str(it.get('new', ''))]
+                                        unchanged_items = [it for it in s_items if str(it.get('current', '')) == str(it.get('new', ''))]
+                                        with st.expander(f"🔩 {s_name} ({len(changed_items)} cambios)", expanded=bool(changed_items)):
+                                            if changed_items:
+                                                rows = []
+                                                for it in changed_items:
+                                                    rows.append({
+                                                        "Parámetro": it.get('parameter', ''),
+                                                        "Actual": it.get('current', ''),
+                                                        "Recomendado": it.get('new', ''),
+                                                        "Motivo": it.get('reason', '')
+                                                    })
+                                                st.table(pd.DataFrame(rows))
+                                            else:
+                                                st.caption("No se recomiendan cambios en esta sección.")
                             else:
                                 st.error("Error en el análisis.")
             else:
