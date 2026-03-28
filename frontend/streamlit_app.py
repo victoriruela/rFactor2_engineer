@@ -92,176 +92,396 @@ def _lap_xy(lap_df, x_col, y_col):
     return xs, ys
 
 
-def _build_lap_figures(lap_df):
-    """Construye todos los objetos Figure para una vuelta dada."""
-    line_style = dict(width=1)
-    colors = ['cyan', 'magenta', 'lime', 'orange']
-    wheels = ['FL', 'FR', 'RL', 'RR']
+def _build_lap_data(lap_df):
+    """Extrae los datos crudos necesarios para la telemetría interactiva."""
     x_col = 'Lap_Distance'
+    if x_col not in lap_df.columns:
+        return None
 
-    figs = {}
+    # Datos básicos del mapa y distancia
+    data = {
+        'max_dist': float(lap_df[x_col].max()),
+        'channels': {}
+    }
 
-    # ── General ──────────────────────────────────────────────────────────────
-    fig_speed = go.Figure()
-    xs, ys = _lap_xy(lap_df, x_col, 'Ground_Speed')
-    fig_speed.add_trace(go.Scatter(x=xs, y=ys, name="Velocidad (km/h)", line=line_style, connectgaps=False))
-    fig_speed.update_layout(height=300, template="plotly_dark", xaxis_title="Distancia (m)", margin=dict(l=0, r=0, t=30, b=0))
-    figs['speed'] = fig_speed
+    # Definir qué canales queremos extraer para los gráficos
+    # Formato: { 'id_del_grafico': [ ('canal_y', 'Nombre visible'), ... ] }
+    chart_configs = {
+        'speed': [('Ground_Speed', 'Velocidad (km/h)')],
+        'controls': [('Throttle_Pos', 'Acelerador (%)'), ('Brake_Pos', 'Freno (%)')],
+        'steer': [('Steering_Wheel_Position', 'Dirección')],
+        'rpm': [('Engine_RPM', 'RPM')],
+        'gear': [('Gear', 'Marcha')],
+        'susp_pos': [(f'Susp_Pos_{w}', f'Susp {w}') for w in ['FL', 'FR', 'RL', 'RR']],
+        'ride_height': [(f'Ride_Height_{w}', f'RH {w}') for w in ['FL', 'FR', 'RL', 'RR']],
+        'brake_temp': [(f'Brake_Temp_{w}', f'Brake Temp {w}') for w in ['FL', 'FR', 'RL', 'RR']],
+        'tyre_pres': [(f'Tyre_Pressure_{w}', f'Tyre Pres {w}') for w in ['FL', 'FR', 'RL', 'RR']],
+        'aero': [('Front_Downforce', 'Front DF'), ('Rear_Downforce', 'Rear DF')]
+    }
 
-    fig_ctrl = go.Figure()
-    for col, label in [('Throttle_Pos', 'Acelerador (%)'), ('Brake_Pos', 'Freno (%)')]:
-        if col in lap_df.columns:
-            xs, ys = _lap_xy(lap_df, x_col, col)
-            ys_pct = [v * 100 if v is not None else None for v in ys]
-            fig_ctrl.add_trace(go.Scatter(x=xs, y=ys_pct, name=label, line=line_style, connectgaps=False))
-    fig_ctrl.update_layout(height=300, template="plotly_dark", xaxis_title="Distancia (m)", margin=dict(l=0, r=0, t=30, b=0))
-    figs['controls'] = fig_ctrl
+    # Extraer datos para cada canal
+    for chart_id, configs in chart_configs.items():
+        data['channels'][chart_id] = []
+        for col, label in configs:
+            if col in lap_df.columns:
+                xs, ys = _lap_xy(lap_df, x_col, col)
+                # Normalización de unidades si es necesario
+                if 'Pos' in col: ys = [v * 100 if v is not None else None for v in ys]
+                if 'Height' in col: ys = [v * 1000 if v is not None else None for v in ys]
+                
+                data['channels'][chart_id].append({
+                    'name': label,
+                    'x': xs,
+                    'y': ys
+                })
 
-    fig_steer = go.Figure()
-    xs, ys = _lap_xy(lap_df, x_col, 'Steering_Wheel_Position')
-    fig_steer.add_trace(go.Scatter(x=xs, y=ys, name="Dirección", line=line_style, connectgaps=False))
-    fig_steer.update_layout(height=300, template="plotly_dark", title="Volante", xaxis_title="Distancia (m)", margin=dict(l=0, r=0, t=30, b=0))
-    figs['steer'] = fig_steer
-
-    # ── Motor ─────────────────────────────────────────────────────────────────
-    fig_rpm = go.Figure()
-    xs, ys = _lap_xy(lap_df, x_col, 'Engine_RPM')
-    fig_rpm.add_trace(go.Scatter(x=xs, y=ys, name="RPM", line=line_style, connectgaps=False))
-    fig_rpm.update_layout(height=300, template="plotly_dark", xaxis_title="Distancia (m)", margin=dict(l=0, r=0, t=30, b=0))
-    figs['rpm'] = fig_rpm
-
-    fig_gear = go.Figure()
-    xs, ys = _lap_xy(lap_df, x_col, 'Gear')
-    fig_gear.add_trace(go.Scatter(x=xs, y=ys, name="Marcha", line=line_style, connectgaps=False))
-    fig_gear.update_layout(height=250, template="plotly_dark", xaxis_title="Distancia (m)", margin=dict(l=0, r=0, t=30, b=0))
-    figs['gear'] = fig_gear
-
-    # ── Suspensión ────────────────────────────────────────────────────────────
-    fig_susp = go.Figure()
-    for i, w in enumerate(wheels):
-        col = f'Susp_Pos_{w}'
-        if col in lap_df.columns:
-            xs, ys = _lap_xy(lap_df, x_col, col)
-            fig_susp.add_trace(go.Scatter(x=xs, y=ys, name=f"Susp {w}", line=dict(color=colors[i], width=1), connectgaps=False))
-    fig_susp.update_layout(height=400, template="plotly_dark", xaxis_title="Distancia (m)", margin=dict(l=0, r=0, t=30, b=0))
-    figs['susp_pos'] = fig_susp
-
-    fig_rh = go.Figure()
-    for i, w in enumerate(wheels):
-        col = f'Ride_Height_{w}'
-        if col in lap_df.columns:
-            xs, ys = _lap_xy(lap_df, x_col, col)
-            ys_mm = [v * 1000 if v is not None else None for v in ys]
-            fig_rh.add_trace(go.Scatter(x=xs, y=ys_mm, name=f"RH {w}", line=dict(color=colors[i], width=1), connectgaps=False))
-    fig_rh.update_layout(height=400, template="plotly_dark", yaxis_title="mm", xaxis_title="Distancia (m)", margin=dict(l=0, r=0, t=30, b=0))
-    figs['ride_height'] = fig_rh
-
-    # ── Neumáticos ────────────────────────────────────────────────────────────
-    fig_brk = go.Figure()
-    for i, w in enumerate(wheels):
-        col = f'Brake_Temp_{w}'
-        if col in lap_df.columns:
-            xs, ys = _lap_xy(lap_df, x_col, col)
-            fig_brk.add_trace(go.Scatter(x=xs, y=ys, name=f"Brake Temp {w}", line=dict(color=colors[i], width=1), connectgaps=False))
-    fig_brk.update_layout(height=400, template="plotly_dark", yaxis_title="°C", xaxis_title="Distancia (m)", margin=dict(l=0, r=0, t=30, b=0))
-    figs['brake_temp'] = fig_brk
-
-    fig_pres = go.Figure()
-    for i, w in enumerate(wheels):
-        col = f'Tyre_Pressure_{w}'
-        if col in lap_df.columns:
-            xs, ys = _lap_xy(lap_df, x_col, col)
-            fig_pres.add_trace(go.Scatter(x=xs, y=ys, name=f"Tyre Pres {w}", line=dict(color=colors[i], width=1), connectgaps=False))
-    fig_pres.update_layout(height=400, template="plotly_dark", yaxis_title="kPa", xaxis_title="Distancia (m)", margin=dict(l=0, r=0, t=30, b=0))
-    figs['tyre_pres'] = fig_pres
-
-    # ── Aero ──────────────────────────────────────────────────────────────────
-    fig_aero = go.Figure()
-    for col, label in [('Front_Downforce', 'Front DF'), ('Rear_Downforce', 'Rear DF')]:
-        if col in lap_df.columns:
-            xs, ys = _lap_xy(lap_df, x_col, col)
-            fig_aero.add_trace(go.Scatter(x=xs, y=ys, name=label, line=line_style, connectgaps=False))
-    fig_aero.update_layout(height=400, template="plotly_dark", xaxis_title="Distancia (m)", margin=dict(l=0, r=0, t=30, b=0))
-    figs['aero'] = fig_aero
-
-    # ── Circuito (GPS) ────────────────────────────────────────────────────────
+    # Datos del mapa (GPS)
     if 'GPS_Longitude' in lap_df.columns and 'GPS_Latitude' in lap_df.columns:
-        # Para el mapa GPS usamos los datos tal cual (ya suavizados en el parser)
-        # Insertamos None donde hay saltos grandes en longitud
-        xs, ys = _lap_xy(lap_df, 'GPS_Longitude', 'GPS_Latitude')
-        fig_map = go.Figure()
-        fig_map.add_trace(go.Scatter(x=xs, y=ys, mode='lines', line=dict(color='yellow', width=1.5), connectgaps=False))
-        fig_map.update_layout(
-            height=600, template="plotly_dark",
-            yaxis=dict(scaleanchor="x", scaleratio=1),
-            margin=dict(l=0, r=0, t=30, b=0)
-        )
-        figs['map'] = fig_map
+        m_xs, m_ys = _lap_xy(lap_df, 'GPS_Longitude', 'GPS_Latitude')
+        # También necesitamos la distancia asociada a cada punto GPS para sincronizar
+        dist_arr = lap_df[x_col].values.tolist()
+        data['map'] = {
+            'lon': m_xs,
+            'lat': m_ys,
+            'dist': dist_arr
+        }
 
-    return figs
+    return data
 
 
 @st.cache_resource(show_spinner=False)
 def precompute_all_laps(df, laps):
     """
-    Pre-genera los objetos Figure de todas las vueltas y los devuelve.
+    Pre-genera los datos de todas las vueltas y los devuelve.
     Se cachea como recurso para que no se re-calcule al interactuar con la UI.
     """
-    all_figs = {}
+    all_data = {}
     progress_container = st.empty()
     total_laps = len(laps)
     for i, lap in enumerate(laps):
         lap_df = df[df['Lap_Number'] == lap].copy()
-        # Mantenemos el orden temporal original (ya viene ordenado por Session_Elapsed_Time)
-        # NO ordenar por Lap_Distance aquí, dejar que _lap_xy maneje la secuencia.
-        all_figs[lap] = _build_lap_figures(lap_df)
+        all_data[lap] = _build_lap_data(lap_df)
         with progress_container.container():
             st.progress((i + 1) / total_laps, text=f"Procesando Vuelta {lap} de {laps[-1]}...")
     
     progress_container.empty()
-    return all_figs
+    return all_data
 
 
-def plot_telemetry_charts(figs):
-    """Renderiza los gráficos pre-generados de una vuelta."""
-    if not figs:
+def plot_interactive_telemetry(lap_data):
+    """Renderiza la telemetría interactiva usando un componente HTML/JS con Plotly.js."""
+    if not lap_data:
         st.warning("No hay datos para esta vuelta.")
         return
 
-    tabs = st.tabs(["General", "Motor", "Suspensión", "Neumáticos", "Aerodinámica", "Circuito"])
+    import json
+    data_json = json.dumps(lap_data)
+    
+    # Altura total estimada para evitar scroll interno molesto
+    # Mapa (200) + 3 gráficos por pestaña (~350 cada uno) + Tabs
+    total_height = 1300 
 
-    with tabs[0]:
-        st.subheader("Velocidad")
-        st.plotly_chart(figs['speed'], use_container_width=True)
-        st.subheader("Controles (Acelerador y Freno)")
-        st.plotly_chart(figs['controls'], use_container_width=True)
-        st.plotly_chart(figs['steer'], use_container_width=True)
+    html_code = f"""
+    <script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
+    <style>
+        body {{ margin: 0; background: #111; }}
+        .telemetry-container {{ background-color: #111; color: white; font-family: sans-serif; width: 100%; box-sizing: border-box; }}
+        .tabs {{ display: flex; border-bottom: 1px solid #444; margin-bottom: 10px; }}
+        .tab {{ padding: 10px 20px; cursor: pointer; border: 1px solid transparent; color: #ccc; }}
+        .tab.active {{ border: 1px solid #444; border-bottom: 1px solid #111; background: #222; font-weight: bold; color: white; }}
+        .tab-content {{ display: none; }}
+        .tab-content.active {{ display: block; }}
+        .chart-wrapper {{ position: relative; width: 100%; margin-bottom: 5px; box-sizing: border-box; cursor: crosshair; }}
+        .chart-wrapper canvas.red-line {{ position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 10; }}
+        #map-container {{ width: 100%; margin-bottom: 15px; border: 1px solid #333; }}
+    </style>
 
-    with tabs[1]:
-        st.subheader("Motor y Transmisión")
-        st.plotly_chart(figs['rpm'], use_container_width=True)
-        st.plotly_chart(figs['gear'], use_container_width=True)
+    <div class="telemetry-container">
+        <div id="map-container"></div>
+        
+        <div class="tabs">
+            <div class="tab active" onclick="showTab('general', this)">General</div>
+            <div class="tab" onclick="showTab('motor', this)">Motor</div>
+            <div class="tab" onclick="showTab('suspension', this)">Suspensión</div>
+            <div class="tab" onclick="showTab('neumaticos', this)">Neumáticos</div>
+            <div class="tab" onclick="showTab('aero', this)">Aerodinámica</div>
+        </div>
 
-    with tabs[2]:
-        st.subheader("Posición de Suspensión")
-        st.plotly_chart(figs['susp_pos'], use_container_width=True)
-        st.subheader("Ride Heights")
-        st.plotly_chart(figs['ride_height'], use_container_width=True)
+        <div id="general" class="tab-content active">
+            <div id="wrap-speed" class="chart-wrapper"><div id="chart-speed"></div><canvas class="red-line"></canvas></div>
+            <div id="wrap-controls" class="chart-wrapper"><div id="chart-controls"></div><canvas class="red-line"></canvas></div>
+            <div id="wrap-steer" class="chart-wrapper"><div id="chart-steer"></div><canvas class="red-line"></canvas></div>
+        </div>
+        <div id="motor" class="tab-content">
+            <div id="wrap-rpm" class="chart-wrapper"><div id="chart-rpm"></div><canvas class="red-line"></canvas></div>
+            <div id="wrap-gear" class="chart-wrapper"><div id="chart-gear"></div><canvas class="red-line"></canvas></div>
+        </div>
+        <div id="suspension" class="tab-content">
+            <div id="wrap-susp_pos" class="chart-wrapper"><div id="chart-susp_pos"></div><canvas class="red-line"></canvas></div>
+            <div id="wrap-ride_height" class="chart-wrapper"><div id="chart-ride_height"></div><canvas class="red-line"></canvas></div>
+        </div>
+        <div id="neumaticos" class="tab-content">
+            <div id="wrap-brake_temp" class="chart-wrapper"><div id="chart-brake_temp"></div><canvas class="red-line"></canvas></div>
+            <div id="wrap-tyre_pres" class="chart-wrapper"><div id="chart-tyre_pres"></div><canvas class="red-line"></canvas></div>
+        </div>
+        <div id="aero" class="tab-content">
+            <div id="wrap-aero" class="chart-wrapper"><div id="chart-aero"></div><canvas class="red-line"></canvas></div>
+        </div>
+    </div>
 
-    with tabs[3]:
-        st.subheader("Temperaturas de Frenos")
-        st.plotly_chart(figs['brake_temp'], use_container_width=True)
-        st.subheader("Presiones de Neumáticos")
-        st.plotly_chart(figs['tyre_pres'], use_container_width=True)
+    <script>
+        const lapData = {data_json};
+        const charts = []; // {{el, id, wrapper, canvas}}
+        let mapChart = null;
+        let isDragging = false;
+        let pendingX = null;
+        let rafId = null;
+        let lastX = 0;
 
-    with tabs[4]:
-        st.subheader("Downforce")
-        st.plotly_chart(figs['aero'], use_container_width=True)
+        // Tab switching - simple display toggle + resize visible charts
+        function showTab(tabId, tabEl) {{
+            document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
+            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+            document.getElementById(tabId).classList.add('active');
+            tabEl.classList.add('active');
+            requestAnimationFrame(() => {{
+                const tab = document.getElementById(tabId);
+                tab.querySelectorAll('.chart-wrapper > div:first-child').forEach(c => {{
+                    if (c.data) Plotly.Plots.resize(c);
+                }});
+                drawAllRedLines();
+            }});
+        }}
 
-    with tabs[5]:
-        st.subheader("Trazado GPS")
-        if 'map' in figs:
-            st.plotly_chart(figs['map'], use_container_width=True)
+        // Binary search for map position
+        let mapDistSorted = null;
+        let mapDistIndices = null;
+        if (lapData.map) {{
+            const n = lapData.map.dist.length;
+            mapDistIndices = Array.from({{length: n}}, (_, i) => i);
+            mapDistIndices.sort((a, b) => lapData.map.dist[a] - lapData.map.dist[b]);
+            mapDistSorted = mapDistIndices.map(i => lapData.map.dist[i]);
+        }}
+
+        function findClosestMapIdx(x) {{
+            let lo = 0, hi = mapDistSorted.length - 1;
+            while (lo < hi) {{
+                const mid = (lo + hi) >> 1;
+                if (mapDistSorted[mid] < x) lo = mid + 1;
+                else hi = mid;
+            }}
+            if (lo > 0 && Math.abs(mapDistSorted[lo-1] - x) < Math.abs(mapDistSorted[lo] - x)) lo--;
+            return mapDistIndices[lo];
+        }}
+
+        const commonLayout = {{
+            template: "plotly_dark",
+            paper_bgcolor: 'rgba(0,0,0,0)',
+            plot_bgcolor: 'rgba(0,0,0,0)',
+            margin: {{ l: 60, r: 20, t: 35, b: 40 }},
+            xaxis: {{ title: "Distancia (m)", range: [0, lapData.max_dist], fixedrange: true, gridcolor: '#333' }},
+            yaxis: {{ gridcolor: '#333', autorange: true, fixedrange: true }},
+            showlegend: true,
+            legend: {{ orientation: "h", y: 1.12, x: 1, xanchor: 'right' }},
+            hovermode: false,
+            dragmode: false
+        }};
+
+        // Map
+        if (lapData.map) {{
+            const mapTrace = {{
+                x: lapData.map.lon, y: lapData.map.lat,
+                mode: 'lines', line: {{ color: '#666', width: 2 }}, hoverinfo: 'skip'
+            }};
+            const posTrace = {{
+                x: [lapData.map.lon[0]], y: [lapData.map.lat[0]],
+                mode: 'markers', marker: {{ color: 'red', size: 12, symbol: 'x' }}, name: 'Coche'
+            }};
+            mapChart = document.getElementById('map-container');
+            Plotly.newPlot(mapChart, [mapTrace, posTrace], {{
+                template: "plotly_dark",
+                paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: 'rgba(0,0,0,0)',
+                height: 250,
+                xaxis: {{ visible: false, fixedrange: true }},
+                yaxis: {{ visible: false, scaleanchor: "x", scaleratio: 1, fixedrange: true }},
+                margin: {{ l: 10, r: 10, t: 10, b: 10 }},
+                showlegend: false, dragmode: false
+            }}, {{ displayModeBar: false, staticPlot: true }});
+        }}
+
+        // Charts - use staticPlot:true for instant rendering, no WebGL issues
+        const chartIds = [
+            'speed', 'controls', 'steer', 'rpm', 'gear',
+            'susp_pos', 'ride_height', 'brake_temp', 'tyre_pres', 'aero'
+        ];
+        const chartTitles = {{
+            speed: 'Velocidad', controls: 'Controles', steer: 'Dirección',
+            rpm: 'RPM', gear: 'Marcha',
+            susp_pos: 'Posición Suspensión', ride_height: 'Altura al Suelo',
+            brake_temp: 'Temp. Frenos', tyre_pres: 'Presión Neumáticos',
+            aero: 'Aerodinámica'
+        }};
+
+        const plotPromises = [];
+
+        chartIds.forEach(id => {{
+            const container = document.getElementById('chart-' + id);
+            const wrapper = document.getElementById('wrap-' + id);
+            if (!container || !wrapper || !lapData.channels[id]) return;
+
+            const canvas = wrapper.querySelector('canvas.red-line');
+            const traces = lapData.channels[id].map(ch => ({{
+                x: ch.x, y: ch.y, name: ch.name,
+                mode: 'lines', line: {{ width: 1.5 }}, connectgaps: false
+            }}));
+
+            const chartHeight = (id === 'gear') ? 250 : 320;
+
+            const p = Plotly.newPlot(container, traces, {{
+                ...commonLayout,
+                height: chartHeight,
+                title: {{ text: chartTitles[id] || id.toUpperCase(), font: {{ size: 13 }} }}
+            }}, {{ displayModeBar: false, staticPlot: true }});
+
+            plotPromises.push(p);
+            charts.push({{ el: container, id: id, wrapper: wrapper, canvas: canvas }});
+
+            // Drag events on the wrapper (canvas is pointer-events:none)
+            wrapper.addEventListener('mousedown', function(e) {{
+                isDragging = true;
+                syncFromEvent(e, container);
+            }});
+            wrapper.addEventListener('mousemove', function(e) {{
+                if (isDragging) syncFromEvent(e, container);
+            }});
+        }});
+
+        document.addEventListener('mouseup', () => {{ isDragging = false; }});
+        document.addEventListener('selectstart', (e) => {{ if (isDragging) e.preventDefault(); }});
+
+        function resizeAllCharts() {{
+            const allTabs = document.querySelectorAll('.tab-content');
+            allTabs.forEach(t => {{
+                if (!t.classList.contains('active')) {{
+                    t.style.display = 'block';
+                    t.style.visibility = 'hidden';
+                    t.style.height = '0';
+                    t.style.overflow = 'hidden';
+                }}
+            }});
+            charts.forEach(c => Plotly.Plots.resize(c.el));
+            if (mapChart && mapChart.data) Plotly.Plots.resize(mapChart);
+            allTabs.forEach(t => {{
+                if (!t.classList.contains('active')) {{
+                    t.style.display = '';
+                    t.style.visibility = '';
+                    t.style.height = '';
+                    t.style.overflow = '';
+                }}
+            }});
+            drawAllRedLines();
+        }}
+
+        // Wait for all plots then resize ALL (temporarily show hidden tabs)
+        Promise.all(plotPromises).then(() => {{
+            resizeAllCharts();
+            // Also resize after a short delay to catch late iframe width changes
+            setTimeout(resizeAllCharts, 100);
+            setTimeout(resizeAllCharts, 500);
+        }});
+
+        // Use ResizeObserver to catch any container width changes (e.g. when switching laps)
+        const ro = new ResizeObserver(() => {{ resizeAllCharts(); }});
+        ro.observe(document.querySelector('.telemetry-container'));
+
+        function syncFromEvent(e, container) {{
+            const layout = container._fullLayout;
+            if (!layout) return;
+            const l = layout.margin.l;
+            const plotWidth = layout.width - l - layout.margin.r;
+            const containerRect = container.getBoundingClientRect();
+            const relX = e.clientX - containerRect.left - l;
+            const fraction = relX / plotWidth;
+            const xRange = layout.xaxis.range;
+            const xVal = xRange[0] + fraction * (xRange[1] - xRange[0]);
+            const clampedX = Math.max(0, Math.min(lapData.max_dist, xVal));
+            scheduleSync(clampedX);
+        }}
+
+        function scheduleSync(x) {{
+            pendingX = x;
+            if (!rafId) {{
+                rafId = requestAnimationFrame(() => {{
+                    rafId = null;
+                    sync(pendingX);
+                }});
+            }}
+        }}
+
+        // Draw red line on canvas overlay - extremely fast, no Plotly calls
+        function drawRedLine(chart, x) {{
+            const canvas = chart.canvas;
+            const el = chart.el;
+            const layout = el._fullLayout;
+            if (!layout || !canvas) return;
+
+            const w = el.offsetWidth;
+            const h = el.offsetHeight;
+            if (canvas.width !== w || canvas.height !== h) {{
+                canvas.width = w;
+                canvas.height = h;
+            }}
+
+            const ctx = canvas.getContext('2d');
+            ctx.clearRect(0, 0, w, h);
+
+            const ml = layout.margin.l;
+            const mr = layout.margin.r;
+            const mt = layout.margin.t;
+            const mb = layout.margin.b;
+            const plotWidth = w - ml - mr;
+            const xRange = layout.xaxis.range;
+            const fraction = (x - xRange[0]) / (xRange[1] - xRange[0]);
+            const px = ml + fraction * plotWidth;
+
+            ctx.beginPath();
+            ctx.moveTo(px, mt);
+            ctx.lineTo(px, h - mb);
+            ctx.strokeStyle = 'red';
+            ctx.lineWidth = 2;
+            ctx.stroke();
+        }}
+
+        function drawAllRedLines() {{
+            charts.forEach(c => drawRedLine(c, lastX));
+        }}
+
+        function sync(x) {{
+            lastX = x;
+            // Draw red lines on canvas overlays (instant, no Plotly overhead)
+            drawAllRedLines();
+
+            // Update map marker
+            if (mapChart && lapData.map && mapDistSorted) {{
+                const idx = findClosestMapIdx(x);
+                Plotly.restyle(mapChart, {{
+                    x: [[lapData.map.lon[idx]]],
+                    y: [[lapData.map.lat[idx]]]
+                }}, [1]);
+            }}
+        }}
+    </script>
+    """
+    import streamlit.components.v1 as components
+    # Forzar que el iframe ocupe todo el ancho disponible
+    st.markdown("""
+    <style>
+        iframe[title="streamlit_app.plot_interactive_telemetry"] { width: 100% !important; }
+        .stHtml iframe, .element-container iframe { width: 100% !important; }
+        div[data-testid="stIFrame"] iframe { width: 100% !important; }
+    </style>
+    """, unsafe_allow_html=True)
+    components.html(html_code, height=total_height, scrolling=False)
 
 
 def parse_svm_content(file_bytes):
@@ -385,8 +605,8 @@ if tele_to_send and svm_to_send:
 
                     for i, lap in enumerate(laps):
                         with lap_tabs[i]:
-                            # Renderizar gráficos para esta vuelta (ya están precomputeados)
-                            plot_telemetry_charts(all_lap_figs.get(lap, {}))
+                            # Renderizar telemetría interactiva (JS)
+                            plot_interactive_telemetry(all_lap_figs.get(lap))
 
                 with main_tab_setup:
                     st.header("Configuración del Coche (.svm)")
