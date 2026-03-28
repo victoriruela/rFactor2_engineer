@@ -611,15 +611,22 @@ def plot_all_laps_interactive(all_lap_figs, laps, lap_options, fastest_lap):
         function updateSidebarPosition() {{
             const sidebar = document.getElementById('lap-sidebar');
             if (!sidebar) return;
-            const container = document.querySelector('.telemetry-container');
-            if (!container) return;
-            // Get the iframe's position relative to the viewport via parent
             try {{
                 const iframeRect = window.frameElement ? window.frameElement.getBoundingClientRect() : null;
                 if (iframeRect) {{
-                    // How much of the iframe is scrolled above the viewport
                     const scrolledAbove = Math.max(0, -iframeRect.top);
-                    sidebar.style.transform = 'translateY(' + scrolledAbove + 'px)';
+                    const viewportH = window.parent.innerHeight || window.innerHeight;
+                    const sidebarH = sidebar.offsetHeight;
+                    // Center the sidebar in the visible portion of the iframe
+                    const visibleTop = scrolledAbove;
+                    const visibleBottom = scrolledAbove + viewportH;
+                    const visibleH = visibleBottom - visibleTop;
+                    let targetY = visibleTop + Math.max(0, (visibleH - sidebarH) / 2);
+                    // Clamp so sidebar doesn't go below container
+                    const containerH = sidebar.parentElement ? sidebar.parentElement.offsetHeight : 0;
+                    targetY = Math.min(targetY, Math.max(0, containerH - sidebarH));
+                    targetY = Math.max(0, targetY);
+                    sidebar.style.transform = 'translateY(' + targetY + 'px)';
                 }}
             }} catch(e) {{}}
         }}
