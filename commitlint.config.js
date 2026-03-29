@@ -15,7 +15,7 @@ module.exports = {
       'revert',   // revert a previous commit
       'release',  // version release
     ]],
-    'subject-case': [2, 'always', 'lower-case'],
+    'subject-case': [0],  // disabled — filenames and acronyms contain uppercase
     'header-max-length': [2, 'always', 100],
   },
 };

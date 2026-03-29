@@ -335,59 +335,255 @@ Key points:
 
 ## Development Methodology
 
-Rules for all agentic (multi-subagent) development work on this project.
+Rules and operational playbook for all agentic (multi-subagent) development work on this project.
 
-### 1. Task Planning (Asana)
+---
 
-- All project upgrades must be planned as a group of Asana tasks **before any work begins**
-- Tasks must have explicit dependency edges so the supervisor can determine which are safe to parallelize
-- Only tasks with no unresolved upstream dependencies may be handed to a subagent at a given moment
+### Phase Specification Format
 
-### 2. Git Isolation (Worktrees)
+All work is organized in **phases**. A phase is a coherent unit of work (e.g., "Add .ld file support", "Refactor AI pipeline to streaming") that produces one Release Candidate when merged to `develop`. The supervisor receives a phase spec as input — either from the user or from a higher-level planning step.
 
-- Each subagent works in its own isolated git worktree (`git worktree add`)
-- Worktrees branch off the current `develop` HEAD at task start
-- Subagents must **not** push or merge — they commit only; the supervisor performs all merges
-- **Every subagent prompt must explicitly state: "Commit your work and stop. Do not merge or push."**
+A phase spec must contain:
 
-### 3. Asana Status Lifecycle (Supervisor, Atomic)
+```
+Phase: <short name>
+Goal: <what this phase delivers, in 1-2 sentences>
+Scope: <which areas of the codebase are affected>
+Version bump: patch | minor | major
 
-The supervisor updates Asana task status at exactly three moments, synchronously:
+Tasks:
+  1. <task name>
+     Description: <what the subagent must implement>
+     Files: <expected files to create/modify>
+     Depends on: none | <task numbers>
 
-| Moment | Status transition |
-|---|---|
-| Before handing task to subagent | → In Progress |
-| After subagent delivers its result | → In Review |
-| After supervisor finalizes the merge | → Done |
+  2. <task name>
+     Description: ...
+     Files: ...
+     Depends on: 1
 
-No other agent or process should write task status.
+  3. <task name>
+     Description: ...
+     Files: ...
+     Depends on: none
 
-### 4. Merge Protocol (Supervisor)
+  (tasks 2 and 3 can run in parallel; task 1 must finish first)
+```
 
-- Supervisor waits for the subagent's commit before proceeding
-- All merges are performed by the supervisor, never by the subagent
-- When parallel subagents have touched overlapping files, the supervisor merges both implementations intelligently — preserving all intended behavior from each, consistent with the overall phase specification
-- Conflicts are never resolved by discarding one side; both contributions must be reconciled
+The supervisor uses this spec to:
+- Create Asana tasks with the correct dependency graph
+- Determine which tasks can be parallelized (those with no pending upstream dependencies)
+- Write subagent prompts scoped to each task
+- Resolve merge conflicts in the context of the phase goal
 
-### 5. Semantic Release
+---
 
-- **`develop`**: every merge creates a Release Candidate tag (`vX.Y.Z-rc.N`)
-- **`main`**: every merge creates a full version tag (`vX.Y.Z`) following [SemVer](https://semver.org/):
+### Supervisor Algorithm
+
+The supervisor follows this exact loop when executing a phase:
+
+```
+PHASE_START:
+  1. Parse the phase spec
+  2. Create Asana tasks (see "Asana Task Structure" below)
+     - One task per spec item, in the correct project
+     - Set `add_dependencies` for each task based on "Depends on"
+     - All tasks start as incomplete (not started)
+
+EXECUTION_LOOP:
+  3. Query Asana for incomplete tasks in this phase's project/section
+  4. Identify the READY FRONTIER: tasks whose dependencies are ALL marked Done
+  5. If frontier is empty and tasks remain → error (circular dependency or stuck task)
+  6. If no tasks remain → go to PHASE_COMPLETE
+
+  For each task in the ready frontier (launch in parallel where possible):
+    a. Update Asana task → In Progress (add comment: "Assigned to subagent")
+    b. Create a git worktree:
+         git worktree add .worktrees/<task-slug> develop
+    c. Spawn subagent with the SUBAGENT PROMPT TEMPLATE (see below)
+    d. Wait for subagent to complete (it will commit and stop)
+
+  For each completed subagent (process as they finish):
+    e. Update Asana task → In Review
+    f. Merge the worktree branch into develop (see "Merge Protocol")
+    g. If merge succeeds:
+         - Update Asana task → Done (add comment with merge commit SHA)
+         - Clean up worktree: git worktree remove .worktrees/<task-slug>
+    h. If merge has conflicts:
+         - Read both diffs + phase spec
+         - Produce reconciled version preserving both implementations
+         - Commit the reconciliation
+         - Update Asana task → Done
+         - Clean up worktree
+
+  7. Go to EXECUTION_LOOP (new tasks may now be unblocked)
+
+PHASE_COMPLETE:
+  8. Run full test suite on develop (unit + integration + E2E)
+  9. If tests fail → fix on develop, commit fix
+  10. Tag Release Candidate: vX.Y.Z-rc.N
+  11. Update Asana project status: "Phase complete — RC tagged"
+```
+
+---
+
+### Asana Task Structure
+
+Tasks are created and managed via the Asana MCP tools (JSON-RPC 2.0 at `https://mcp.asana.com/v2/mcp`).
+
+#### Creating tasks
+
+Use `create_task_preview` (or `create_tasks` if batch-supported):
+
+```json
+{
+  "name": "[Phase Name] Task: <task name>",
+  "projects": ["<project_gid>"],
+  "notes": "<task description from phase spec>\n\nFiles: <expected files>\nPhase: <phase name>",
+  "add_dependencies": ["<dependency_task_gid>", "..."]
+}
+```
+
+**Dependency ordering**: Tasks without dependencies are created first. Then tasks with dependencies reference the GIDs returned from the first batch. This may require two `create_task_preview` calls.
+
+#### Updating task status
+
+Use `update_tasks`:
+
+| Transition | Fields |
+|------------|--------|
+| → In Progress | `{"task": "<gid>", "custom_fields": {...}}` + `add_comment`: "Assigned to subagent" |
+| → In Review | `add_comment`: "Subagent committed. Reviewing and merging." |
+| → Done | `{"task": "<gid>", "completed": true}` + `add_comment`: "Merged in <sha>" |
+
+If the Asana project uses Board layout with sections (To Do / In Progress / In Review / Done), move tasks between sections using the appropriate section GIDs.
+
+#### Querying tasks
+
+Use `get_tasks` with `project` filter to list all tasks in the phase project. Check `completed` field to identify remaining work. Check dependency GIDs against completed tasks to determine the ready frontier.
+
+---
+
+### Subagent Prompt Template
+
+Every subagent receives this prompt. The supervisor fills in the `{{placeholders}}`.
+
+```
+## Task
+{{task_description}}
+
+## Files
+You are expected to create or modify: {{file_list}}
+
+## Worktree
+You are working in: {{worktree_path}}
+Your branch: {{branch_name}}
+
+## Rules (mandatory)
+1. READ `AGENTS.md` and `GIT.md` before starting.
+2. Follow TDD: write unit tests FIRST (in tests/), verify they fail,
+   then implement. Commit tests before implementation.
+3. Write E2E tests at the end if your task adds/changes an endpoint
+   or UI behavior. E2E tests must pass before you stop.
+4. All commits must use Conventional Commit format (see GIT.md).
+   The pre-commit hook will enforce lint + build + test.
+5. Do NOT merge, push, or modify any branch other than your own.
+6. When done, commit all work and stop. Report back with:
+   - List of commits (SHAs + messages)
+   - Summary of what was implemented
+   - Any concerns or known limitations
+
+## Context
+Phase: {{phase_name}}
+Phase goal: {{phase_goal}}
+Your task depends on: {{dependency_descriptions_or_none}}
+Other parallel tasks in this phase: {{sibling_task_names}}
+(Be aware of potential overlap with sibling tasks — the supervisor
+will handle merge conflicts, but minimize unnecessary changes to
+shared files.)
+```
+
+---
+
+### Merge Protocol (Supervisor)
+
+#### Simple merge (no conflicts)
+
+```bash
+cd /path/to/repo                          # main working directory
+git checkout develop
+git merge .worktrees/<task-slug>          # fast-forward or clean merge
+git worktree remove .worktrees/<task-slug>
+```
+
+#### Conflict merge
+
+When two parallel subagents touched the same files:
+
+1. **Attempt merge**: `git merge <branch>` — git marks conflict markers
+2. **Read the phase spec** to understand the intended behavior of both tasks
+3. **Read both diffs**: `git diff develop...<branch-A>` and `git diff develop...<branch-B>`
+4. **Reconcile**: produce a version that includes both implementations:
+   - If both modified the same function differently → combine both behaviors
+   - If both added code to the same location → include both additions in logical order
+   - If one renamed/moved code the other modified → apply the modification to the new location
+   - **Never discard one side** — both tasks were approved in the phase spec
+5. **Test**: run `python -m pytest tests/ --ignore=tests/integration -q` on the reconciled code
+6. **Commit** the merge resolution with message: `chore: merge <task-A> and <task-B> (conflict reconciled)`
+
+#### Post-merge validation
+
+After every merge into develop:
+- Run `python -m ruff check app/ frontend/ tests/ e2e/` (lint)
+- Run `python -m pytest tests/ --ignore=tests/integration -q` (unit tests)
+- If either fails, fix immediately on develop before proceeding to the next task
+
+---
+
+### Semantic Release
+
+- **`develop`**: every completed phase creates a Release Candidate tag (`vX.Y.Z-rc.N`)
+- **`main`**: every merge from develop creates a full version tag (`vX.Y.Z`) following [SemVer](https://semver.org/):
   - **Patch** (`Z`): bug fixes, no API changes
   - **Minor** (`Y`): new features, backward-compatible
   - **Major** (`X`): breaking changes
+- Tags are created with `git tag` and the corresponding GitHub Release via `gh release create`
+- The version bump type is specified in the phase spec
 
-### 6. Test-Driven Development (TDD)
+---
+
+### Test-Driven Development (TDD)
 
 - Subagents must write unit tests for every function/behavior they implement **before** writing the implementation
 - Tests live in `tests/` mirroring the `app/` structure (e.g., `tests/core/test_ai_agents.py`)
 - Implementation is written only after tests are in place and confirmed to fail (red → green)
 - Subagent commits should be ordered: test commit first, then implementation commit
+- The pre-commit hook enforces that all unit tests pass before any commit is accepted
 
-### 7. End-to-End Testing
+### End-to-End Testing
 
 - E2E tests are written at the **end** of the same task that delivers the feature — not deferred to a separate task
 - Subagents **cannot signal task completion** if any E2E test fails; the worktree must not be handed back until the suite is green
 - Two E2E topologies are supported for this project:
   - **API**: pytest-based HTTP tests against `localhost:8000` (using `httpx` or `requests`); files in `e2e/api/`
   - **Web**: [Maestro](https://maestro.mobile.dev/) flows against the Streamlit frontend at `localhost:8501`; files in `e2e/web/`
+
+---
+
+### Quick Reference: Supervisor Checklist
+
+```
+[ ] Phase spec received and understood
+[ ] Asana tasks created with correct dependencies
+[ ] Ready frontier identified
+[ ] Subagents spawned with full prompt template
+[ ] Asana status updated: In Progress
+[ ] Subagent commits received
+[ ] Asana status updated: In Review
+[ ] Worktree merged into develop (conflicts reconciled if needed)
+[ ] Post-merge lint + tests pass
+[ ] Asana status updated: Done
+[ ] All tasks complete → full test suite green
+[ ] RC tagged on develop
+[ ] Asana project status updated
+```

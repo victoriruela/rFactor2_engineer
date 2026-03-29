@@ -57,7 +57,6 @@ type(scope): subject
 
 ### Rules
 
-- **Subject** must be lower-case
 - **Header** (full first line) max 100 characters
 - **Scope** is optional but encouraged (e.g., `feat(parser): add .ld file support`)
 
