@@ -9,6 +9,7 @@ import json as _json
 import shutil
 import tempfile
 import uuid
+import re
 
 FIXED_PARAMS_FILE = "app/core/fixed_params.json"
 API_BASE_URL = os.environ.get("RF2_API_URL", "http://localhost:8000")
@@ -16,6 +17,7 @@ BROWSER_API_BASE_URL = os.environ.get("RF2_BROWSER_API_BASE_URL", "/api")
 UPLOAD_CHUNK_SIZE = 64 * 1024 * 1024
 TEMP_UPLOAD_ROOT = os.path.join(tempfile.gettempdir(), "rfactor2_engineer_uploads")
 CLIENT_SESSION_COOKIE = "rf2_session_id"
+SESSION_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{8,128}$")
 
 
 def _ensure_temp_upload_root():
@@ -82,42 +84,47 @@ def _safe_cookie_value(cookie_name):
                 return None
 
 
+def _is_valid_session_id(value):
+    return isinstance(value, str) and bool(SESSION_ID_PATTERN.fullmatch(value.strip()))
+
+
 def _ensure_client_session_id():
     existing = st.session_state.get("client_session_id")
-    if isinstance(existing, str) and existing.strip():
+    if _is_valid_session_id(existing):
         return existing
 
-        cookie_value = _safe_cookie_value(CLIENT_SESSION_COOKIE)
-        if cookie_value:
-                st.session_state["client_session_id"] = cookie_value
-                return cookie_value
+    cookie_value = _safe_cookie_value(CLIENT_SESSION_COOKIE)
+    if _is_valid_session_id(cookie_value):
+        st.session_state["client_session_id"] = cookie_value
+        return cookie_value
 
-        generated = uuid.uuid4().hex
-        st.session_state["client_session_id"] = generated
+    generated = uuid.uuid4().hex
+    st.session_state["client_session_id"] = generated
 
-        if _is_streamlit_mocked():
-                return generated
+    if _is_streamlit_mocked():
+        return generated
 
-        components.html(
-                f"""
-                <script>
-                    document.cookie = "{CLIENT_SESSION_COOKIE}={generated}; path=/; max-age=31536000; SameSite=Lax";
-                    window.parent.location.reload();
-                </script>
-                """,
-                height=0,
-        )
-        st.stop()
+    components.html(
+            f"""
+            <script>
+                document.cookie = "{CLIENT_SESSION_COOKIE}={generated}; path=/; max-age=31536000; SameSite=Lax";
+                window.parent.location.reload();
+            </script>
+            """,
+            height=0,
+    )
+    st.stop()
 
 
 def _api_headers():
-        session_id = st.session_state.get("client_session_id")
-        return {"X-Client-Session-Id": session_id} if session_id else {}
+    session_id = st.session_state.get("client_session_id")
+    return {"X-Client-Session-Id": session_id} if _is_valid_session_id(session_id) else {}
 
 
 def _render_chunked_uploader():
-        session_id = st.session_state.get("client_session_id", "")
-        html = f"""
+    raw_session_id = st.session_state.get("client_session_id", "")
+    session_id = raw_session_id.strip() if isinstance(raw_session_id, str) else ""
+    html = f"""
         <div style='font-family:sans-serif;'>
             <input id='rf2_files' type='file' multiple accept='.mat,.csv,.svm' />
             <button id='rf2_upload_btn' style='margin-top:6px;'>Subir en chunks (64 MB)</button>
@@ -126,6 +133,7 @@ def _render_chunked_uploader():
         <script>
             const apiBase = { _json.dumps(BROWSER_API_BASE_URL) };
             const sessionId = { _json.dumps(session_id) };
+            const sessionIdPattern = /^[A-Za-z0-9_-]{{8,128}}$/;
             const chunkSize = {UPLOAD_CHUNK_SIZE};
             const statusEl = document.getElementById('rf2_upload_status');
 
@@ -135,6 +143,9 @@ def _render_chunked_uploader():
             }}
 
             async function uploadOne(file) {{
+                if (!sessionIdPattern.test(sessionId)) {{
+                    throw new Error('session id invalido o ausente; recarga la pagina');
+                }}
                 log(`Inicializando ${{file.name}}...`);
                 const initResp = await fetch(`${{apiBase}}/uploads/init`, {{
                     method: 'POST',
@@ -193,7 +204,7 @@ def _render_chunked_uploader():
             }});
         </script>
         """
-        components.html(html, height=190, scrolling=False)
+    components.html(html, height=190, scrolling=False)
 
 
 def _fetch_backend_sessions():

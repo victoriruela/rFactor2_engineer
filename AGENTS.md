@@ -584,11 +584,15 @@ The canonical entry point is `scripts/release_and_deploy.ps1`. It enforces:
 1. Abort if working tree is dirty.
 2. Merge one or more source branches into `develop`.
 3. Run Docker unit tests on `develop`; tag RC (`vX.Y.Z-rc.N`) and push.
-4. Merge `develop` into `main`; run Docker unit tests again.
-5. Tag release (`vX.Y.Z`) on `main` and push.
-6. Create `dist/rfactor2_engineer-vX.Y.Z.tar.gz` via `git archive <tag>`.
-7. Publish a GitHub Release with that artifact.
-8. Call `deploy_gcp.ps1 -ReleaseTag vX.Y.Z -UseGithubReleaseArtifact`.
+4. **MANDATORY GATE**: ask the human owner to validate that RC locally.
+5. Only after explicit human approval: merge `develop` into `main`; run Docker unit tests again.
+6. Tag release (`vX.Y.Z`) on `main` and push.
+7. Create `dist/rfactor2_engineer-vX.Y.Z.tar.gz` via `git archive <tag>`.
+8. Publish a GitHub Release with that artifact.
+9. Call `deploy_gcp.ps1 -ReleaseTag vX.Y.Z -UseGithubReleaseArtifact`.
+
+**Mandatory policy for all agents**: never continue automatically from RC to `main`/deploy.
+After RC push, stop and ask the user to run local validation and confirm before proceeding.
 
 ```powershell
 # Full release from a feature branch
@@ -724,7 +728,9 @@ PHASE_COMPLETE:
   8. Run full test suite on develop (unit + integration + E2E)
   9. If tests fail → fix on develop, commit fix
   10. Tag Release Candidate: vX.Y.Z-rc.N
-  11. Update Asana project status: "Phase complete — RC tagged"
+  11. Ask user to validate RC locally and WAIT for explicit approval
+  12. After approval: merge develop → main, create release tag, publish artifact, deploy
+  13. Update Asana project status: "Phase complete — RC validated and released"
 ```
 
 ---
@@ -901,5 +907,7 @@ After every merge into develop:
 [ ] Asana status updated: Done
 [ ] All tasks complete → full test suite green
 [ ] RC tagged on develop
+[ ] User asked to validate RC locally
+[ ] Explicit user approval received
 [ ] Asana project status updated
 ```
