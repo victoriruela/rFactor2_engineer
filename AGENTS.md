@@ -489,19 +489,23 @@ Before creating any task:
 
 #### Creating tasks
 
-Use `create_tasks` with `default_project` and `section_id` pointing to `To Do`:
+Use `create_tasks` with `default_project` as a **top-level tool parameter** (NOT inside the task objects) and `section_id` inside each task pointing to `To Do`:
 
-```json
-{
-  "default_project": "1213839935179235",
-  "tasks": [
+> ⚠️ **CRITICAL**: `default_project` is a separate top-level argument to the `create_tasks` tool, not a field inside each task object. If placed inside the task, the tool silently ignores it and creates the task with no project.
+
+Call signature:
+
+```
+mcp_asana-mcp_create_tasks(
+  default_project = "1213839935179235",   ← TOP-LEVEL, not inside tasks[]
+  tasks = [
     {
       "name": "[Phase Name] Task: <task name>",
       "notes": "<description>\n\nFiles: <files>\nPhase: <phase>",
-      "section_id": "<to_do_section_gid>"
+      "section_id": "<to_do_section_gid>"   ← inside each task object
     }
   ]
-}
+)
 ```
 
 **Dependency ordering**: Tasks without dependencies are created first. Then tasks with dependencies pass `add_dependencies` referencing the GIDs returned by the first batch.
