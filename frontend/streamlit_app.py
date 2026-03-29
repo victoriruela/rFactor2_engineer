@@ -2,191 +2,1117 @@ import streamlit as st
 import requests
 import pandas as pd
 import plotly.graph_objects as go
+import numpy as np
+import scipy.io
+import io
+import os
+import json as _json
+
+FIXED_PARAMS_FILE = "app/core/fixed_params.json"
+
+def load_fixed_params():
+    """Carga los parámetros fijados desde el archivo JSON."""
+    if os.path.exists(FIXED_PARAMS_FILE):
+        try:
+            with open(FIXED_PARAMS_FILE, 'r', encoding='utf-8') as f:
+                return set(_json.load(f))
+        except Exception:
+            pass
+    return set()
+
+def save_fixed_params(params_set):
+    """Guarda los parámetros fijados en el archivo JSON."""
+    try:
+        os.makedirs(os.path.dirname(FIXED_PARAMS_FILE), exist_ok=True)
+        with open(FIXED_PARAMS_FILE, 'w', encoding='utf-8') as f:
+            _json.dump(list(params_set), f, indent=2, ensure_ascii=False)
+        return True
+    except Exception as e:
+        st.error(f"Error al guardar parámetros: {e}")
+        return False
 
 st.set_page_config(page_title="rFactor2 Engineer", layout="wide")
 
 st.title("🏎️ rFactor2 Engineer")
 st.subheader("Análisis de Telemetría y Setup mediante IA")
 
-# Barra lateral para subir archivos
+# ─────────────────────────────────────────────────────────────────────────────
+# Utilidades
+# ─────────────────────────────────────────────────────────────────────────────
+
+@st.cache_data(show_spinner=False)
+def get_mat_dataframe(file_bytes):
+    """Carga el .mat y devuelve un DataFrame ordenado por tiempo."""
+    try:
+        tele_io = io.BytesIO(file_bytes)
+        mat = scipy.io.loadmat(tele_io, struct_as_record=False, squeeze_me=True)
+        channels = {}
+        for k in mat.keys():
+            if not k.startswith('__') and hasattr(mat[k], 'Value'):
+                val = mat[k].Value
+                if isinstance(val, np.ndarray) and val.ndim > 0:
+                    channels[k] = val
+                else:
+                    # Si es un escalar, convertir a array del mismo tamaño que los demás
+                    channels[k] = val
+        
+        df = pd.DataFrame(channels)
+        
+        # Asegurar que los escalares se expandan
+        if not df.empty:
+            max_len = len(df)
+            for col in df.columns:
+                if not isinstance(channels[col], np.ndarray) or channels[col].ndim == 0:
+                    df[col] = np.full(max_len, channels[col])
+
+        sort_col = 'Session_Elapsed_Time' if 'Session_Elapsed_Time' in df.columns else df.columns[0]
+        df = df.sort_values(by=sort_col).reset_index(drop=True)
+
+        # Filtrar vueltas incompletas
+        df = _filter_incomplete_laps_frontend(df)
+
+        return df
+    except Exception as e:
+        st.error(f"Error procesando .mat: {e}")
+        return None
+
+
+def _filter_incomplete_laps_frontend(df):
+    """Filtra vueltas incompletas del DataFrame (out-laps, in-laps)."""
+    lap_col = None
+    for c in df.columns:
+        if 'lap' in c.lower() and 'number' in c.lower():
+            lap_col = c
+            break
+    if lap_col is None and 'Lap_Number' in df.columns:
+        lap_col = 'Lap_Number'
+    if lap_col is None:
+        return df
+
+    dist_col = None
+    for c in df.columns:
+        if 'distance' in c.lower() and 'lap' in c.lower():
+            dist_col = c
+            break
+    if dist_col is None:
+        for c in df.columns:
+            if 'distance' in c.lower():
+                dist_col = c
+                break
+
+    laps = sorted([l for l in df[lap_col].unique() if l > 0])
+    if len(laps) <= 1:
+        return df[df[lap_col] > 0] if 0 in df[lap_col].values else df
+
+    if dist_col is not None:
+        lap_distances = {}
+        for lap in laps:
+            d = df.loc[df[lap_col] == lap, dist_col].dropna()
+            lap_distances[lap] = (d.max() - d.min()) if not d.empty else 0
+        
+        # Usar el percentil 95 de las distancias para evitar que vueltas incompletas influyan mucho
+        if lap_distances:
+            target_dist = np.percentile(list(lap_distances.values()), 95)
+            # Solo consideramos completas las vueltas que cubren al menos el 98% de la distancia objetivo
+            complete_laps = [l for l, d in lap_distances.items() if d >= target_dist * 0.98]
+        else:
+            complete_laps = []
+    else:
+        lap_samples = {lap: len(df[df[lap_col] == lap]) for lap in laps}
+        if lap_samples:
+            target_samples = np.percentile(list(lap_samples.values()), 95)
+            complete_laps = [l for l, s in lap_samples.items() if s >= target_samples * 0.95]
+        else:
+            complete_laps = []
+
+    if not complete_laps:
+        complete_laps = laps
+
+    # Filtrar por duración anómala (vueltas extremadamente lentas como out-laps o errores)
+    time_col = 'Session_Elapsed_Time' if 'Session_Elapsed_Time' in df.columns else None
+    if time_col and len(complete_laps) > 1:
+        lap_durations = {}
+        for lap in complete_laps:
+            t = df.loc[df[lap_col] == lap, time_col].dropna()
+            lap_durations[lap] = (t.max() - t.min()) if not t.empty else 0
+        
+        # Filtramos solo si hay una mediana clara (más de 2 vueltas completas)
+        if len(complete_laps) > 2:
+            middle_laps = complete_laps[1:-1]
+            median_dur = np.median([lap_durations[l] for l in middle_laps if lap_durations[l] > 0])
+            if median_dur > 0:
+                # Permitimos hasta un 50% de margen para no filtrar vueltas lentas legítimas (p.ej. lluvia o errores leves)
+                complete_laps = [l for l in complete_laps if lap_durations[l] <= median_dur * 1.50]
+
+    if not complete_laps:
+        complete_laps = laps
+
+    return df[df[lap_col].isin(complete_laps)].reset_index(drop=True)
+
+
+def _lap_xy(lap_df, x_col, y_col):
+    """
+    Extrae x e y de un DataFrame de vuelta, insertando None donde hay
+    discontinuidades en x_col o si el tiempo retrocede (lo cual no debería pasar).
+    """
+    if x_col not in lap_df.columns or y_col not in lap_df.columns:
+        return [], []
+    
+    # IMPORTANTE: Los datos ya vienen ordenados por Session_Elapsed_Time desde get_mat_dataframe.
+    x_arr = lap_df[x_col].values
+    y_arr = lap_df[y_col].values
+
+    if len(x_arr) < 2:
+        return x_arr.tolist(), y_arr.tolist()
+
+    # Detectar saltos en el eje X
+    # Para Lap_Distance, un salto de >100m en 1 paso temporal es sospechoso.
+    # O un salto atrás significativo (>10m).
+    xs, ys = [], []
+    for i in range(len(x_arr)):
+        if i > 0:
+            diff = x_arr[i] - x_arr[i-1]
+            # Si hay un salto brusco hacia adelante (>200m) o un salto atrás (>10m)
+            # en la distancia de la vuelta, rompemos la línea.
+            if x_col == 'Lap_Distance':
+                if diff < -10.0 or diff > 200.0:
+                    xs.append(None)
+                    ys.append(None)
+            else:
+                # Para GPS (Lon/Lat), usamos un umbral dinámico basado en el rango
+                x_range = np.ptp(x_arr) if len(x_arr) > 0 else 0
+                threshold = max(x_range * 0.05, 0.001)
+                if abs(diff) > threshold:
+                    xs.append(None)
+                    ys.append(None)
+        
+        xv = float(x_arr[i])
+        yv = float(y_arr[i])
+        xs.append(xv if not np.isnan(xv) else None)
+        ys.append(yv if not np.isnan(yv) else None)
+    
+    return xs, ys
+
+
+def _build_lap_data(lap_df):
+    """Extrae los datos crudos necesarios para la telemetría interactiva."""
+    x_col = 'Lap_Distance'
+    if x_col not in lap_df.columns:
+        return None
+
+    # Datos básicos del mapa y distancia
+    data = {
+        'max_dist': float(lap_df[x_col].max()),
+        'channels': {}
+    }
+
+    # Definir qué canales queremos extraer para los gráficos
+    # Formato: { 'id_del_grafico': [ ('canal_y', 'Nombre visible'), ... ] }
+    chart_configs = {
+        'speed': [('Ground_Speed', 'Velocidad (km/h)')],
+        'controls': [('Throttle_Pos', 'Acelerador (%)'), ('Brake_Pos', 'Freno (%)')],
+        'steer': [('Steering_Wheel_Position', 'Dirección')],
+        'rpm': [('Engine_RPM', 'RPM')],
+        'gear': [('Gear', 'Marcha')],
+        'susp_pos': [(f'Susp_Pos_{w}', f'Susp {w}') for w in ['FL', 'FR', 'RL', 'RR']],
+        'ride_height': [(f'Ride_Height_{w}', f'RH {w}') for w in ['FL', 'FR', 'RL', 'RR']],
+        'brake_temp': [(f'Brake_Temp_{w}', f'Brake Temp {w}') for w in ['FL', 'FR', 'RL', 'RR']],
+        'tyre_pres': [(f'Tyre_Pressure_{w}', f'Tyre Pres {w}') for w in ['FL', 'FR', 'RL', 'RR']],
+        'aero': [('Front_Downforce', 'Front DF'), ('Rear_Downforce', 'Rear DF')]
+    }
+
+    # Extraer datos para cada canal
+    for chart_id, configs in chart_configs.items():
+        data['channels'][chart_id] = []
+        for col, label in configs:
+            if col in lap_df.columns:
+                xs, ys = _lap_xy(lap_df, x_col, col)
+                # Normalización de unidades si es necesario
+                if 'Pos' in col: ys = [v * 100 if v is not None else None for v in ys]
+                if 'Height' in col: ys = [v * 1000 if v is not None else None for v in ys]
+                
+                data['channels'][chart_id].append({
+                    'name': label,
+                    'x': xs,
+                    'y': ys
+                })
+
+    # Datos del mapa (GPS)
+    if 'GPS_Longitude' in lap_df.columns and 'GPS_Latitude' in lap_df.columns:
+        m_xs, m_ys = _lap_xy(lap_df, 'GPS_Longitude', 'GPS_Latitude')
+        # También necesitamos la distancia asociada a cada punto GPS para sincronizar
+        dist_arr = lap_df[x_col].values.tolist()
+        data['map'] = {
+            'lon': m_xs,
+            'lat': m_ys,
+            'dist': dist_arr
+        }
+
+    return data
+
+
+@st.cache_resource(show_spinner=False)
+def precompute_all_laps(df, laps):
+    """
+    Pre-genera los datos de todas las vueltas y los devuelve.
+    Se cachea como recurso para que no se re-calcule al interactuar con la UI.
+    """
+    all_data = {}
+    progress_container = st.empty()
+    total_laps = len(laps)
+    for i, lap in enumerate(laps):
+        lap_df = df[df['Lap_Number'] == lap].copy()
+        all_data[lap] = _build_lap_data(lap_df)
+        with progress_container.container():
+            st.progress((i + 1) / total_laps, text=f"Procesando Vuelta {lap} de {laps[-1]}...")
+    
+    progress_container.empty()
+    return all_data
+
+
+def plot_all_laps_interactive(all_lap_figs, laps, lap_options, fastest_lap):
+    """Renderiza la telemetría interactiva de TODAS las vueltas en un solo componente HTML/JS.
+    El cambio de vuelta se gestiona enteramente en el cliente (JavaScript), sin roundtrip al servidor."""
+    if not all_lap_figs:
+        st.warning("No hay datos de telemetría.")
+        return
+
+    import json
+    # Convertir claves int a string para JSON
+    all_data_json = json.dumps({str(k): v for k, v in all_lap_figs.items() if v})
+    laps_json = json.dumps([int(l) for l in laps])
+    lap_labels_json = json.dumps(lap_options)
+    fastest_lap_js = int(fastest_lap) if fastest_lap else "null"
+
+    total_height = 1300
+
+    html_code = f"""
+    <script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
+    <style>
+        body {{ margin: 0; background: #111; }}
+        .telemetry-container {{ background-color: #111; color: white; font-family: sans-serif; width: 100%; box-sizing: border-box; display: flex; align-items: flex-start; }}
+        .lap-sidebar {{ width: 90px; min-width: 90px; padding: 5px 5px 5px 0; }}
+        .lap-btn {{ display: block; width: 100%; padding: 4px 6px; margin-bottom: 3px; background: #222; border: 1px solid #444; color: #ccc; cursor: pointer; font-size: 0.7rem; text-align: left; border-radius: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }}
+        .lap-btn:hover {{ background: #333; }}
+        .lap-btn.active {{ background: #444; color: white; font-weight: bold; border-color: #888; }}
+        .lap-btn.fastest {{ color: #ffa500; }}
+        .charts-area {{ flex: 1; min-width: 0; }}
+        .tabs {{ display: flex; border-bottom: 1px solid #444; margin-bottom: 10px; }}
+        .tab {{ padding: 10px 20px; cursor: pointer; border: 1px solid transparent; color: #ccc; }}
+        .tab.active {{ border: 1px solid #444; border-bottom: 1px solid #111; background: #222; font-weight: bold; color: white; }}
+        .tab-content {{ display: none; }}
+        .tab-content.active {{ display: block; }}
+        .chart-wrapper {{ position: relative; width: 100%; margin-bottom: 5px; box-sizing: border-box; cursor: grab; }}
+        .chart-wrapper:active {{ cursor: grabbing; }}
+        .chart-wrapper canvas.red-line {{ position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 10; }}
+        #map-container {{ width: 100%; margin-bottom: 15px; border: 1px solid #333; }}
+    </style>
+
+    <div class="telemetry-container">
+        <div class="lap-sidebar" id="lap-sidebar"></div>
+        <div class="charts-area">
+            <div id="map-container"></div>
+            
+            <div class="tabs">
+                <div class="tab active" onclick="showTab('general', this)">General</div>
+                <div class="tab" onclick="showTab('motor', this)">Motor</div>
+                <div class="tab" onclick="showTab('suspension', this)">Suspensión</div>
+                <div class="tab" onclick="showTab('neumaticos', this)">Neumáticos</div>
+                <div class="tab" onclick="showTab('aero', this)">Aerodinámica</div>
+            </div>
+
+            <div id="general" class="tab-content active">
+                <div id="wrap-speed" class="chart-wrapper"><div id="chart-speed"></div><canvas class="red-line"></canvas></div>
+                <div id="wrap-controls" class="chart-wrapper"><div id="chart-controls"></div><canvas class="red-line"></canvas></div>
+                <div id="wrap-steer" class="chart-wrapper"><div id="chart-steer"></div><canvas class="red-line"></canvas></div>
+            </div>
+            <div id="motor" class="tab-content">
+                <div id="wrap-rpm" class="chart-wrapper"><div id="chart-rpm"></div><canvas class="red-line"></canvas></div>
+                <div id="wrap-gear" class="chart-wrapper"><div id="chart-gear"></div><canvas class="red-line"></canvas></div>
+            </div>
+            <div id="suspension" class="tab-content">
+                <div id="wrap-susp_pos" class="chart-wrapper"><div id="chart-susp_pos"></div><canvas class="red-line"></canvas></div>
+                <div id="wrap-ride_height" class="chart-wrapper"><div id="chart-ride_height"></div><canvas class="red-line"></canvas></div>
+            </div>
+            <div id="neumaticos" class="tab-content">
+                <div id="wrap-brake_temp" class="chart-wrapper"><div id="chart-brake_temp"></div><canvas class="red-line"></canvas></div>
+                <div id="wrap-tyre_pres" class="chart-wrapper"><div id="chart-tyre_pres"></div><canvas class="red-line"></canvas></div>
+            </div>
+            <div id="aero" class="tab-content">
+                <div id="wrap-aero" class="chart-wrapper"><div id="chart-aero"></div><canvas class="red-line"></canvas></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const allLapData = {all_data_json};
+        const laps = {laps_json};
+        const lapLabels = {lap_labels_json};
+        const fastestLap = {fastest_lap_js};
+        let currentLap = laps[0];
+        let lapData = allLapData[String(currentLap)];
+
+        const charts = [];
+        let mapChart = null;
+        let isDragging = false;
+        let pendingX = null;
+        let rafId = null;
+        let lastX = 0;
+
+        // Build lap sidebar buttons
+        const sidebar = document.getElementById('lap-sidebar');
+        laps.forEach((lap, i) => {{
+            const btn = document.createElement('button');
+            btn.className = 'lap-btn' + (i === 0 ? ' active' : '') + (lap === fastestLap ? ' fastest' : '');
+            btn.textContent = lapLabels[i];
+            btn.dataset.lap = lap;
+            btn.addEventListener('click', () => switchLap(lap));
+            sidebar.appendChild(btn);
+        }});
+
+        function switchLap(lap) {{
+            if (lap === currentLap) return;
+            currentLap = lap;
+            lapData = allLapData[String(lap)];
+            lastX = 0;
+
+            // Update sidebar active state
+            sidebar.querySelectorAll('.lap-btn').forEach(b => {{
+                b.classList.toggle('active', parseInt(b.dataset.lap) === lap);
+            }});
+
+            // Update map
+            if (lapData.map && mapChart) {{
+                Plotly.react(mapChart, [
+                    {{ x: lapData.map.lon, y: lapData.map.lat, mode: 'lines', line: {{ color: '#666', width: 2 }}, hoverinfo: 'skip' }},
+                    {{ x: [lapData.map.lon[0]], y: [lapData.map.lat[0]], mode: 'markers', marker: {{ color: 'red', size: 12, symbol: 'x' }}, name: 'Coche' }}
+                ], mapChart.layout, {{ displayModeBar: false, staticPlot: true }});
+            }}
+
+            // Rebuild map binary search index
+            rebuildMapIndex();
+
+            // Update all charts with new data
+            const newMaxDist = lapData.max_dist;
+            charts.forEach(c => {{
+                const chData = lapData.channels[c.id];
+                if (!chData) return;
+                const traces = chData.map(ch => ({{
+                    x: ch.x, y: ch.y, name: ch.name,
+                    mode: 'lines', line: {{ width: 1.5 }}, connectgaps: false
+                }}));
+                const newLayout = Object.assign({{}}, c.el.layout, {{
+                    xaxis: Object.assign({{}}, c.el.layout.xaxis, {{ range: [0, newMaxDist] }})
+                }});
+                Plotly.react(c.el, traces, newLayout, {{ displayModeBar: false, staticPlot: true }});
+            }});
+
+            // Clear red lines
+            drawAllRedLines();
+        }}
+
+        // Tab switching
+        function showTab(tabId, tabEl) {{
+            document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
+            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+            document.getElementById(tabId).classList.add('active');
+            tabEl.classList.add('active');
+            requestAnimationFrame(() => {{
+                const tab = document.getElementById(tabId);
+                tab.querySelectorAll('.chart-wrapper > div:first-child').forEach(c => {{
+                    if (c.data) Plotly.Plots.resize(c);
+                }});
+                drawAllRedLines();
+            }});
+        }}
+
+        // Binary search for map position
+        let mapDistSorted = null;
+        let mapDistIndices = null;
+
+        function rebuildMapIndex() {{
+            if (lapData.map) {{
+                const n = lapData.map.dist.length;
+                mapDistIndices = Array.from({{length: n}}, (_, i) => i);
+                mapDistIndices.sort((a, b) => lapData.map.dist[a] - lapData.map.dist[b]);
+                mapDistSorted = mapDistIndices.map(i => lapData.map.dist[i]);
+            }} else {{
+                mapDistSorted = null;
+                mapDistIndices = null;
+            }}
+        }}
+        rebuildMapIndex();
+
+        function findClosestMapIdx(x) {{
+            let lo = 0, hi = mapDistSorted.length - 1;
+            while (lo < hi) {{
+                const mid = (lo + hi) >> 1;
+                if (mapDistSorted[mid] < x) lo = mid + 1;
+                else hi = mid;
+            }}
+            if (lo > 0 && Math.abs(mapDistSorted[lo-1] - x) < Math.abs(mapDistSorted[lo] - x)) lo--;
+            return mapDistIndices[lo];
+        }}
+
+        const commonLayout = {{
+            template: "plotly_dark",
+            paper_bgcolor: 'rgba(0,0,0,0)',
+            plot_bgcolor: 'rgba(0,0,0,0)',
+            margin: {{ l: 60, r: 20, t: 35, b: 55 }},
+            xaxis: {{ title: "Distancia (m)", range: [0, lapData.max_dist], fixedrange: true, gridcolor: '#333' }},
+            yaxis: {{ gridcolor: '#333', autorange: true, fixedrange: true }},
+            showlegend: true,
+            legend: {{ orientation: "h", y: -0.15, x: 0, xanchor: 'left', font: {{ size: 10 }} }},
+            hovermode: false,
+            dragmode: false
+        }};
+
+        // Map
+        if (lapData.map) {{
+            const mapTrace = {{
+                x: lapData.map.lon, y: lapData.map.lat,
+                mode: 'lines', line: {{ color: '#666', width: 2 }}, hoverinfo: 'skip'
+            }};
+            const posTrace = {{
+                x: [lapData.map.lon[0]], y: [lapData.map.lat[0]],
+                mode: 'markers', marker: {{ color: 'red', size: 12, symbol: 'x' }}, name: 'Coche'
+            }};
+            mapChart = document.getElementById('map-container');
+            Plotly.newPlot(mapChart, [mapTrace, posTrace], {{
+                template: "plotly_dark",
+                paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: 'rgba(0,0,0,0)',
+                height: 250,
+                xaxis: {{ visible: false, fixedrange: true }},
+                yaxis: {{ visible: false, scaleanchor: "x", scaleratio: 1, fixedrange: true }},
+                margin: {{ l: 10, r: 10, t: 10, b: 10 }},
+                showlegend: false, dragmode: false
+            }}, {{ displayModeBar: false, staticPlot: true }});
+        }}
+
+        // Charts
+        const chartIds = [
+            'speed', 'controls', 'steer', 'rpm', 'gear',
+            'susp_pos', 'ride_height', 'brake_temp', 'tyre_pres', 'aero'
+        ];
+        const chartTitles = {{
+            speed: 'Velocidad', controls: 'Controles', steer: 'Dirección',
+            rpm: 'RPM', gear: 'Marcha',
+            susp_pos: 'Posición Suspensión', ride_height: 'Altura al Suelo',
+            brake_temp: 'Temp. Frenos', tyre_pres: 'Presión Neumáticos',
+            aero: 'Aerodinámica'
+        }};
+
+        const plotPromises = [];
+
+        chartIds.forEach(id => {{
+            const container = document.getElementById('chart-' + id);
+            const wrapper = document.getElementById('wrap-' + id);
+            if (!container || !wrapper || !lapData.channels[id]) return;
+
+            const canvas = wrapper.querySelector('canvas.red-line');
+            const traces = lapData.channels[id].map(ch => ({{
+                x: ch.x, y: ch.y, name: ch.name,
+                mode: 'lines', line: {{ width: 1.5 }}, connectgaps: false
+            }}));
+
+            const chartHeight = (id === 'gear') ? 250 : 320;
+
+            const p = Plotly.newPlot(container, traces, {{
+                ...commonLayout,
+                height: chartHeight,
+                title: {{ text: chartTitles[id] || id.toUpperCase(), font: {{ size: 13 }} }}
+            }}, {{ displayModeBar: false, staticPlot: true }});
+
+            plotPromises.push(p);
+            charts.push({{ el: container, id: id, wrapper: wrapper, canvas: canvas }});
+
+            wrapper.addEventListener('mousedown', function(e) {{
+                isDragging = true;
+                syncFromEvent(e, container);
+            }});
+            wrapper.addEventListener('mousemove', function(e) {{
+                if (isDragging) syncFromEvent(e, container);
+            }});
+        }});
+
+        document.addEventListener('mouseup', () => {{ isDragging = false; }});
+        document.addEventListener('selectstart', (e) => {{ if (isDragging) e.preventDefault(); }});
+
+        function resizeAllCharts() {{
+            const allTabs = document.querySelectorAll('.tab-content');
+            allTabs.forEach(t => {{
+                if (!t.classList.contains('active')) {{
+                    t.style.display = 'block';
+                    t.style.visibility = 'hidden';
+                    t.style.height = '0';
+                    t.style.overflow = 'hidden';
+                }}
+            }});
+            charts.forEach(c => Plotly.Plots.resize(c.el));
+            if (mapChart && mapChart.data) Plotly.Plots.resize(mapChart);
+            allTabs.forEach(t => {{
+                if (!t.classList.contains('active')) {{
+                    t.style.display = '';
+                    t.style.visibility = '';
+                    t.style.height = '';
+                    t.style.overflow = '';
+                }}
+            }});
+            drawAllRedLines();
+        }}
+
+        Promise.all(plotPromises).then(() => {{
+            resizeAllCharts();
+            setTimeout(resizeAllCharts, 100);
+            setTimeout(resizeAllCharts, 500);
+        }});
+
+        const ro = new ResizeObserver(() => {{ resizeAllCharts(); }});
+        ro.observe(document.querySelector('.telemetry-container'));
+
+        function syncFromEvent(e, container) {{
+            const layout = container._fullLayout;
+            if (!layout) return;
+            const l = layout.margin.l;
+            const plotWidth = layout.width - l - layout.margin.r;
+            const containerRect = container.getBoundingClientRect();
+            const relX = e.clientX - containerRect.left - l;
+            const fraction = relX / plotWidth;
+            const xRange = layout.xaxis.range;
+            const xVal = xRange[0] + fraction * (xRange[1] - xRange[0]);
+            const clampedX = Math.max(0, Math.min(lapData.max_dist, xVal));
+            scheduleSync(clampedX);
+        }}
+
+        function scheduleSync(x) {{
+            pendingX = x;
+            if (!rafId) {{
+                rafId = requestAnimationFrame(() => {{
+                    rafId = null;
+                    sync(pendingX);
+                }});
+            }}
+        }}
+
+        function drawRedLine(chart, x) {{
+            const canvas = chart.canvas;
+            const el = chart.el;
+            const layout = el._fullLayout;
+            if (!layout || !canvas) return;
+
+            const w = el.offsetWidth;
+            const h = el.offsetHeight;
+            if (canvas.width !== w || canvas.height !== h) {{
+                canvas.width = w;
+                canvas.height = h;
+            }}
+
+            const ctx = canvas.getContext('2d');
+            ctx.clearRect(0, 0, w, h);
+
+            const ml = layout.margin.l;
+            const mr = layout.margin.r;
+            const mt = layout.margin.t;
+            const mb = layout.margin.b;
+            const plotWidth = w - ml - mr;
+            const xRange = layout.xaxis.range;
+            const fraction = (x - xRange[0]) / (xRange[1] - xRange[0]);
+            const px = ml + fraction * plotWidth;
+
+            ctx.beginPath();
+            ctx.moveTo(px, mt);
+            ctx.lineTo(px, h - mb);
+            ctx.strokeStyle = 'red';
+            ctx.lineWidth = 2;
+            ctx.stroke();
+        }}
+
+        function drawAllRedLines() {{
+            charts.forEach(c => drawRedLine(c, lastX));
+        }}
+
+        function sync(x) {{
+            lastX = x;
+            drawAllRedLines();
+
+            if (mapChart && lapData.map && mapDistSorted) {{
+                const idx = findClosestMapIdx(x);
+                Plotly.restyle(mapChart, {{
+                    x: [[lapData.map.lon[idx]]],
+                    y: [[lapData.map.lat[idx]]]
+                }}, [1]);
+            }}
+        }}
+        // Keep lap sidebar visible by tracking parent scroll
+        function updateSidebarPosition() {{
+            const sidebar = document.getElementById('lap-sidebar');
+            if (!sidebar) return;
+            try {{
+                const iframeRect = window.frameElement ? window.frameElement.getBoundingClientRect() : null;
+                if (iframeRect) {{
+                    const scrolledAbove = Math.max(0, -iframeRect.top);
+                    const viewportH = window.parent.innerHeight || window.innerHeight;
+                    const sidebarH = sidebar.offsetHeight;
+                    // Center the sidebar in the visible portion of the iframe
+                    const visibleTop = scrolledAbove;
+                    const visibleBottom = scrolledAbove + viewportH;
+                    const visibleH = visibleBottom - visibleTop;
+                    let targetY = visibleTop + Math.max(0, (visibleH - sidebarH) / 2);
+                    // Clamp so sidebar doesn't go below container
+                    const containerH = sidebar.parentElement ? sidebar.parentElement.offsetHeight : 0;
+                    targetY = Math.min(targetY, Math.max(0, containerH - sidebarH));
+                    targetY = Math.max(0, targetY);
+                    sidebar.style.transform = 'translateY(' + targetY + 'px)';
+                }}
+            }} catch(e) {{}}
+        }}
+        // Listen to parent scroll
+        try {{
+            window.parent.addEventListener('scroll', updateSidebarPosition, true);
+            // Also listen on all scrollable ancestors
+            let el = window.frameElement;
+            while (el) {{
+                el = el.parentElement;
+                if (el) el.addEventListener('scroll', updateSidebarPosition, true);
+            }}
+        }} catch(e) {{}}
+        setInterval(updateSidebarPosition, 100);
+    </script>
+    """
+    import streamlit.components.v1 as components
+    st.markdown("""
+    <style>
+        .stHtml iframe, .element-container iframe { width: 100% !important; }
+        div[data-testid="stIFrame"] iframe { width: 100% !important; }
+    </style>
+    """, unsafe_allow_html=True)
+    components.html(html_code, height=total_height, scrolling=False)
+
+
+def parse_svm_content(file_bytes):
+    setup = {}
+    # Intentar decodificar con diferentes codificaciones
+    content = None
+    
+    # Heurística para UTF-16 con BOM
+    if file_bytes.startswith((b'\xff\xfe', b'\xfe\xff')):
+        try:
+            content = file_bytes.decode('utf-16')
+        except Exception:
+            pass
+
+    if content is None:
+        try:
+            # Intentar UTF-8 primero (es más estricto que latin-1)
+            content = file_bytes.decode('utf-8')
+        except Exception:
+            try:
+                # Si falla UTF-8, podría ser latin-1 (común en rF2 por símbolos como °)
+                content = file_bytes.decode('latin-1')
+            except Exception:
+                # Último recurso
+                content = file_bytes.decode('utf-8', errors='ignore')
+
+    current_section = None
+    for line in content.splitlines():
+        line = line.strip()
+        if not line: continue
+        
+        # Detectar sección [SECCION]
+        if '[' in line and ']' in line:
+            # Ignorar si es un comentario que no parece sección
+            if line.startswith('//') and not ('[' in line[0:5]): # Heurística simple
+                pass 
+            else:
+                try:
+                    start = line.index('[') + 1
+                    end = line.index(']')
+                    current_section = line[start:end].strip()
+                    if current_section not in setup:
+                        setup[current_section] = {}
+                    continue
+                except ValueError:
+                    continue
+
+        # Detectar parámetros k=v
+        if '=' in line and current_section:
+            # Limpiar posible comentario al inicio (rFactor2 comenta valores por defecto)
+            clean_line = line
+            if clean_line.startswith('//'):
+                clean_line = clean_line[2:].strip()
+            
+            if '=' in clean_line:
+                k, v = clean_line.split('=', 1)
+                key = k.strip()
+                # Si ya existe (p.ej. uno real y uno comentado), preferimos el real (no comentado)
+                if key not in setup[current_section] or not line.startswith('//'):
+                    setup[current_section][key] = v.strip()
+    return setup
+
+def cleanup_server_data():
+    """Llama al endpoint de limpieza del backend."""
+    try:
+        requests.post("http://localhost:8000/cleanup", timeout=5)
+    except:
+        pass
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Barra lateral
+# ─────────────────────────────────────────────────────────────────────────────
 with st.sidebar:
     st.header("Carga de Datos")
-    uploaded_files = st.file_uploader("Sube los archivos .ld y .svm de la sesión", type=["ld", "svm"], accept_multiple_files=True)
     
-    selected_session = None
-    ld_to_send = None
+    # Estado para controlar si hay una sesión activa y analizada
+    is_analyzed = 'ai_analysis_data' in st.session_state
+
+    # Inicializar parámetros fijos si no existen
+    if 'fixed_params' not in st.session_state:
+        st.session_state['fixed_params'] = load_fixed_params()
+
+    # Para controlar si ya se han cargado archivos pero no analizado
+    if 'selected_session_name' not in st.session_state:
+        st.session_state['selected_session_name'] = None
+
+    tele_to_send = None
     svm_to_send = None
+    tele_name = None
+    svm_name = None
 
-    if uploaded_files:
-        # Agrupar archivos por nombre base
-        sessions = {}
-        for f in uploaded_files:
-            base_name = f.name.rsplit('.', 1)[0]
-            ext = f.name.rsplit('.', 1)[1].lower()
-            if base_name not in sessions:
-                sessions[base_name] = {}
-            sessions[base_name][ext] = f
-        
-        # Validar sesiones
-        valid_sessions = []
-        for name, files in sessions.items():
-            if "ld" in files and "svm" in files:
-                valid_sessions.append(name)
-            else:
-                missing = []
-                if "ld" not in files: missing.append(".ld")
-                if "svm" not in files: missing.append(".svm")
-                st.error(f"Faltan archivos para la sesión '{name}': {', '.join(missing)}")
-        
-        if valid_sessions:
-            selected_session = st.selectbox("Selecciona la sesión a analizar", valid_sessions)
-            if selected_session:
-                ld_to_send = sessions[selected_session]["ld"]
-                svm_to_send = sessions[selected_session]["svm"]
-                st.success(f"Sesión '{selected_session}' lista para analizar.")
+    # Lógica de visualización de la barra lateral
+    if not st.session_state['selected_session_name']:
+        # ESTADO 1: No hay archivos cargados
+        uploaded_files = st.file_uploader(
+            "Sube archivos .mat y .svm", type=["mat", "svm", "csv"],
+            accept_multiple_files=True
+        )
+        if uploaded_files:
+            sessions = {}
+            for f in uploaded_files:
+                base_name = f.name.rsplit('.', 1)[0]
+                ext = f.name.rsplit('.', 1)[1].lower()
+                if base_name not in sessions:
+                    sessions[base_name] = {}
+                sessions[base_name][ext] = f
 
-    analyze_button = st.button("Analizar Datos", disabled=not (ld_to_send and svm_to_send))
-
-# Main Page
-if analyze_button and ld_to_send and svm_to_send:
-    with st.spinner(f"Analizando sesión '{selected_session}' con IA..."):
-        files = {
-            "ld_file": (ld_to_send.name, ld_to_send.getvalue()),
-            "svm_file": (svm_to_send.name, svm_to_send.getvalue())
-        }
+            valid_sessions = [
+                name for name, files in sessions.items()
+                if ("mat" in files or "csv" in files) and "svm" in files
+            ]
+            if valid_sessions:
+                selected_label = st.selectbox("Selecciona sesión subida", valid_sessions)
+                if st.button("Cargar sesión"):
+                    ext_found = "mat" if "mat" in sessions[selected_label] else "csv"
+                    tele_obj = sessions[selected_label][ext_found]
+                    svm_obj = sessions[selected_label]["svm"]
+                    
+                    # Guardar en session_state para persistencia entre reruns
+                    st.session_state['tele_to_send'] = tele_obj.getvalue()
+                    st.session_state['svm_to_send'] = svm_obj.getvalue()
+                    st.session_state['tele_name'] = tele_obj.name
+                    st.session_state['svm_name'] = svm_obj.name
+                    st.session_state['selected_session_name'] = selected_label
+                    st.rerun()
+    else:
+        # ESTADO 2 o 3: Sesión cargada (con o sin análisis)
+        st.info(f"Sesión activa: **{st.session_state['selected_session_name']}**")
         
-        try:
-            response = requests.post("http://localhost:8000/analyze", files=files)
+        # Botón Nueva sesión (siempre presente si hay algo cargado)
+        if st.button("🆕 Nueva sesión", use_container_width=True):
+            # 1. Limpiar datos en servidor
+            cleanup_server_data()
             
-            if response.status_code == 200:
-                data = response.json()
-                
-                # 1. Visualización: Mapa de circuito mejorado
-                st.header("📍 Mapa del Circuito y Puntos Críticos")
-                
-                # Dibujar el trazado
-                track_x = data['circuit_data']['x']
-                track_y = data['circuit_data']['y']
-                
-                fig = go.Figure()
-                
-                # Línea del trazado
-                fig.add_trace(go.Scatter(
-                    x=track_x, y=track_y,
-                    mode='lines',
-                    line=dict(color='lightgrey', width=2),
-                    name='Trazado',
-                    hoverinfo='skip'
-                ))
-                
-                # Puntos de interés (Issues)
-                issues_df = pd.DataFrame(data['issues_on_map'])
-                if not issues_df.empty:
-                    fig.add_trace(go.Scatter(
-                        x=issues_df['x'],
-                        y=issues_df['y'],
-                        mode='markers',
-                        marker=dict(
-                            color=issues_df['color'],
-                            size=12,
-                            line=dict(width=2, color='DarkSlateGrey')
-                        ),
-                        text=issues_df['label'],
-                        name='Puntos de Mejora',
-                        hovertemplate="<b>%{text}</b><extra></extra>"
-                    ))
-                
-                fig.update_layout(
-                    xaxis_title="GPS Longitude",
-                    yaxis_title="GPS Latitude",
-                    yaxis=dict(scaleanchor="x", scaleratio=1),
-                    showlegend=True,
-                    template="plotly_dark",
-                    margin=dict(l=0, r=0, t=30, b=0),
-                    height=600
+            # 2. Limpiar estado y recargar
+            st.session_state.clear()
+            st.rerun()
+
+    # Recuperar datos de la sesión si existen
+    if st.session_state.get('selected_session_name'):
+        tele_to_send = st.session_state.get('tele_to_send')
+        svm_to_send = st.session_state.get('svm_to_send')
+        tele_name = st.session_state.get('tele_name')
+        svm_name = st.session_state.get('svm_name')
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Contenido principal
+# ─────────────────────────────────────────────────────────────────────────────
+if tele_to_send and svm_to_send:
+    if tele_name.endswith('.mat'):
+        # 1. Cargar DataFrame (cacheado)
+        df_local = get_mat_dataframe(tele_to_send)
+
+        if df_local is not None and 'Lap_Number' in df_local.columns:
+            laps = sorted([int(l) for l in df_local['Lap_Number'].unique() if l > 0])
+            
+            if laps:
+                # 2. Pre-generar gráficos (cacheado como recurso)
+                # La clave del cache es el hash del contenido del archivo y la lista de vueltas
+                all_lap_figs = precompute_all_laps(df_local, tuple(laps))
+
+                # Detectar vuelta rápida
+                fastest_lap = None
+                lap_times = {}
+                # Preferir Last_Laptime (más preciso) sobre Session_Elapsed_Time
+                has_last_laptime = 'Last_Laptime' in df_local.columns
+                for l in laps:
+                    lap_df_tmp = df_local[df_local['Lap_Number'] == l]
+                    if not lap_df_tmp.empty:
+                        if has_last_laptime:
+                            lt = lap_df_tmp['Last_Laptime'].iloc[-1]
+                            if lt > 0:
+                                lap_times[l] = float(lt)
+                                continue
+                        # Fallback a Session_Elapsed_Time
+                        if 'Session_Elapsed_Time' in df_local.columns:
+                            lap_times[l] = float(lap_df_tmp['Session_Elapsed_Time'].max() - lap_df_tmp['Session_Elapsed_Time'].min())
+                if lap_times:
+                    fastest_lap = min(lap_times, key=lap_times.get)
+
+                main_tab_tele, main_tab_setup, main_tab_ai = st.tabs(
+                    ["📊 Telemetría", "🔧 Setup", "🤖 Análisis AI"]
                 )
-                
-                st.plotly_chart(fig, use_container_width=True)
-                
-                # 1.5 Estadísticas de la Sesión
-                st.header("📊 Resumen de la Sesión")
-                s_stats = data.get('session_stats', {})
-                c1, c2, c3, c4 = st.columns(4)
-                with c1:
-                    st.metric("Vueltas Totales", s_stats.get('total_laps', '-'))
-                    st.metric("Vuelta Rápida", s_stats.get('fastest_lap', '-'))
-                with c2:
-                    st.metric("Consumo Total", f"{s_stats.get('fuel_total', '-')} L")
-                    st.metric("Consumo Medio", f"{s_stats.get('fuel_avg', '-')} L/vta")
-                with c3:
-                    st.metric("Desgaste Total", f"{s_stats.get('wear_total', '-')} %")
-                    st.metric("Desgaste Medio", f"{s_stats.get('wear_avg', '-')} %/vta")
-                with c4:
-                    st.metric("Vta. Rápida #", s_stats.get('fastest_lap_num', '-'))
 
-                # 2. Análisis Detallado
-                col1, col2 = st.columns(2)
-                
-                with col1:
-                    st.subheader("🏁 Análisis de Conducción")
-                    st.info(data['driving_analysis'])
-                            
-                with col2:
-                    st.subheader("🛠️ Análisis de Setup")
-                    st.warning(data['setup_analysis'])
-                            
-                # 3. Setup Completo (Estilo rFactor 2)
-                st.header("🔧 Setup Completo y Modificaciones")
-                st.markdown("A continuación se muestra el setup completo organizado por secciones. Los cambios recomendados están resaltados.")
-                
-                full_setup = data.get('full_setup', {})
-                sections = full_setup.get('sections', [])
-                
-                if not sections:
-                    st.error("No se pudieron generar las secciones de setup completo. Por favor, intenta de nuevo.")
-                else:
-                    for section in sections:
-                        with st.expander(f"📂 Sección: {section['name']}", expanded=False):
-                            # Preparar datos para la tabla
-                            items = section.get('items', [])
-                            if items:
-                                table_data = []
-                                for item in items:
-                                    val_new = str(item.get('new', '')).strip()
-                                    val_curr = str(item.get('current', '')).strip()
+                with main_tab_tele:
+                    # Formatear tiempos de vuelta
+                    def _fmt_lap_time(seconds):
+                        m = int(seconds // 60)
+                        s = seconds % 60
+                        tenths = int(round((s % 1) * 10))
+                        return f"{m}:{int(s):02}:{tenths}00"
 
-                                    # Lógica de cambio
-                                    has_change = val_new.lower() != val_curr.lower()
+                    lap_options = []
+                    for l in laps:
+                        t_str = ""
+                        if l in lap_times:
+                            t_val = _fmt_lap_time(lap_times[l])
+                            t_str = f" ({t_val})"
+                        lap_options.append(f"V{l}{t_str}")
+
+                    plot_all_laps_interactive(all_lap_figs, laps, lap_options, fastest_lap)
+
+                with main_tab_setup:
+                    st.header("Configuración del Coche (.svm)")
+                    
+                    # Inicializar estado temporal de edición si no existe
+                    if 'temp_fixed_params' not in st.session_state:
+                        st.session_state['temp_fixed_params'] = st.session_state['fixed_params'].copy()
+
+                    def _clean_svm_value(val):
+                        val_str = str(val)
+                        if "//" in val_str:
+                            parts = val_str.split("//", 1)
+                            if len(parts) > 1:
+                                return parts[1].strip()
+                        return val_str.strip()
+
+                    setup_data = parse_svm_content(svm_to_send)
+                    # Cargar mapping para nombres amigables
+                    _mapping_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "app", "core", "param_mapping.json")
+                    _mapping = {"sections": {}, "parameters": {}}
+                    if os.path.exists(_mapping_path):
+                        try:
+                            with open(_mapping_path, 'r', encoding='utf-8') as _mf:
+                                _mapping = _json.load(_mf)
+                        except Exception:
+                            pass
+
+                    # Formulario para agrupar cambios y evitar recargas por cada clic
+                    with st.form("setup_fixed_params_form", border=False):
+                        # Botón para guardar cambios arriba para accesibilidad
+                        save_col1, save_col2 = st.columns([1.5, 3.5])
+                        with save_col1:
+                            submitted = st.form_submit_button("💾 Guardar parámetros fijados", use_container_width=True)
+                        with save_col2:
+                            st.info("Selecciona los parámetros que quieres fijar para que la IA sepa que no se tienen que modificar y pulsa el botón para guardar todos los cambios.", icon="ℹ️")
+
+                        for section, params in setup_data.items():
+                            if section.upper() in ("LEFTFENDER", "RIGHTFENDER"):
+                                continue
+                            friendly_section = _mapping.get("sections", {}).get(section, section)
+                            with st.expander(f"🔩 {friendly_section}"):
+                                rows = []
+                                for k, v in params.items():
+                                    if k.startswith("Gear") and "Setting" in k:
+                                        continue
+                                    friendly_param = _mapping.get("parameters", {}).get(k, k)
+                                    if k in ("VehicleClassSetting", "UpgradeSetting"):
+                                        continue
                                     
-                                    row = {
-                                        "Parámetro": item['parameter'],
-                                        "Valor Actual": val_curr,
-                                        "Recomendación": f"✨ **{val_new}**" if has_change else "✅",
-                                        "Motivo / Justificación": item['reason']
-                                    }
-                                    table_data.append(row)
+                                    if friendly_param.startswith("Ajuste de Chasis") or k.startswith("ChassisAdj"):
+                                        continue
+
+                                    clean_v = _clean_svm_value(v)
+                                    if not clean_v:
+                                        continue
+
+                                    is_fixed = k in st.session_state['temp_fixed_params']
+                                    rows.append({
+                                        "Fijar": is_fixed,
+                                        "Parámetro": friendly_param,
+                                        "Valor": clean_v,
+                                        "_internal_key": k
+                                    })
                                 
-                                # Mostramos la tabla sin índice y con resaltado
-                                if table_data:
-                                    st.dataframe(
-                                        table_data, 
-                                        use_container_width=True, 
-                                        hide_index=True,
+                                if rows:
+                                    # Guardar filas para referencia al procesar el formulario
+                                    st.session_state[f"rows_{section}"] = rows
+                                    df_setup = pd.DataFrame(rows)
+                                    # editor sin on_change (se procesa al pulsar el botón del form)
+                                    st.data_editor(
+                                        df_setup,
                                         column_config={
-                                            "Motivo / Justificación": st.column_config.TextColumn(
-                                                width="large",
-                                            )
-                                        }
+                                            "Fijar": st.column_config.CheckboxColumn(
+                                                "Fijar",
+                                                help="Si se marca, la IA no cambiará este valor pero lo usará para el análisis",
+                                                default=False,
+                                            ),
+                                            "Parámetro": st.column_config.TextColumn(disabled=True),
+                                            "Valor": st.column_config.TextColumn(disabled=True),
+                                            "_internal_key": None
+                                        },
+                                        disabled=["Parámetro", "Valor"],
+                                        hide_index=True,
+                                        key=f"editor_{section}",
                                     )
+
+                        if submitted:
+                            # Procesar todos los editores al enviar el formulario
+                            new_fixed = st.session_state['fixed_params'].copy()
+                            
+                            # Recorrer todas las secciones cargadas
+                            for section in setup_data.keys():
+                                editor_key = f"editor_{section}"
+                                rows_key = f"rows_{section}"
+                                if editor_key in st.session_state and rows_key in st.session_state:
+                                    changes = st.session_state[editor_key]
+                                    rows = st.session_state[rows_key]
+                                    edited_rows = changes.get("edited_rows", {})
+                                    
+                                    # Actualizar basándose en los cambios manuales en el editor
+                                    for idx_str, change in edited_rows.items():
+                                        idx = int(idx_str)
+                                        if idx < len(rows):
+                                            internal_key = rows[idx]["_internal_key"]
+                                            if "Fijar" in change:
+                                                if change["Fijar"]:
+                                                    new_fixed.add(internal_key)
+                                                else:
+                                                    new_fixed.discard(internal_key)
+                            
+                            st.session_state['fixed_params'] = new_fixed
+                            st.session_state['temp_fixed_params'] = new_fixed.copy()
+                            if save_fixed_params(new_fixed):
+                                st.success("¡Parámetros guardados correctamente!")
+                                st.rerun()
+                        
+                        # Si no hay filas en ninguna sección, mostrar mensaje
+                        has_any_rows = any(len(params) > 0 for section, params in setup_data.items() if section.upper() not in ("LEFTFENDER", "RIGHTFENDER"))
+                        if not has_any_rows:
+                            st.caption("No hay parámetros configurados disponibles.")
+
+                with main_tab_ai:
+                    st.header("Análisis de Ingeniero Virtual")
+
+                    try:
+                        models_resp = requests.get("http://localhost:8000/models", timeout=2)
+                        available_models = (
+                            models_resp.json().get("models", [])
+                            if models_resp.status_code == 200 else []
+                        )
+                    except Exception:
+                        available_models = []
+
+                    sel_model = st.selectbox("Modelo LLM", available_models) if available_models else None
+                    analyze_button = st.button("🚀 Iniciar Análisis con IA")
+
+                    if analyze_button:
+                        with st.spinner("Analizando con IA…"):
+                            files = {
+                                "telemetry_file": (tele_name, tele_to_send),
+                                "svm_file": (svm_name, svm_to_send),
+                            }
+                            data_form = {}
+                            if sel_model:
+                                data_form["model"] = sel_model
+                            
+                            # Enviar lista de parámetros fijados
+                            if 'fixed_params' in st.session_state and st.session_state['fixed_params']:
+                                data_form["fixed_params"] = _json.dumps(list(st.session_state['fixed_params']))
+                            
+                            response = requests.post(
+                                "http://localhost:8000/analyze",
+                                files=files, data=data_form
+                            )
+                            if response.status_code == 200:
+                                data = response.json()
+                                # Guardar datos en session_state para re-análisis
+                                st.session_state['ai_analysis_data'] = data
+                                st.session_state['ai_telemetry_summary'] = data.get('telemetry_summary_sent', '')
+                                st.session_state['ai_circuit_name'] = tele_name.split('-')[-2].strip() if '-' in tele_name else "Desconocido"
+                                st.session_state['ai_model'] = sel_model
+                                # Parsear setup_data del .svm para re-análisis
+                                st.session_state['ai_setup_data'] = parse_svm_content(svm_to_send)
                             else:
-                                st.write("No hay parámetros en esta sección.")
-                
-            elif response.status_code == 400:
-                error_detail = response.json().get('detail', 'Error desconocido.')
-                st.error(f"❌ Error: {error_detail}")
+                                st.error("Error en el análisis.")
+
+                    # Mostrar resultados (persistentes en session_state)
+                    if 'ai_analysis_data' in st.session_state:
+                        data = st.session_state['ai_analysis_data']
+
+                        # ── Análisis del Ingeniero de Conducción ──
+                        st.subheader("🏁 Análisis del Ingeniero de Conducción")
+                        st.info(data['driving_analysis'])
+
+                        # ── Razonamiento del Ingeniero Jefe ──
+                        if data.get('chief_reasoning'):
+                            st.subheader("🧠 Razonamiento del Ingeniero Jefe")
+                            st.warning(data['chief_reasoning'])
+
+                        # ── Setup Completo Recomendado ──
+                        if data.get('full_setup') and data['full_setup'].get('sections'):
+                            st.subheader("⚙️ Setup Completo Recomendado por los ingenieros")
+                            for sec_idx, section in enumerate(data['full_setup']['sections']):
+                                s_name = section.get('name', 'Sección')
+                                s_key = section.get('section_key', '')
+                                s_items = section.get('items', [])
+                                if not s_items:
+                                    continue
+                                changed_items = [it for it in s_items if str(it.get('current', '')) != str(it.get('new', ''))]
+                                with st.expander(f"🔩 {s_name} ({len(changed_items)} cambios)", expanded=bool(changed_items)):
+                                    if changed_items:
+                                        rows = []
+                                        for it in changed_items:
+                                            param_name = it.get('parameter', '')
+                                            if it.get('reanalyzed'):
+                                                param_name = f"🚀 {param_name}"
+                                            rows.append({
+                                                "Parámetro": param_name,
+                                                "Actual": it.get('current', ''),
+                                                "Recomendado": it.get('new', ''),
+                                                "Motivo": it.get('reason', '')
+                                            })
+                                        df_ai = pd.DataFrame(rows)
+                                        st.table(df_ai.set_index("Parámetro"))
+                                    else:
+                                        st.caption("No se recomiendan cambios en esta sección.")
             else:
-                st.error(f"💥 Error en la API ({response.status_code}): {response.text}")
-        except Exception as e:
-            st.error(f"Error conectando con la API: {e}")
+                st.warning("No se encontraron vueltas completas.")
+        else:
+            st.error("No se encontró canal 'Lap_Number' en el .mat")
+    else:
+        st.info("La visualización detallada actualmente solo soporta archivos .mat.")
+        if st.button("Analizar con IA"):
+            with st.spinner("Analizando con IA…"):
+                files = {
+                    "telemetry_file": (tele_name, tele_to_send),
+                    "svm_file": (svm_name, svm_to_send),
+                }
+                response = requests.post("http://localhost:8000/analyze", files=files)
+                if response.status_code == 200:
+                    data = response.json()
+                    st.success("Análisis completado")
+                    st.write(data['driving_analysis'])
+                else:
+                    st.error("Error en el análisis.")
 else:
-    st.info("Sube los archivos .ld y .svm de la misma sesión para comenzar el ingeniero virtual.")
+    st.info("👋 Sube tus archivos o elige una sesión anterior en la barra lateral para comenzar.")

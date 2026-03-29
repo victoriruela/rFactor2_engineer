@@ -6,7 +6,9 @@ pandas
 numpy
 langchain>=1.2.0
 langchain-core>=0.3.0
-langchain-groq
+langchain-ollama
 python-dotenv
 matplotlib
 plotly
+requests
+scipy

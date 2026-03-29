@@ -1,6 +1,6 @@
 # rFactor2 Engineer
 
-rFactor2 Engineer es una aplicación inteligente diseñada para pilotos de rFactor 2 que buscan optimizar su rendimiento en pista mediante el análisis de telemetría y el ajuste preciso del setup del vehículo. La aplicación utiliza agentes de IA (basados en LangChain y modelos Llama 3.3) para procesar archivos de MoTeC (.ld) y archivos de configuración (.svm), proporcionando recomendaciones visuales y detalladas.
+rFactor2 Engineer es una aplicación inteligente diseñada para pilotos de rFactor 2 que buscan optimizar su rendimiento en pista mediante el análisis de telemetría y el ajuste preciso del setup del vehículo. La aplicación utiliza agentes de IA (basados en LangChain con Ollama y el modelo Llama 3.2 3B local) para procesar archivos de MoTeC (.ld) y archivos de configuración (.svm), proporcionando recomendaciones visuales y detalladas.
 
 ## ✨ Características Principales
 
@@ -10,7 +10,10 @@ rFactor2 Engineer es una aplicación inteligente diseñada para pilotos de rFact
   - 🔴 **Rojo**: Pérdida por mala conducción.
   - 🟡 **Amarillo**: Pérdida por deficiencia en el setup.
   - 🟠 **Naranja**: Pérdida combinada (conducción y setup).
-- **Agentes de IA Expertos**: 
+- **Agentes de IA con Ollama + Llama 3.2 3B**:
+  - Modelo local `Llama-3.2-3B-Instruct-Q4_0.gguf` ejecutado mediante Ollama.
+  - El sistema arranca Ollama automáticamente si no está corriendo.
+  - El modelo se registra en Ollama desde el archivo `.gguf` local si no existe.
   - Ingeniero de Pista (Conducción).
   - Mecánico de Competición (Setup).
 - **Reporte de Setup Completo**: Recomendaciones detalladas para cada parámetro del setup, justificando tanto los cambios como la decisión de mantener ciertos valores.
@@ -22,13 +25,15 @@ rFactor2_engineer/
 ├── app/
 │   ├── main.py                # Servidor API FastAPI
 │   ├── core/
-│   │   ├── ai_agents.py       # Lógica de agentes de IA (LangChain + Groq)
+│   │   ├── ai_agents.py       # Lógica de agentes de IA (LangChain + Ollama)
 │   │   └── telemetry_parser.py # Decodificadores de archivos .ld, .svm
 ├── frontend/
 │   └── streamlit_app.py       # Interfaz de usuario interactiva
+├── models/
+│   └── Llama-3.2-3B-Instruct-Q4_0.gguf  # Modelo local
 ├── data/                      # Almacenamiento temporal de archivos
 ├── requirements.txt           # Dependencias del proyecto
-└── .env                       # Variables de entorno (API Keys)
+└── .env                       # Variables de entorno
 ```
 
 ## 🚀 Guía de Instalación y Ejecución
@@ -36,7 +41,11 @@ rFactor2_engineer/
 ### 1. Requisitos Previos
 
 - Python 3.9 o superior.
-- Una cuenta en [Groq Cloud](https://console.groq.com/) para obtener una API Key (modelo Llama 3.3 gratuito).
+- [Ollama](https://ollama.com/) instalado y corriendo en el sistema.
+- Modelo `llama3.2:3b` descargado en Ollama (**requisito obligatorio** para la app y los tests de integración):
+  ```
+  ollama pull llama3.2:3b
+  ```
 
 ### 2. Instalación de Dependencias
 
@@ -48,10 +57,11 @@ pip install -r requirements.txt
 
 ### 3. Configuración
 
-Crea un archivo `.env` en la raíz del proyecto con tu clave de API de Groq:
+El archivo `.env` en la raíz del proyecto contiene la configuración de Ollama:
 
 ```text
-GROQ_API_KEY=tu_api_key_aqui
+OLLAMA_MODEL="llama3.2-3b-instruct"
+OLLAMA_BASE_URL="http://localhost:11434"
 ```
 
 ### 4. Lanzar la Aplicación
@@ -74,6 +84,12 @@ streamlit run frontend/streamlit_app.py
 ```
 La aplicación se abrirá automáticamente en tu navegador (por defecto en `http://localhost:8501`).
 
+**Notas importantes:**
+- El backend inicia rápidamente (el LLM se carga de forma lazy en el primer análisis).
+- En el primer análisis, si Ollama no está corriendo, el sistema lo arrancará automáticamente.
+- Si el modelo no está registrado en Ollama, se registrará automáticamente desde el archivo `.gguf` local.
+- Ver docs API en `http://localhost:8000/docs`.
+
 ## 🛠️ Uso
 
 1. Abre la interfaz de Streamlit.
@@ -84,6 +100,13 @@ La aplicación se abrirá automáticamente en tu navegador (por defecto en `http
 3. Si has subido varias sesiones, selecciona la que deseas analizar en el menú desplegable.
 4. Haz clic en **"Analizar Datos"**.
 5. Revisa el mapa del circuito y las listas de recomendaciones para mejorar tu tiempo de vuelta.
+
+## 🔗 Asana MCP Integration
+
+Este proyecto incluye un plugin de Claude Code para gestionar la autenticación OAuth2 y configuración MCP de Asana en múltiples IDEs (Claude Desktop, Claude CLI, VS Code Copilot, JetBrains Copilot).
+
+- **Plugin zip:** [`asana-mcp-plugin.zip`](asana-mcp-plugin.zip) — descomprimir en `~/.claude/asana-mcp/`
+- **Documentación completa:** [`ASANA.md`](ASANA.md)
 
 ## 📝 Notas Técnicas
 - El parseo de archivos `.ld` se realiza mediante una implementación interna que lee la estructura binaria de MoTeC, extrayendo canales de telemetría sin depender de librerías externas de terceros.
