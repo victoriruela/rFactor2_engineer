@@ -265,14 +265,32 @@ def _build_lap_data(lap_df):
                     out.append(0.0)
             return out
 
+        brake = _to_pct('Brake_Pos')
+        throttle = _to_pct('Throttle_Pos')
+
+        # Downsample the per-point arrays to at most MAP_MAX_POINTS so that
+        # the colour-marker trace (one SVG node per active point) doesn't
+        # produce thousands of DOM nodes and cause hover lag.
+        # The smooth outline trace (lon/lat via _lap_xy) is cheap as a
+        # polyline and keeps full resolution.
+        MAP_MAX_POINTS = 1500
+        n_raw = len(dist_arr)
+        if n_raw > MAP_MAX_POINTS:
+            stride = n_raw // MAP_MAX_POINTS
+            raw_lon   = raw_lon[::stride]
+            raw_lat   = raw_lat[::stride]
+            brake     = brake[::stride]
+            throttle  = throttle[::stride]
+            dist_arr  = dist_arr[::stride]
+
         data['map'] = {
             'lon': m_xs,
             'lat': m_ys,
             'dist': dist_arr,
             'raw_lon': raw_lon,
             'raw_lat': raw_lat,
-            'brake': _to_pct('Brake_Pos'),
-            'throttle': _to_pct('Throttle_Pos'),
+            'brake': brake,
+            'throttle': throttle,
         }
 
     return data

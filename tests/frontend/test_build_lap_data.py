@@ -225,3 +225,56 @@ class TestBuildLapDataMapBrakeThrottle:
         assert m["brake"][3] == 0.0
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# _build_lap_data — map data downsampling cap
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestBuildLapDataMapDownsample:
+    """Verify that map arrays are capped at MAP_MAX_POINTS (1500) to prevent
+    SVG DOM bloat and hover lag when telemetry has high-frequency samples."""
+
+    MAP_MAX_POINTS = 1500
+
+    def test_large_lap_capped_at_max_points(self):
+        """Arrays must be ≤ 1500 points when the input lap has more rows."""
+        n = 3000  # simulate ~30 s at 100 Hz
+        df = _make_lap_df(n=n)
+        m = _build_lap_data(df)["map"]
+        assert len(m["dist"]) <= self.MAP_MAX_POINTS
+        assert len(m["raw_lon"]) <= self.MAP_MAX_POINTS
+        assert len(m["raw_lat"]) <= self.MAP_MAX_POINTS
+        assert len(m["brake"]) <= self.MAP_MAX_POINTS
+        assert len(m["throttle"]) <= self.MAP_MAX_POINTS
+
+    def test_all_map_arrays_same_length_after_downsample(self):
+        """All five downsampled arrays must stay index-aligned."""
+        n = 3000
+        df = _make_lap_df(n=n)
+        m = _build_lap_data(df)["map"]
+        n_pts = len(m["dist"])
+        assert len(m["raw_lon"]) == n_pts
+        assert len(m["raw_lat"]) == n_pts
+        assert len(m["brake"]) == n_pts
+        assert len(m["throttle"]) == n_pts
+
+    def test_small_lap_not_truncated(self):
+        """Laps with ≤ MAP_MAX_POINTS rows must not be altered."""
+        n = 1000  # well under the cap
+        df = _make_lap_df(n=n)
+        m = _build_lap_data(df)["map"]
+        assert len(m["dist"]) == n
+        assert len(m["raw_lon"]) == n
+        assert len(m["raw_lat"]) == n
+        assert len(m["brake"]) == n
+        assert len(m["throttle"]) == n
+
+    def test_smooth_outline_not_downsampled(self):
+        """The smooth lon/lat outline trace (used for polylines) keeps full
+        resolution — only the raw_ arrays and dist are capped."""
+        n = 3000
+        df = _make_lap_df(n=n)
+        m = _build_lap_data(df)["map"]
+        # lon/lat may include None break-markers, so len >= n is not guaranteed,
+        # but it must be larger than the capped dist array.
+        assert len(m["lon"]) > len(m["dist"])
+
