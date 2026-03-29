@@ -134,8 +134,17 @@ Write-Output "==> Uploading deploy artifact to $remote"
 scp $localArtifactPath "$remote`:$remoteTar"
 Assert-LastExit -Step "scp artifact"
 
-Write-Output "==> Extracting artifact on remote host"
-ssh $remote "mkdir -p '$RemoteDir'; rm -rf '$RemoteDir'/*; tar -xzf '$remoteTar' -C '$RemoteDir'"
+Write-Output "==> Extracting artifact on remote host (preserving data/ directory)"
+# Strategy: clean app-code files (bitor-owned) with plain rm; use sudo ONLY as a
+# fallback for any Docker-owned files that may exist outside data/.
+# data/ is intentionally preserved so in-flight user session uploads survive redeploys.
+ssh $remote @"
+  set -e
+  mkdir -p '$RemoteDir'
+  find '$RemoteDir' -mindepth 1 -maxdepth 1 -not -name data | xargs -r rm -rf 2>/dev/null || true
+  sudo -n find '$RemoteDir' -mindepth 1 -maxdepth 1 -not -name data -exec rm -rf '{}' + 2>/dev/null || true
+  tar -xzf '$remoteTar' -C '$RemoteDir'
+"@
 Assert-LastExit -Step "remote extract"
 
 Write-Output "==> Uploading deployment config files"

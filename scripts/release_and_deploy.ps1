@@ -55,7 +55,10 @@ function Split-Version {
 }
 
 function Get-LatestStableTag {
-    $latest = git tag --list "v[0-9]*.[0-9]*.[0-9]*" --sort=-version:refname | Select-Object -First 1
+    # Filter out RC/pre-release tags; only consider clean vX.Y.Z tags
+    $latest = git tag --list "v[0-9]*.[0-9]*.[0-9]*" --sort=-version:refname |
+              Where-Object { $_ -notmatch '-' } |
+              Select-Object -First 1
     if ([string]::IsNullOrWhiteSpace($latest)) {
         return "v0.0.0"
     }
