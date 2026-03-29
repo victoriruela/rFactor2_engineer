@@ -1,15 +1,11 @@
 """Unit tests for app/main.py FastAPI endpoints."""
-import io
-import json
-import os
-from pathlib import Path, PurePath
-from unittest.mock import AsyncMock, MagicMock, patch
+from pathlib import Path
+from unittest.mock import AsyncMock, patch
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 
 import numpy as np
 import pandas as pd
-import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app, DATA_DIR

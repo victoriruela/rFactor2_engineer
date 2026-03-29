@@ -1,6 +1,5 @@
 import json
 import re
-import asyncio
 import subprocess
 import time
 import os
@@ -45,7 +44,7 @@ def _find_ollama_exe():
 DRIVING_PROMPT = """
 Eres un ingeniero de pista experto en rFactor 2. Analiza los datos de telemetría VUELTA A VUELTA y CURVA A CURVA para evaluar la técnica de conducción del piloto. Responde en CASTELLANO.
 
-IMPORTANTE: Tu análisis debe centrarse EXCLUSIVAMENTE en la conducción (frenada, trazada, uso del acelerador, marchas, etc.). 
+IMPORTANTE: Tu análisis debe centrarse EXCLUSIVAMENTE en la conducción (frenada, trazada, uso del acelerador, marchas, etc.).
 PROHIBIDO sugerir cambios en el setup del coche. Tu trabajo es decir al piloto qué está haciendo mal y cómo mejorar su técnica, no qué cambiar en el coche.
 
 DATOS DE TELEMETRÍA:
@@ -138,7 +137,7 @@ Informes de los especialistas:
 
 TU ROL COMO INGENIERO JEFE (REGLAS DE ORO):
 1. SER PERMISIVO: Los especialistas son expertos en su área. Tu labor NO es filtrar por sistema, sino ELIMINAR O MODIFICAR SOLO aquello que sea incoherente, peligroso o contradictorio. Si una propuesta de un especialista tiene sentido técnico basado en la telemetría, DEBES incluirla.
-2. RESPETAR LAS EXPLICACIONES: 
+2. RESPETAR LAS EXPLICACIONES:
    - Si aceptas el cambio de un especialista SIN modificar el valor propuesto, DEBES usar la explicación (reason) íntegra del especialista, o ampliarla. No la resumas.
    - Si modificas el valor o descartas una propuesta, DEBES dar una explicación (reason) detallada de por qué tu decisión es mejor para el balance global del coche.
 3. VISIÓN GLOBAL Y COHERENCIA: Verifica que los cambios no se contradigan entre ejes (delantero/trasero) o secciones.
@@ -338,8 +337,10 @@ class AIAngineer:
             new_elements = {"sections": new_sections, "parameters": new_params}
             translation = await self._get_json_from_llm(TRANSLATOR_PROMPT, {"new_elements": str(new_elements)})
             if translation:
-                if "sections" not in self.mapping: self.mapping["sections"] = {}
-                if "parameters" not in self.mapping: self.mapping["parameters"] = {}
+                if "sections" not in self.mapping:
+                    self.mapping["sections"] = {}
+                if "parameters" not in self.mapping:
+                    self.mapping["parameters"] = {}
                 self.mapping["sections"].update(translation.get("sections", {}))
                 self.mapping["parameters"].update(translation.get("parameters", {}))
                 self._save_mapping()
@@ -528,10 +529,10 @@ class AIAngineer:
                 inv_sections = {v: k for k, v in self.mapping.get("sections", {}).items()}
                 if s_name in inv_sections:
                     internal_name = inv_sections[s_name]
-                
+
                 if internal_name not in all_reco_map:
                     all_reco_map[internal_name] = {}
-                
+
                 for item in c_section.get("items", []):
                     p_name = item.get("parameter", "")
                     # Intento de corrección si el LLM usó el nombre amigable del parámetro
@@ -539,7 +540,7 @@ class AIAngineer:
                     inv_params = {v: k for k, v in self.mapping.get("parameters", {}).items()}
                     if p_name in inv_params:
                         internal_p_name = inv_params[p_name]
-                    
+
                     all_reco_map[internal_name][internal_p_name] = item
         else:
             # Fallback: usar informes de especialistas si el jefe no respondió

@@ -1,7 +1,6 @@
 import streamlit as st
 import requests
 import pandas as pd
-import plotly.graph_objects as go
 import numpy as np
 import scipy.io
 import io
@@ -56,9 +55,9 @@ def get_mat_dataframe(file_bytes):
                 else:
                     # Si es un escalar, convertir a array del mismo tamaño que los demás
                     channels[k] = val
-        
+
         df = pd.DataFrame(channels)
-        
+
         # Asegurar que los escalares se expandan
         if not df.empty:
             max_len = len(df)
@@ -110,7 +109,7 @@ def _filter_incomplete_laps_frontend(df):
         for lap in laps:
             d = df.loc[df[lap_col] == lap, dist_col].dropna()
             lap_distances[lap] = (d.max() - d.min()) if not d.empty else 0
-        
+
         # Usar el percentil 95 de las distancias para evitar que vueltas incompletas influyan mucho
         if lap_distances:
             target_dist = np.percentile(list(lap_distances.values()), 95)
@@ -136,7 +135,7 @@ def _filter_incomplete_laps_frontend(df):
         for lap in complete_laps:
             t = df.loc[df[lap_col] == lap, time_col].dropna()
             lap_durations[lap] = (t.max() - t.min()) if not t.empty else 0
-        
+
         # Filtramos solo si hay una mediana clara (más de 2 vueltas completas)
         if len(complete_laps) > 2:
             middle_laps = complete_laps[1:-1]
@@ -158,7 +157,7 @@ def _lap_xy(lap_df, x_col, y_col):
     """
     if x_col not in lap_df.columns or y_col not in lap_df.columns:
         return [], []
-    
+
     # IMPORTANTE: Los datos ya vienen ordenados por Session_Elapsed_Time desde get_mat_dataframe.
     x_arr = lap_df[x_col].values
     y_arr = lap_df[y_col].values
@@ -186,12 +185,12 @@ def _lap_xy(lap_df, x_col, y_col):
                 if abs(diff) > threshold:
                     xs.append(None)
                     ys.append(None)
-        
+
         xv = float(x_arr[i])
         yv = float(y_arr[i])
         xs.append(xv if not np.isnan(xv) else None)
         ys.append(yv if not np.isnan(yv) else None)
-    
+
     return xs, ys
 
 
@@ -229,9 +228,11 @@ def _build_lap_data(lap_df):
             if col in lap_df.columns:
                 xs, ys = _lap_xy(lap_df, x_col, col)
                 # Normalización de unidades si es necesario
-                if 'Pos' in col: ys = [v * 100 if v is not None else None for v in ys]
-                if 'Height' in col: ys = [v * 1000 if v is not None else None for v in ys]
-                
+                if 'Pos' in col:
+                    ys = [v * 100 if v is not None else None for v in ys]
+                if 'Height' in col:
+                    ys = [v * 1000 if v is not None else None for v in ys]
+
                 data['channels'][chart_id].append({
                     'name': label,
                     'x': xs,
@@ -266,7 +267,7 @@ def precompute_all_laps(df, laps):
         all_data[lap] = _build_lap_data(lap_df)
         with progress_container.container():
             st.progress((i + 1) / total_laps, text=f"Procesando Vuelta {lap} de {laps[-1]}...")
-    
+
     progress_container.empty()
     return all_data
 
@@ -313,7 +314,7 @@ def plot_all_laps_interactive(all_lap_figs, laps, lap_options, fastest_lap):
         <div class="lap-sidebar" id="lap-sidebar"></div>
         <div class="charts-area">
             <div id="map-container"></div>
-            
+
             <div class="tabs">
                 <div class="tab active" onclick="showTab('general', this)">General</div>
                 <div class="tab" onclick="showTab('motor', this)">Motor</div>
@@ -694,7 +695,7 @@ def parse_svm_content(file_bytes):
     setup = {}
     # Intentar decodificar con diferentes codificaciones
     content = None
-    
+
     # Heurística para UTF-16 con BOM
     if file_bytes.startswith((b'\xff\xfe', b'\xfe\xff')):
         try:
@@ -717,13 +718,14 @@ def parse_svm_content(file_bytes):
     current_section = None
     for line in content.splitlines():
         line = line.strip()
-        if not line: continue
-        
+        if not line:
+            continue
+
         # Detectar sección [SECCION]
         if '[' in line and ']' in line:
             # Ignorar si es un comentario que no parece sección
-            if line.startswith('//') and not ('[' in line[0:5]): # Heurística simple
-                pass 
+            if line.startswith('//') and '[' not in line[0:5]: # Heurística simple
+                pass
             else:
                 try:
                     start = line.index('[') + 1
@@ -741,7 +743,7 @@ def parse_svm_content(file_bytes):
             clean_line = line
             if clean_line.startswith('//'):
                 clean_line = clean_line[2:].strip()
-            
+
             if '=' in clean_line:
                 k, v = clean_line.split('=', 1)
                 key = k.strip()
@@ -754,7 +756,7 @@ def cleanup_server_data():
     """Llama al endpoint de limpieza del backend."""
     try:
         requests.post(f"{API_BASE_URL}/cleanup", timeout=5)
-    except:
+    except Exception:
         pass
 
 
@@ -763,7 +765,7 @@ def cleanup_server_data():
 # ─────────────────────────────────────────────────────────────────────────────
 with st.sidebar:
     st.header("Carga de Datos")
-    
+
     # Estado para controlar si hay una sesión activa y analizada
     is_analyzed = 'ai_analysis_data' in st.session_state
 
@@ -806,7 +808,7 @@ with st.sidebar:
                     ext_found = "mat" if "mat" in sessions[selected_label] else "csv"
                     tele_obj = sessions[selected_label][ext_found]
                     svm_obj = sessions[selected_label]["svm"]
-                    
+
                     # Guardar en session_state para persistencia entre reruns
                     st.session_state['tele_to_send'] = tele_obj.getvalue()
                     st.session_state['svm_to_send'] = svm_obj.getvalue()
@@ -817,12 +819,12 @@ with st.sidebar:
     else:
         # ESTADO 2 o 3: Sesión cargada (con o sin análisis)
         st.info(f"Sesión activa: **{st.session_state['selected_session_name']}**")
-        
+
         # Botón Nueva sesión (siempre presente si hay algo cargado)
         if st.button("🆕 Nueva sesión", use_container_width=True):
             # 1. Limpiar datos en servidor
             cleanup_server_data()
-            
+
             # 2. Limpiar estado y recargar
             st.session_state.clear()
             st.rerun()
@@ -844,7 +846,7 @@ if tele_to_send and svm_to_send:
 
         if df_local is not None and 'Lap_Number' in df_local.columns:
             laps = sorted([int(l) for l in df_local['Lap_Number'].unique() if l > 0])
-            
+
             if laps:
                 # 2. Pre-generar gráficos (cacheado como recurso)
                 # La clave del cache es el hash del contenido del archivo y la lista de vueltas
@@ -893,7 +895,7 @@ if tele_to_send and svm_to_send:
 
                 with main_tab_setup:
                     st.header("Configuración del Coche (.svm)")
-                    
+
                     # Inicializar estado temporal de edición si no existe
                     if 'temp_fixed_params' not in st.session_state:
                         st.session_state['temp_fixed_params'] = st.session_state['fixed_params'].copy()
@@ -938,7 +940,7 @@ if tele_to_send and svm_to_send:
                                     friendly_param = _mapping.get("parameters", {}).get(k, k)
                                     if k in ("VehicleClassSetting", "UpgradeSetting"):
                                         continue
-                                    
+
                                     if friendly_param.startswith("Ajuste de Chasis") or k.startswith("ChassisAdj"):
                                         continue
 
@@ -953,7 +955,7 @@ if tele_to_send and svm_to_send:
                                         "Valor": clean_v,
                                         "_internal_key": k
                                     })
-                                
+
                                 if rows:
                                     # Guardar filas para referencia al procesar el formulario
                                     st.session_state[f"rows_{section}"] = rows
@@ -979,7 +981,7 @@ if tele_to_send and svm_to_send:
                         if submitted:
                             # Procesar todos los editores al enviar el formulario
                             new_fixed = st.session_state['fixed_params'].copy()
-                            
+
                             # Recorrer todas las secciones cargadas
                             for section in setup_data.keys():
                                 editor_key = f"editor_{section}"
@@ -988,7 +990,7 @@ if tele_to_send and svm_to_send:
                                     changes = st.session_state[editor_key]
                                     rows = st.session_state[rows_key]
                                     edited_rows = changes.get("edited_rows", {})
-                                    
+
                                     # Actualizar basándose en los cambios manuales en el editor
                                     for idx_str, change in edited_rows.items():
                                         idx = int(idx_str)
@@ -999,13 +1001,13 @@ if tele_to_send and svm_to_send:
                                                     new_fixed.add(internal_key)
                                                 else:
                                                     new_fixed.discard(internal_key)
-                            
+
                             st.session_state['fixed_params'] = new_fixed
                             st.session_state['temp_fixed_params'] = new_fixed.copy()
                             if save_fixed_params(new_fixed):
                                 st.success("¡Parámetros guardados correctamente!")
                                 st.rerun()
-                        
+
                         # Si no hay filas en ninguna sección, mostrar mensaje
                         has_any_rows = any(len(params) > 0 for section, params in setup_data.items() if section.upper() not in ("LEFTFENDER", "RIGHTFENDER"))
                         if not has_any_rows:
@@ -1035,11 +1037,11 @@ if tele_to_send and svm_to_send:
                             data_form = {}
                             if sel_model:
                                 data_form["model"] = sel_model
-                            
+
                             # Enviar lista de parámetros fijados
                             if 'fixed_params' in st.session_state and st.session_state['fixed_params']:
                                 data_form["fixed_params"] = _json.dumps(list(st.session_state['fixed_params']))
-                            
+
                             response = requests.post(
                                 f"{API_BASE_URL}/analyze",
                                 files=files, data=data_form

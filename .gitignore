@@ -206,6 +206,10 @@ marimo/_static/
 marimo/_lsp/
 __marimo__/
 
+# Node (husky + commitlint)
+node_modules/
+package-lock.json
+
 # Asana MCP project overrides
 .asana-mcp.json
 asana_token.json

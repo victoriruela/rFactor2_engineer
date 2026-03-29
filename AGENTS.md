@@ -71,7 +71,12 @@ rFactor2_engineer/
 ├── README.md                      # User-facing docs (Spanish)
 ├── Dockerfile                     # Multi-stage build (backend + frontend targets)
 ├── docker-compose.yml             # 3-service orchestration (ollama, backend, frontend)
-└── .dockerignore                  # Build context exclusions
+├── .dockerignore                  # Build context exclusions
+├── GIT.md                         # Git workflow, hooks, commit conventions, linting
+├── pyproject.toml                 # Ruff linter configuration
+├── package.json                   # Node devDeps (husky + commitlint)
+├── commitlint.config.js           # Conventional commits rule config
+└── .husky/                        # Git hooks (pre-commit, commit-msg)
 ```
 
 ## Dependencies
@@ -318,6 +323,15 @@ docker compose exec ollama ollama pull llama3.2:latest
 | `Dockerfile` | Multi-stage build (targets: `backend`, `frontend`) |
 | `docker-compose.yml` | Orchestrates all 3 services |
 | `.dockerignore` | Excludes data/, tests/, .git/ from build context |
+
+## Git Workflow
+
+All commit conventions, hooks (husky + commitlint), linting (ruff), and branching rules are documented in [`GIT.md`](GIT.md). **Read that file before any git operation.**
+
+Key points:
+- **Pre-commit hook** runs lint → build → unit tests (blocks commit on failure)
+- **Commit-msg hook** enforces [Conventional Commits](https://www.conventionalcommits.org/) format
+- Hooks must **never** be bypassed (`--no-verify` is forbidden)
 
 ## Development Methodology
 

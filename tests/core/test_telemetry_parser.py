@@ -1,5 +1,4 @@
 """Unit tests for app/core/telemetry_parser.py"""
-import io
 import textwrap
 from pathlib import Path
 from unittest.mock import MagicMock

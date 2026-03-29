@@ -35,7 +35,7 @@ DATA_DIR = "data"
 def list_sessions():
     if not os.path.exists(DATA_DIR):
         return {"sessions": []}
-    
+
     sessions = []
     for sid in os.listdir(DATA_DIR):
         path = os.path.join(DATA_DIR, sid)
@@ -58,7 +58,7 @@ def get_session_file(session_id: str, filename: str):
     file_path = os.path.join(DATA_DIR, session_id, filename)
     if not os.path.exists(file_path):
         raise HTTPException(status_code=404, detail="File not found")
-    
+
     from fastapi.responses import FileResponse
     return FileResponse(file_path)
 
@@ -101,7 +101,7 @@ async def analyze_telemetry(
                 telemetry_df = parse_mat_file(tele_path)
             else:
                 telemetry_df = parse_csv_file(tele_path)
-            
+
             setup_dict = parse_svm_file(svm_path)
             circuit_name = telemetry_file.filename.split('-')[-2].strip() if '-' in telemetry_file.filename else "Circuito Desconocido"
         except ValueError as ve:
@@ -115,7 +115,7 @@ async def analyze_telemetry(
         if lat_col and lon_col:
             # Eliminar NaNs
             telemetry_df = telemetry_df.dropna(subset=[lat_col, lon_col])
-            
+
             # Intentar usar una única vuelta representativa para el trazado del mapa
             # Preferiblemente una vuelta completa (no la primera ni la última si están incompletas)
             if lap_col:
@@ -126,7 +126,7 @@ async def analyze_telemetry(
                     laps_to_check = [l for l in valid_laps if l > 1]
                     if not laps_to_check:
                         laps_to_check = list(valid_laps)
-                    
+
                     best_lap = max(laps_to_check, key=lambda l: len(telemetry_df[telemetry_df[lap_col] == l]))
                     map_df = telemetry_df[telemetry_df[lap_col] == best_lap].copy()
                 else:
@@ -143,30 +143,21 @@ async def analyze_telemetry(
             # O equivalentemente, en el gráfico (donde 1 unidad X = 1 unidad Y visualmente):
             # aspect_ratio = dy / dx = 1 / cos(lat) para que se vea real
             aspect_ratio = 1.0 / math.cos(math.radians(avg_lat))
-            
+
             x = map_df[lon_col].tolist()
             y = map_df[lat_col].tolist()
-            
+
             # Submuestreo inteligente para no perder detalle pero ser eficiente
             if len(x) > 5000:
-                # Aseguramos que los extremos (min/max de x e y) estén incluidos
-                # Buscamos los índices de los valores extremos
-                idx_min_x = x.index(min(x))
-                idx_max_x = x.index(max(x))
-                idx_min_y = y.index(min(y))
-                idx_max_y = y.index(max(y))
-                
-                extreme_indices = {idx_min_x, idx_max_x, idx_min_y, idx_max_y}
-                
                 step = len(x) // 5000
                 new_x, new_y = [], []
                 for i in range(0, len(x), step):
                     new_x.append(x[i])
                     new_y.append(y[i])
                     # Si el siguiente paso se salta un extremo, lo añadimos (opcionalmente)
-                    # Pero es más sencillo añadir los extremos al final y ordenar si fuera necesario, 
+                    # Pero es más sencillo añadir los extremos al final y ordenar si fuera necesario,
                     # aunque el trazado debe seguir el orden temporal.
-                
+
                 # Para mantener el orden temporal del trazado, simplemente nos aseguramos de que los puntos
                 # en los índices extremos estén en la lista final si no lo están por el step.
                 # Pero en 5000 puntos es casi seguro que están cerca.
@@ -174,7 +165,7 @@ async def analyze_telemetry(
                 if x[0] != x[-1] or y[0] != y[-1]:
                     new_x.append(x[0])
                     new_y.append(y[0])
-                
+
                 x, y = new_x, new_y
         else:
             x = [0.0]
@@ -204,8 +195,8 @@ async def analyze_telemetry(
         brk_col  = _first_col(telemetry_df, 'Brake Pos', 'Brake')
         rpm_col  = _first_col(telemetry_df, 'Engine RPM', 'RPM')
         fuel_col = _first_col(telemetry_df, 'Fuel Level', 'Fuel')
-        gear_col = _first_col(telemetry_df, 'Gear')
-        dist_col = _first_col(telemetry_df, 'Lap Distance', 'Distance')
+        _first_col(telemetry_df, 'Gear')
+        _first_col(telemetry_df, 'Lap Distance', 'Distance')
         wear_cols = [c for c in telemetry_df.columns if 'wear' in c.lower()]
         temp_cols = [c for c in telemetry_df.columns if 'tyre' in c.lower() and 'temp' in c.lower()]
 
@@ -370,7 +361,7 @@ async def analyze_telemetry(
             'downforce', 'drag', 'camber', 'toe', 'susp pos', 'susp force', 'grip',
             'load', 'pitch', 'roll', 'distance'
         ])]
-        
+
         # Combinar manteniendo el orden de prioridad y eliminando duplicados
         key_columns = []
         for c in priority_cols:
@@ -379,11 +370,11 @@ async def analyze_telemetry(
         for c in all_relevant:
             if c not in key_columns:
                 key_columns.append(c)
-        
+
         # Limitar a 100 columnas máximo para mantener tamaño razonable del contexto
         if len(key_columns) > 100:
             key_columns = key_columns[:100]
-        
+
         telemetry_for_ai_parts = []
         for lap_num in lap_numbers:
             if lap_col in telemetry_df.columns:
@@ -397,7 +388,7 @@ async def analyze_telemetry(
             sampled = lap_df_ai[key_columns].iloc[::step_ai].copy()
             sampled.insert(0, 'Vuelta', int(lap_num))
             telemetry_for_ai_parts.append(sampled)
-        
+
         if telemetry_for_ai_parts:
             telemetry_for_ai_df = pd.concat(telemetry_for_ai_parts, ignore_index=True)
             csv_buffer = io.StringIO()
@@ -405,22 +396,22 @@ async def analyze_telemetry(
             telemetry_csv_for_ai = csv_buffer.getvalue()
         else:
             telemetry_csv_for_ai = "No hay datos de telemetría disponibles."
-        
+
         summary = f"CIRCUITO: {circuit_name}\n"
         summary += f"ESTADÍSTICAS SESIÓN: {json.dumps(session_stats)}\n"
-        summary += f"DATOS POR VUELTA (resumen): " + "\n".join(lap_summaries) + "\n\n"
+        summary += "DATOS POR VUELTA (resumen): " + "\n".join(lap_summaries) + "\n\n"
         summary += f"DATOS DETALLADOS DE TELEMETRÍA (submuestreados, ~50 puntos por vuelta, {len(key_columns)} canales):\n"
         summary += telemetry_csv_for_ai
-        
+
         # Llamada asíncrona al análisis multi-agente
         ai_result = await ai_engineer.analyze(
-            summary, setup_dict, 
-            circuit_name=circuit_name, 
-            session_stats=session_stats, 
+            summary, setup_dict,
+            circuit_name=circuit_name,
+            session_stats=session_stats,
             model_tag=model or None,
             fixed_params=fixed_params_list
         )
-        
+
         # 4. Generar puntos de interés en el mapa
         issues_on_map = [
             {"x": x[len(x)//4], "y": y[len(y)//4], "status": "driving_issue", "color": "red", "label": "Pérdida por conducción"},
@@ -430,15 +421,19 @@ async def analyze_telemetry(
 
         # Asegurar tipos nativos de Python para JSON
         def convert_to_native(obj):
-            if isinstance(obj, (np.int64, np.int32)): return int(obj)
-            if isinstance(obj, (np.float64, np.float32)): return float(obj)
-            if isinstance(obj, dict): return {k: convert_to_native(v) for k, v in obj.items()}
-            if isinstance(obj, list): return [convert_to_native(i) for i in obj]
+            if isinstance(obj, (np.int64, np.int32)):
+                return int(obj)
+            if isinstance(obj, (np.float64, np.float32)):
+                return float(obj)
+            if isinstance(obj, dict):
+                return {k: convert_to_native(v) for k, v in obj.items()}
+            if isinstance(obj, list):
+                return [convert_to_native(i) for i in obj]
             return obj
 
         return AnalysisResponse(
             circuit_data={
-                "x": [float(i) for i in x], 
+                "x": [float(i) for i in x],
                 "y": [float(i) for i in y],
                 "aspect_ratio": aspect_ratio
             },
@@ -469,7 +464,7 @@ async def cleanup_data():
     """Borra todos los archivos .svm y .mat de la carpeta data."""
     if not os.path.exists(DATA_DIR):
         return {"status": "ok", "message": "No data directory"}
-    
+
     deleted_count = 0
     for root, dirs, files in os.walk(DATA_DIR):
         for file in files:
@@ -479,7 +474,7 @@ async def cleanup_data():
                     deleted_count += 1
                 except Exception as e:
                     print(f"Error borrando {file}: {e}")
-    
+
     # Opcionalmente borrar carpetas vacías
     for root, dirs, files in os.walk(DATA_DIR, topdown=False):
         for name in dirs:
