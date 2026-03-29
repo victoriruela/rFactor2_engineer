@@ -4,6 +4,7 @@ import subprocess
 import time
 import os
 import logging
+import unicodedata
 import requests
 from langchain_ollama import ChatOllama
 from langchain_core.output_parsers import StrOutputParser
@@ -607,6 +608,86 @@ class AIAngineer:
                     lines.append(f"  {k} = {v}")
         return "\n".join(lines)
 
+    def _normalize_specialist_report(self, report):
+        """Normaliza variaciones de esquema JSON de especialistas (especialmente Jimmy)."""
+        if not isinstance(report, dict):
+            return {"items": [], "summary": ""}
+
+        summary = report.get("summary") or report.get("resumen") or ""
+        summary = str(summary).strip()
+
+        raw_items = None
+        for key in ("items", "recommendations", "recomendaciones", "changes", "cambios", "proposals"):
+            candidate = report.get(key)
+            if candidate is not None:
+                raw_items = candidate
+                break
+
+        if raw_items is None:
+            raw_items = []
+        elif isinstance(raw_items, dict):
+            raw_items = [raw_items]
+        elif not isinstance(raw_items, list):
+            raw_items = []
+
+        normalized_items = []
+        for item in raw_items:
+            normalized = self._normalize_recommendation_item(item)
+            if normalized:
+                normalized_items.append(normalized)
+
+        return {
+            "items": normalized_items,
+            "summary": summary,
+        }
+
+    @staticmethod
+    def _normalize_token(text):
+        if text is None:
+            return ""
+        normalized = unicodedata.normalize("NFKD", str(text))
+        normalized = "".join(ch for ch in normalized if not unicodedata.combining(ch))
+        normalized = re.sub(r"[^a-zA-Z0-9]+", "", normalized).lower()
+        return normalized
+
+    def _normalize_recommendation_item(self, item):
+        """Normaliza un item de recomendación (especialista o chief) con claves alternativas."""
+        if not isinstance(item, dict):
+            return None
+
+        parameter = (
+            item.get("parameter")
+            or item.get("parametro")
+            or item.get("name")
+            or item.get("key")
+            or item.get("param")
+        )
+        new_value = (
+            item.get("new_value")
+            or item.get("newValue")
+            or item.get("nuevo_valor")
+            or item.get("nuevoValor")
+            or item.get("new")
+            or item.get("value")
+            or item.get("valor")
+        )
+        reason = (
+            item.get("reason")
+            or item.get("razon")
+            or item.get("motivo")
+            or item.get("justificacion")
+            or ""
+        )
+
+        if parameter is None or new_value is None:
+            return None
+
+        return {
+            "parameter": str(parameter).strip(),
+            "new_value": str(new_value).strip(),
+            "reason": str(reason).strip(),
+        }
+
     def _format_full_setup(self, all_reco_map, setup_data):
         """Formatea las recomendaciones finales con porcentajes de cambio."""
         full_setup_recommendations = {"sections": []}
@@ -768,7 +849,15 @@ class AIAngineer:
                 "fixed_params_prompt": fixed_params_prompt
             })
             if report:
-                specialist_reports.append({"name": section_name, "items": report.get("items", [])})
+                normalized_report = self._normalize_specialist_report(report)
+                specialist_reports.append(
+                    {
+                        "name": section_name,
+                        "friendly_name": self._get_friendly_name(section_name, 'section'),
+                        "items": normalized_report.get("items", []),
+                        "summary": normalized_report.get("summary", ""),
+                    }
+                )
 
         specialist_items = sum(
             len(r.get("items", [])) for r in specialist_reports if isinstance(r.get("items", []), list)
@@ -848,24 +937,39 @@ class AIAngineer:
                     all_reco_map[internal_name] = {}
 
                 for item in c_section.get("items", []):
-                    p_name = item.get("parameter", "")
+                    normalized_item = self._normalize_recommendation_item(item)
+                    if not normalized_item:
+                        continue
+
+                    p_name = normalized_item.get("parameter", "")
                     # Intento de corrección si el LLM usó el nombre amigable del parámetro
                     internal_p_name = p_name
                     inv_params = {v: k for k, v in self.mapping.get("parameters", {}).items()}
                     if p_name in inv_params:
                         internal_p_name = inv_params[p_name]
 
-                    all_reco_map[internal_name][internal_p_name] = item
-        else:
-            fallback_reasons.append("chief_none")
-            # Fallback: usar informes de especialistas si el jefe no respondió
+                    all_reco_map[internal_name][internal_p_name] = normalized_item
+        # Fallback secundario: si el chief devolvió JSON válido pero sin ítems dentro,
+        # usar los informes de los especialistas directamente.
+        chief_total_items = sum(len(v) for v in all_reco_map.values())
+        if chief_total_items == 0 and specialist_reports and "chief_none" not in fallback_reasons:
+            fallback_reasons.append("chief_no_items")
+            self._log_event(
+                logging.WARNING,
+                "chief_fallback_to_specialists",
+                reason="chief_no_items",
+                specialist_reports=len(specialist_reports),
+            )
             for s_report in specialist_reports:
                 s_name = s_report.get("name", "")
                 if s_name not in all_reco_map:
                     all_reco_map[s_name] = {}
                 for item in s_report.get("items", []):
-                    p_name = item.get("parameter", "")
-                    all_reco_map[s_name][p_name] = item
+                    normalized_item = self._normalize_recommendation_item(item)
+                    if not normalized_item:
+                        continue
+                    p_name = normalized_item.get("parameter", "")
+                    all_reco_map[s_name][p_name] = normalized_item
 
         full_setup_recommendations = self._format_full_setup(all_reco_map, setup_data)
 

@@ -260,6 +260,29 @@ def _post_analysis_for_session(session_id, data_form):
         timeout=ANALYSIS_REQUEST_TIMEOUT,
         )
 
+
+def _post_analysis_with_local_files(data_form):
+    tele_path = st.session_state.get("telemetry_temp_path")
+    svm_path = st.session_state.get("svm_temp_path")
+    tele_name = st.session_state.get("tele_name") or os.path.basename(tele_path or "telemetry")
+    svm_name = st.session_state.get("svm_name") or os.path.basename(svm_path or "setup.svm")
+
+    if not tele_path or not svm_path or not os.path.exists(tele_path) or not os.path.exists(svm_path):
+        raise FileNotFoundError("Local temporary upload files are missing")
+
+    with open(tele_path, "rb") as telemetry_file, open(svm_path, "rb") as svm_file:
+        files = {
+            "telemetry_file": (tele_name, telemetry_file),
+            "svm_file": (svm_name, svm_file),
+        }
+        return requests.post(
+            f"{API_BASE_URL}/analyze",
+            data=data_form,
+            files=files,
+            headers=_api_headers(),
+            timeout=ANALYSIS_REQUEST_TIMEOUT,
+        )
+
 def load_fixed_params():
     """Carga los parámetros fijados desde el archivo JSON."""
     if os.path.exists(FIXED_PARAMS_FILE):
@@ -1376,6 +1399,9 @@ if tele_path and svm_path:
                     analyze_button = st.button("🚀 Iniciar Análisis con IA")
 
                     if analyze_button:
+                        # Evita mostrar resultados antiguos si el nuevo análisis falla.
+                        st.session_state.pop('ai_analysis_data', None)
+                        st.session_state.pop('ai_model', None)
                         with st.spinner("Analizando con IA…"):
                             data_form = {}
                             data_form["provider"] = sel_provider
@@ -1386,10 +1412,15 @@ if tele_path and svm_path:
                             if 'fixed_params' in st.session_state and st.session_state['fixed_params']:
                                 data_form["fixed_params"] = _json.dumps(list(st.session_state['fixed_params']))
 
-                            response = _post_analysis_for_session(
-                                st.session_state.get("selected_session_id", st.session_state['selected_session_name']),
-                                data_form,
-                            )
+                            try:
+                                # Re-analiza siempre desde archivos locales para permitir cambiar proveedor/modelo
+                                # sin depender de sesiones ya consumidas en el backend.
+                                response = _post_analysis_with_local_files(data_form)
+                            except FileNotFoundError:
+                                response = _post_analysis_for_session(
+                                    st.session_state.get("selected_session_id", st.session_state['selected_session_name']),
+                                    data_form,
+                                )
                             if response.status_code == 200:
                                 data = response.json()
                                 # Guardar datos en session_state para re-análisis
@@ -1402,7 +1433,14 @@ if tele_path and svm_path:
                                 # Parsear setup_data del .svm para re-análisis
                                 st.session_state['ai_setup_data'] = parse_svm_content(svm_path)
                             else:
-                                st.error(f"Error en el análisis ({response.status_code}).")
+                                try:
+                                    error_detail = response.json().get("detail")
+                                except Exception:
+                                    error_detail = None
+                                if error_detail:
+                                    st.error(f"Error en el análisis ({response.status_code}): {error_detail}")
+                                else:
+                                    st.error(f"Error en el análisis ({response.status_code}).")
 
                     # Mostrar resultados (persistentes en session_state)
                     if 'ai_analysis_data' in st.session_state:
@@ -1415,11 +1453,6 @@ if tele_path and svm_path:
                         # ── Análisis del Ingeniero de Conducción ──
                         st.subheader("🏁 Análisis del Ingeniero de Conducción")
                         st.info(data['driving_analysis'])
-
-                        # ── Razonamiento del Ingeniero Jefe ──
-                        if data.get('chief_reasoning'):
-                            st.subheader("🧠 Razonamiento del Ingeniero Jefe")
-                            st.warning(data['chief_reasoning'])
 
                         # ── Setup Completo Recomendado ──
                         if data.get('full_setup') and data['full_setup'].get('sections'):
@@ -1448,6 +1481,46 @@ if tele_path and svm_path:
                                         st.table(df_ai.set_index("Parámetro"))
                                     else:
                                         st.caption("No se recomiendan cambios en esta sección.")
+
+                        # ── Razonamientos y Feedback de los Agentes ──
+                        agent_reports = data.get('agent_reports', [])
+                        chief_reasoning = data.get('chief_reasoning', '')
+                        if agent_reports or chief_reasoning:
+                            st.subheader("🤖 Razonamientos y Feedback de los Agentes")
+                            st.caption(
+                                "Análisis interno de cada agente especialista y del ingeniero jefe. "
+                                "Esta información explica el razonamiento detrás de las recomendaciones."
+                            )
+
+                            # Ingeniero Jefe
+                            if chief_reasoning:
+                                with st.expander("🎯 Ingeniero Jefe — Estrategia global", expanded=True):
+                                    st.markdown(chief_reasoning)
+
+                            # Agentes especialistas
+                            if agent_reports:
+                                for report in agent_reports:
+                                    sec_internal = report.get('name', '')
+                                    sec_friendly = report.get('friendly_name') or sec_internal
+                                    sec_summary = report.get('summary', '').strip()
+                                    sec_items = report.get('items', [])
+                                    n_changes = len([it for it in sec_items if it])
+                                    label = f"🔧 {sec_friendly} — {n_changes} cambio{'s' if n_changes != 1 else ''} propuesto{'s' if n_changes != 1 else ''}"
+                                    with st.expander(label, expanded=False):
+                                        if sec_summary:
+                                            st.markdown(f"**Resumen del especialista:**\n\n{sec_summary}")
+                                        if sec_items:
+                                            st.markdown("**Cambios propuestos:**")
+                                            for it in sec_items:
+                                                param = it.get('parameter', '')
+                                                new_val = it.get('new_value', '')
+                                                reason = it.get('reason', '')
+                                                st.markdown(
+                                                    f"- **{param}** → `{new_val}`  \n"
+                                                    f"  _{reason}_"
+                                                )
+                                        elif not sec_summary:
+                                            st.caption("El especialista no generó análisis para esta sección.")
             else:
                 st.warning("No se encontraron vueltas completas.")
         else:
@@ -1456,15 +1529,25 @@ if tele_path and svm_path:
         st.info("La visualización detallada actualmente solo soporta archivos .mat.")
         if st.button("Analizar con IA"):
             with st.spinner("Analizando con IA…"):
-                response = _post_analysis_for_session(
-                    st.session_state.get("selected_session_id", st.session_state['selected_session_name']),
-                    {},
-                )
+                try:
+                    response = _post_analysis_with_local_files({})
+                except FileNotFoundError:
+                    response = _post_analysis_for_session(
+                        st.session_state.get("selected_session_id", st.session_state['selected_session_name']),
+                        {},
+                    )
                 if response.status_code == 200:
                     data = response.json()
                     st.success("Análisis completado")
                     st.write(data['driving_analysis'])
                 else:
-                    st.error(f"Error en el análisis ({response.status_code}).")
+                    try:
+                        error_detail = response.json().get("detail")
+                    except Exception:
+                        error_detail = None
+                    if error_detail:
+                        st.error(f"Error en el análisis ({response.status_code}): {error_detail}")
+                    else:
+                        st.error(f"Error en el análisis ({response.status_code}).")
 else:
     st.info("👋 Sube tus archivos o elige una sesión anterior en la barra lateral para comenzar.")

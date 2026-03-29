@@ -402,4 +402,45 @@ class TestAnalyze:
         assert not tele_path.exists()
         assert not svm_path.exists()
 
+    def test_analyze_session_preserves_files_when_analysis_fails(self, tmp_path, mocker):
+        tele_path = tmp_path / "session.csv"
+        svm_path = tmp_path / "session.svm"
+        tele_path.write_bytes(self._csv_bytes)
+        svm_path.write_bytes(self._svm_bytes)
+
+        mocker.patch("app.main.ai_engineer.analyze", new=AsyncMock(side_effect=Exception("Jimmy exploded")))
+
+        with patch("app.main._client_root", return_value=str(tmp_path)):
+            r = client.post(
+                "/analyze_session",
+                headers=SESSION_HEADERS,
+                data={"session_id": "session", "provider": "jimmy", "model": "llama3.1-8B"},
+            )
+
+        assert r.status_code == 500
+        assert tele_path.exists()
+        assert svm_path.exists()
+
+    def test_telemetry_summary_is_capped_before_analyze(self, mocker):
+        """The telemetry CSV sent to ai_engineer.analyze() must be <= MAX_AI_TELEMETRY_CHARS."""
+        import app.main as main_module
+
+        captured = {}
+
+        async def capturing_analyze(*args, **kwargs):
+            captured["telemetry_summary"] = args[0] if args else kwargs.get("telemetry_summary", "")
+            return _minimal_ai_result()
+
+        mocker.patch("app.main.ai_engineer.analyze", new=capturing_analyze)
+
+        r = client.post(
+            "/analyze",
+            files={
+                "telemetry_file": ("session.csv", self._csv_bytes, "text/csv"),
+                "svm_file": ("car.svm", self._svm_bytes, "text/plain"),
+            },
+        )
+        assert r.status_code == 200
+        assert len(captured.get("telemetry_summary", "")) <= main_module.MAX_AI_TELEMETRY_CHARS + 2000
+
 

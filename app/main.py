@@ -52,6 +52,11 @@ DATA_DIR = "data"
 UPLOAD_CHUNK_SIZE = 64 * 1024 * 1024
 SESSION_ID_REGEX = re.compile(r"^[A-Za-z0-9_-]{8,128}$")
 
+# Max size (chars) for the telemetry CSV sent to AI agents.
+# Jimmy (llama3.1-8B) effective context is ~8-16K tokens; a full-session CSV can
+# reach 120KB+ and overwhelms the model, causing non-JSON responses.
+MAX_AI_TELEMETRY_CHARS = 15_000
+
 
 class UploadInitRequest(BaseModel):
     filename: str
@@ -604,6 +609,10 @@ async def analyze_telemetry(
         else:
             telemetry_csv_for_ai = "No hay datos de telemetría disponibles."
 
+        # Truncate to avoid exceeding the LLM context window (especially Jimmy llama3.1-8B).
+        if len(telemetry_csv_for_ai) > MAX_AI_TELEMETRY_CHARS:
+            telemetry_csv_for_ai = telemetry_csv_for_ai[:MAX_AI_TELEMETRY_CHARS] + "\n... [datos de telemetría truncados — se muestran los primeros registros]"
+
         summary = f"CIRCUITO: {circuit_name}\n"
         summary += f"ESTADÍSTICAS SESIÓN: {json.dumps(session_stats)}\n"
         summary += "DATOS POR VUELTA (resumen): " + "\n".join(lap_summaries) + "\n\n"
@@ -645,6 +654,9 @@ async def analyze_telemetry(
             driving_csv = drv_buf.getvalue()
         else:
             driving_csv = "No hay datos de telemetría de conducción disponibles."
+
+        if len(driving_csv) > MAX_AI_TELEMETRY_CHARS:
+            driving_csv = driving_csv[:MAX_AI_TELEMETRY_CHARS] + "\n... [datos de conducción truncados]"
 
         driving_summary = f"CIRCUITO: {circuit_name}\n"
         driving_summary += f"ESTADÍSTICAS SESIÓN: {json.dumps(session_stats)}\n"
@@ -742,19 +754,23 @@ async def analyze_stored_session(
     svm_handle = open(svm_path, "rb")
     telemetry_upload = UploadFile(filename=pair["telemetry"], file=telemetry_handle)
     svm_upload = UploadFile(filename=pair["svm"], file=svm_handle)
+    analysis_succeeded = False
 
     try:
-        return await analyze_telemetry(
+        result = await analyze_telemetry(
             telemetry_file=telemetry_upload,
             svm_file=svm_upload,
             model=model,
             provider=provider,
             fixed_params=fixed_params,
         )
+        analysis_succeeded = True
+        return result
     finally:
-        for path in (tele_path, svm_path):
-            if os.path.exists(path):
-                os.remove(path)
+        if analysis_succeeded:
+            for path in (tele_path, svm_path):
+                if os.path.exists(path):
+                    os.remove(path)
 
 @app.post("/cleanup")
 async def cleanup_data(client_session_id: str = Depends(_resolve_client_session_id)):
