@@ -50,7 +50,7 @@ from app.core.ai_agents import AIAngineer, list_available_models
 ai_engineer = AIAngineer()
 
 DATA_DIR = "data"
-UPLOAD_CHUNK_SIZE = 64 * 1024 * 1024
+UPLOAD_CHUNK_SIZE = 16 * 1024 * 1024
 SESSION_ID_REGEX = re.compile(r"^[A-Za-z0-9_-]{8,128}$")
 
 # Max size (chars) for the telemetry CSV sent to AI agents.

@@ -14,7 +14,7 @@ import re
 FIXED_PARAMS_FILE = "app/core/fixed_params.json"
 API_BASE_URL = os.environ.get("RF2_API_URL", "http://localhost:8000")
 BROWSER_API_BASE_URL = os.environ.get("RF2_BROWSER_API_BASE_URL", "/api")
-UPLOAD_CHUNK_SIZE = 64 * 1024 * 1024
+UPLOAD_CHUNK_SIZE = 16 * 1024 * 1024
 ANALYSIS_REQUEST_TIMEOUT = (10, 1800)
 TEMP_UPLOAD_ROOT = os.path.join(tempfile.gettempdir(), "rfactor2_engineer_uploads")
 CLIENT_SESSION_COOKIE = "rf2_session_id"
@@ -147,7 +147,7 @@ def _render_chunked_uploader():
     html = f"""
         <div style='font-family:sans-serif;'>
             <input id='rf2_files' type='file' multiple accept='.mat,.csv,.svm' />
-            <button id='rf2_upload_btn' style='margin-top:6px;'>Subir en chunks (64 MB)</button>
+            <button id='rf2_upload_btn' style='margin-top:6px;'>Subir en chunks (16 MB)</button>
             <pre id='rf2_upload_status' style='white-space:pre-wrap;font-size:12px;max-height:120px;overflow:auto;'></pre>
         </div>
         <script>
@@ -160,6 +160,25 @@ def _render_chunked_uploader():
             function log(msg) {{
                 statusEl.textContent += msg + "\\n";
                 statusEl.scrollTop = statusEl.scrollHeight;
+            }}
+
+            async function uploadChunkWithRetry(url, options, maxRetries = 3) {{
+                let lastError = null;
+                for (let attempt = 1; attempt <= maxRetries; attempt += 1) {{
+                    try {{
+                        const response = await fetch(url, options);
+                        if (response.ok) {{
+                            return response;
+                        }}
+                        throw new Error(`status ${{response.status}}`);
+                    }} catch (err) {{
+                        lastError = err;
+                        if (attempt < maxRetries) {{
+                            await new Promise((resolve) => setTimeout(resolve, 500 * attempt));
+                        }}
+                    }}
+                }}
+                throw new Error(`chunk failed after retries: ${{lastError?.message || 'unknown error'}}`);
             }}
 
             async function uploadOne(file) {{
@@ -182,7 +201,7 @@ def _render_chunked_uploader():
                 let chunkIndex = 0;
                 for (let offset = 0; offset < file.size; offset += chunkSize) {{
                     const chunk = file.slice(offset, Math.min(offset + chunkSize, file.size));
-                    const chunkResp = await fetch(`${{apiBase}}/uploads/${{initData.upload_id}}/chunk?chunk_index=${{chunkIndex}}`, {{
+                    const chunkResp = await uploadChunkWithRetry(`${{apiBase}}/uploads/${{initData.upload_id}}/chunk?chunk_index=${{chunkIndex}}`, {{
                         method: 'PUT',
                         headers: {{
                             'Content-Type': 'application/octet-stream',
@@ -191,7 +210,6 @@ def _render_chunked_uploader():
                         body: chunk,
                         credentials: 'include',
                     }});
-                    if (!chunkResp.ok) throw new Error(`chunk ${{chunkIndex}} failed (${{chunkResp.status}})`);
                     chunkIndex += 1;
                       log(`${{file.name}}: chunk ${{chunkIndex}} enviado`);
                 }}
@@ -1172,8 +1190,8 @@ with st.sidebar:
 
     # Lógica de visualización de la barra lateral
     if not st.session_state['selected_session_name']:
-        # ESTADO 1: Subida chunked directa browser -> API (64 MB por petición)
-        st.caption("Subida robusta para Cloudflare: el navegador envía chunks de 64 MB a la API.")
+        # ESTADO 1: Subida chunked directa browser -> API (16 MB por petición)
+        st.caption("Subida robusta para Cloudflare: el navegador envía chunks de 16 MB a la API.")
         _render_chunked_uploader()
 
         available_sessions = _fetch_backend_sessions()
