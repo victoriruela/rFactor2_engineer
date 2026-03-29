@@ -17,6 +17,9 @@ JIMMY_API_URL = os.getenv("JIMMY_API_URL", "https://chatjimmy.ai/api/chat")
 JIMMY_MODEL_TAG = "llama3.1-8B"
 JIMMY_STATS_RE = re.compile(r"<\|stats\|>.*?<\|/stats\|>", re.DOTALL)
 JIMMY_RUNTIME_CONFIG_PATH = "app/core/jimmy_runtime_config.v1.json"
+# Jimmy llama3.1-8B has ~8K token context; keep total prompt well under that.
+# Full prompt = template (~1.5K chars) + telemetry + section_data + fixed_params.
+JIMMY_MAX_TELEMETRY_CHARS = 4_000
 logger = logging.getLogger(__name__)
 
 
@@ -797,9 +800,25 @@ class AIAngineer:
         # 1. Actualizar mapeos si hay nuevos parámetros
         await self.update_mappings(setup_data)
 
+        # Provider-aware telemetry truncation: Jimmy's small context needs much shorter input.
+        if provider_key == "jimmy" and len(telemetry_summary) > JIMMY_MAX_TELEMETRY_CHARS:
+            ai_telemetry = telemetry_summary[:JIMMY_MAX_TELEMETRY_CHARS] + "\n... [datos truncados para ajuste de contexto LLM]"
+        else:
+            ai_telemetry = telemetry_summary
+
+        self._log_event(
+            logging.INFO,
+            "telemetry_sizes",
+            original_len=len(telemetry_summary),
+            ai_len=len(ai_telemetry),
+            provider=provider_key,
+        )
+
         # 2. Análisis de Conducción
         # Usar resumen filtrado (solo canales de técnica de pilotaje) si está disponible
         driving_input = driving_telemetry_summary if driving_telemetry_summary is not None else telemetry_summary
+        if provider_key == "jimmy" and len(driving_input) > JIMMY_MAX_TELEMETRY_CHARS:
+            driving_input = driving_input[:JIMMY_MAX_TELEMETRY_CHARS] + "\n... [datos truncados]"
         try:
             driving_analysis = await self._get_text_from_llm(DRIVING_PROMPT, {
                 "telemetry_summary": driving_input,
@@ -842,7 +861,7 @@ class AIAngineer:
             friendly_section = self._get_friendly_name(section_name, 'section')
             report = await self._get_json_from_llm(SECTION_AGENT_PROMPT, {
                 "section_name": friendly_section,
-                "telemetry_summary": telemetry_summary,
+                "telemetry_summary": ai_telemetry,
                 "section_data": json.dumps(cleaned_data, indent=2),
                 "context_data": "N/A",
                 "circuit_name": circuit_name,
@@ -885,7 +904,7 @@ class AIAngineer:
         # Ingeniero Jefe (paso final de consolidación)
         chief_engineer_report = await self._get_json_from_llm(CHIEF_ENGINEER_PROMPT, {
             "specialist_reports": json.dumps(specialist_reports, indent=2),
-            "telemetry_summary": telemetry_summary,
+            "telemetry_summary": ai_telemetry,
             "circuit_name": circuit_name,
             "current_setup": current_setup_summary,
             "memory_context": "N/A",
@@ -960,6 +979,7 @@ class AIAngineer:
                 reason="chief_no_items",
                 specialist_reports=len(specialist_reports),
             )
+            inv_params_fb = {v: k for k, v in self.mapping.get("parameters", {}).items()}
             for s_report in specialist_reports:
                 s_name = s_report.get("name", "")
                 if s_name not in all_reco_map:
@@ -969,7 +989,17 @@ class AIAngineer:
                     if not normalized_item:
                         continue
                     p_name = normalized_item.get("parameter", "")
+                    # Resolve friendly→internal name (same as chief path)
+                    if p_name in inv_params_fb:
+                        p_name = inv_params_fb[p_name]
                     all_reco_map[s_name][p_name] = normalized_item
+
+        self._log_event(
+            logging.INFO,
+            "reco_map_summary",
+            sections=list(all_reco_map.keys()),
+            items_per_section={k: len(v) for k, v in all_reco_map.items()},
+        )
 
         full_setup_recommendations = self._format_full_setup(all_reco_map, setup_data)
 

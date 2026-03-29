@@ -564,6 +564,65 @@ class TestAnalyzeJimmyFailureShapes:
         assert "chief_present=false" in caplog.text
 
     @pytest.mark.asyncio
+    async def test_jimmy_provider_truncates_telemetry_for_specialists(self, ai, mocker):
+        """Jimmy's 8K context can't handle large telemetry — verify it gets truncated."""
+        mocker.patch.object(ai, "update_mappings", new=AsyncMock())
+        mocker.patch.object(ai, "_call_llm_text", new=AsyncMock(return_value="Conduccion OK"))
+
+        captured_inputs = []
+        original_get_json = ai._get_json_from_llm
+
+        async def capturing_get_json(prompt, inputs, **kwargs):
+            captured_inputs.append(inputs.copy())
+            return None
+
+        mocker.patch.object(ai, "_get_json_from_llm", new=AsyncMock(side_effect=capturing_get_json))
+
+        big_telemetry = "x" * 10_000
+        await ai.analyze(
+            telemetry_summary=big_telemetry,
+            setup_data=self.SETUP,
+            provider="jimmy",
+        )
+
+        from app.core.ai_agents import JIMMY_MAX_TELEMETRY_CHARS
+        specialist_calls = [c for c in captured_inputs if "section_name" in c]
+        for call in specialist_calls:
+            assert len(call["telemetry_summary"]) <= JIMMY_MAX_TELEMETRY_CHARS + 100
+
+    @pytest.mark.asyncio
+    async def test_fallback_resolves_friendly_param_names_to_internal(self, ai, mocker):
+        """Specialist reports using friendly param names must map to internal names in setup."""
+        mocker.patch.object(ai, "update_mappings", new=AsyncMock())
+        mocker.patch.object(ai, "_call_llm_text", new=AsyncMock(return_value="Conduccion OK"))
+
+        # Set up a friendly→internal mapping
+        ai.mapping["parameters"]["SpringSetting"] = "Muelle (Spring)"
+
+        specialist_report = {
+            "items": [
+                {"parameter": "Muelle (Spring)", "new_value": "115", "reason": "Ajuste."}
+            ],
+            "summary": "Cambio de muelle.",
+        }
+        mocker.patch.object(
+            ai,
+            "_get_json_from_llm",
+            new=AsyncMock(side_effect=[specialist_report, specialist_report, None]),
+        )
+
+        result = await ai.analyze(
+            telemetry_summary="telemetry",
+            setup_data=self.SETUP,
+            provider="jimmy",
+        )
+
+        sections = {s["section_key"]: s for s in result["full_setup"]["sections"]}
+        suspension_items = sections["SUSPENSION"]["items"]
+        spring_item = next(i for i in suspension_items if i["param_key"] == "SpringSetting")
+        assert spring_item["new"].startswith("115")
+
+    @pytest.mark.asyncio
     async def test_chief_item_alt_keys_are_applied_to_setup(self, ai, mocker):
         mocker.patch.object(ai, "update_mappings", new=AsyncMock())
         mocker.patch.object(ai, "_call_llm_text", new=AsyncMock(return_value="Conduccion OK"))

@@ -1486,41 +1486,44 @@ if tele_path and svm_path:
                         agent_reports = data.get('agent_reports', [])
                         chief_reasoning = data.get('chief_reasoning', '')
                         if agent_reports or chief_reasoning:
-                            st.subheader("🤖 Razonamientos y Feedback de los Agentes")
-                            st.caption(
-                                "Análisis interno de cada agente especialista y del ingeniero jefe. "
-                                "Esta información explica el razonamiento detrás de las recomendaciones."
+                            st.divider()
+                            st.subheader("💬 Razonamientos de los Agentes IA")
+                            st.info(
+                                "ℹ️ Esta sección muestra el **razonamiento interno** de cada agente. "
+                                "No es la tabla de cambios del setup — es la explicación técnica "
+                                "detrás de las recomendaciones.",
+                                icon="🧠"
                             )
 
                             # Ingeniero Jefe
                             if chief_reasoning:
                                 with st.expander("🎯 Ingeniero Jefe — Estrategia global", expanded=True):
-                                    st.markdown(chief_reasoning)
+                                    st.markdown(f"> {chief_reasoning.replace(chr(10), chr(10) + '> ')}")
 
-                            # Agentes especialistas
-                            if agent_reports:
-                                for report in agent_reports:
-                                    sec_internal = report.get('name', '')
-                                    sec_friendly = report.get('friendly_name') or sec_internal
+                            # Agentes especialistas: only show sections with actual content
+                            meaningful_reports = [
+                                r for r in (agent_reports or [])
+                                if r.get('summary', '').strip() or r.get('items', [])
+                            ]
+                            if meaningful_reports:
+                                for report in meaningful_reports:
+                                    sec_friendly = report.get('friendly_name') or report.get('name', '')
                                     sec_summary = report.get('summary', '').strip()
                                     sec_items = report.get('items', [])
-                                    n_changes = len([it for it in sec_items if it])
-                                    label = f"🔧 {sec_friendly} — {n_changes} cambio{'s' if n_changes != 1 else ''} propuesto{'s' if n_changes != 1 else ''}"
+                                    label = f"📝 {sec_friendly}"
                                     with st.expander(label, expanded=False):
                                         if sec_summary:
-                                            st.markdown(f"**Resumen del especialista:**\n\n{sec_summary}")
+                                            st.markdown(f"> {sec_summary.replace(chr(10), chr(10) + '> ')}")
                                         if sec_items:
-                                            st.markdown("**Cambios propuestos:**")
+                                            st.markdown("---")
                                             for it in sec_items:
                                                 param = it.get('parameter', '')
                                                 new_val = it.get('new_value', '')
                                                 reason = it.get('reason', '')
                                                 st.markdown(
-                                                    f"- **{param}** → `{new_val}`  \n"
-                                                    f"  _{reason}_"
+                                                    f"**{param}** → `{new_val}`\n\n"
+                                                    f"> _{reason}_\n"
                                                 )
-                                        elif not sec_summary:
-                                            st.caption("El especialista no generó análisis para esta sección.")
             else:
                 st.warning("No se encontraron vueltas completas.")
         else:
