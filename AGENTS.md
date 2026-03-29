@@ -2,6 +2,20 @@
 
 Complete context for any AI agent working on this project. Read this file first before making changes.
 
+> **DOCUMENTATION MAINTENANCE MANDATE — MANDATORY FOR ALL AGENTS**
+>
+> Any agent that modifies **implementation** (API endpoints, data pipeline, AI agents, parsers, tests)
+> or **infrastructure / deployment** (Docker, Nginx, GCP scripts, release flow, environment variables)
+> **must** update this file in the same commit that introduces the change. Sections to keep current:
+> - `File Map` — add / rename / remove entries when files change
+> - `API Endpoints` — reflect any new, changed, or removed route
+> - `GCP Deployment` — reflect any change to topology, scripts, credentials, or release procedure
+> - `Development Environment` — reflect changes to test commands or Docker services
+> - `Architecture` / `Data Flow` — reflect structural changes to the pipeline
+>
+> Stale documentation is treated as a bug. The pre-commit hook does not enforce this automatically,
+> so agents are the last line of defence.
+
 ## Project Summary
 
 rFactor2 Engineer analyzes sim-racing telemetry (MoTeC `.mat`/`.csv`) and vehicle setup files (`.svm`) using a multi-agent LLM pipeline to produce driving technique feedback and setup change recommendations. All output is in Spanish (Castellano).
@@ -30,40 +44,53 @@ FastAPI Backend (:8000)           ← app/main.py
 ```
 rFactor2_engineer/
 ├── app/
-│   ├── main.py                    # FastAPI server, /analyze endpoint, data pipeline
+│   ├── main.py                    # FastAPI server; all API endpoints; data pipeline
 │   └── core/
 │       ├── ai_agents.py           # AIAngineer class, prompts, LLM orchestration
 │       ├── telemetry_parser.py    # .mat, .csv, .svm parsers
 │       ├── param_mapping.json     # Internal→friendly name translation (116 entries)
 │       └── fixed_params.json      # Parameters locked from AI modification (28 entries)
 ├── frontend/
-│   └── streamlit_app.py           # Streamlit UI, file upload, results display
+│   └── streamlit_app.py           # Streamlit UI; chunked uploader; session isolation
 ├── .streamlit/
 │   └── config.toml                # maxUploadSize = 20000
 ├── tests/                         # Unit + integration test suite (pytest)
 │   ├── conftest.py                # Shared fixtures (DataFrames, SVM content, setup dicts)
 │   ├── core/
-│   │   ├── test_telemetry_parser.py  # 20 tests: CSV, SVM, .mat, _filter_incomplete_laps
-│   │   └── test_ai_agents.py         # 29 tests: pure functions + AIAngineer (mocked LLM)
+│   │   ├── test_telemetry_parser.py  # CSV, SVM, .mat parsing; _filter_incomplete_laps
+│   │   └── test_ai_agents.py         # Pure functions + AIAngineer unit tests (mocked LLM)
+│   ├── frontend/
+│   │   └── test_upload_temp_files.py # Chunked upload helper functions
 │   ├── integration/
 │   │   ├── conftest.py            # Auto-skip guard if Ollama/llama3.2 unavailable
 │   │   └── test_ai_pipeline.py    # 3 tests: full AI pipeline with real LLM (opt-in)
-│   ├── test_main.py               # 12 tests: all FastAPI endpoints (real parsers, mocked AI)
+│   ├── test_main.py               # FastAPI endpoints: real parsers, mocked AI
 │   └── fixtures/
 │       ├── sample.csv             # 2-lap MoTeC CSV with GPS + telemetry columns
 │       └── sample.svm             # Minimal rFactor2 setup file
 ├── e2e/
 │   ├── api/
 │   │   ├── conftest.py            # httpx async client, auto-skip if server offline
-│   │   └── test_endpoints.py      # 5 tests against live backend (:8000)
+│   │   └── test_endpoints.py      # Smoke tests against live backend (:8000)
 │   └── web/
 │       ├── upload_telemetry.yaml  # Maestro Web flow: file upload → telemetry tab
 │       └── ai_analysis.yaml       # Maestro Web flow: AI analysis → results visible
-├── data/                          # Runtime: uploaded session files (uuid dirs)
+├── deploy/
+│   ├── docker-compose.gcp.yml     # GCP host override (loopback port binds + host-gateway)
+│   ├── nginx-rfactor2_engineer.conf  # Nginx reverse-proxy config (TLS, Basic Auth, proxy)
+│   └── .htpasswd                  # Basic Auth credentials (hashed) for host Nginx
+├── scripts/
+│   ├── release_and_deploy.ps1     # Master release orchestration (RC → tag → publish → deploy)
+│   ├── deploy_gcp.ps1             # Deploy tagged artifact to GCP host (requires -ReleaseTag)
+│   ├── run_docker_test.ps1        # Wrapper: docker compose test run with container cleanup
+│   └── cleanup_docker_test_artifacts.ps1  # Remove exited test containers/images
+├── dist/                          # Local deploy artifacts (git-archived tarballs)
+├── data/                          # Runtime: per-client session uploads (Docker-owned, not in git)
 ├── models/                        # Optional: local .gguf model files
 ├── pytest.ini                     # asyncio_mode=auto, testpaths=tests, markers
 ├── requirements.txt               # Python runtime dependencies
 ├── requirements-dev.txt           # Test dependencies (pytest, httpx, pytest-mock, etc.)
+├── AGENTS.md                      # THIS FILE — complete context for AI agents (keep current)
 ├── ASANA.md                       # Asana MCP plugin docs
 ├── asana-mcp-plugin.zip           # Asana MCP plugin (install to ~/.claude/asana-mcp/)
 ├── CONSTANTS.md                   # Index of domain constant files
@@ -71,7 +98,7 @@ rFactor2_engineer/
 ├── README.md                      # User-facing docs (Spanish)
 ├── Dockerfile                     # Multi-stage build (backend + frontend targets)
 ├── docker-compose.yml             # Container orchestration (backend, frontend, test) using host Ollama
-├── .dockerignore                  # Build context exclusions
+├── .dockerignore                  # Excludes data/, tests/, dist/, .git/ from build context
 ├── GIT.md                         # Git workflow, hooks, commit conventions, linting
 ├── pyproject.toml                 # Ruff linter configuration
 ├── package.json                   # Node devDeps (husky + commitlint)
@@ -114,23 +141,61 @@ Set in `.env` at project root (loaded by python-dotenv). In Docker, backend poin
 
 ## API Endpoints
 
-### `POST /analyze`
-Main analysis endpoint. Accepts multipart form:
+All endpoints that touch the `data/` directory are **session-scoped**: the caller's identity is
+resolved from the `X-Client-Session-Id` request header or the `rf2_session_id` cookie.
+Each client sees only its own uploads and sessions.
+
+### Chunked file upload flow
+
+#### `POST /uploads/init`
+Initiates a resumable file upload. Body: `{"filename": "<name>"}` (JSON).
+Returns `{"upload_id", "chunk_size", "filename"}`.
+
+#### `PUT /uploads/{upload_id}/chunk?chunk_index=N`
+Uploads one raw-body chunk (max `chunk_size` bytes). Must be sent in order (409 if out of sequence).
+Returns `{"upload_id", "chunk_index", "bytes_received"}`.
+
+#### `POST /uploads/{upload_id}/complete`
+Assembles all chunks into the final file under `data/<client_session_id>/`.
+Returns `{"filename", "bytes_received"}`.
+
+### Session management
+
+#### `GET /sessions`
+Lists complete sessions (directories in `data/<client_session_id>/` with both a telemetry file
+and a `.svm` file). Returns `{"sessions": [{"id", "telemetry", "svm"}]}`.
+
+#### `GET /sessions/{session_id}/file/{filename}`
+Downloads a stored session file. Only the telemetry and SVM filenames belonging to that session
+are accessible (path-traversal guard).
+
+### Analysis
+
+#### `POST /analyze`
+Direct-upload analysis (no prior chunking required). Accepts multipart form:
 - `telemetry_file`: `.mat` or `.csv` (MoTeC export)
 - `svm_file`: `.svm` (rFactor 2 setup)
 - `model` (optional): Ollama model tag override
+- `provider` (optional): LLM provider (default `ollama`)
 - `fixed_params` (optional): JSON string array of locked parameter names
 
-Returns `AnalysisResponse` with: `circuit_data`, `issues_on_map`, `driving_analysis`, `setup_analysis`, `full_setup`, `session_stats`, `laps_data`, `agent_reports`, `telemetry_summary_sent`, `chief_reasoning`.
+Temp files are written to `data/_analysis_tmp/{uuid}/` and deleted in `finally`. Returns
+`AnalysisResponse` with: `circuit_data`, `issues_on_map`, `driving_analysis`, `setup_analysis`,
+`full_setup`, `session_stats`, `laps_data`, `agent_reports`, `telemetry_summary_sent`, `chief_reasoning`.
 
-### `GET /sessions`
-Lists uploaded sessions (directories in `data/` with both `.mat`/`.csv` and `.svm` files).
+#### `POST /analyze_session`
+Analyzes a previously uploaded stored session (via chunked upload). Form params:
+`session_id` (required), `model`, `provider`, `fixed_params`. Deletes the session files
+after a successful analysis. Same `AnalysisResponse` shape as `POST /analyze`.
 
-### `GET /models`
+### Other
+
+#### `GET /models`
 Returns available Ollama models via `GET /api/tags` on Ollama.
 
-### `POST /cleanup`
-Deletes all `.mat` and `.svm` files from `data/`, removes empty dirs.
+#### `POST /cleanup`
+Deletes the current client session's telemetry/setup files and in-progress chunk files from
+`data/<client_session_id>/`. Removes empty directories.
 
 ## AI Agent Pipeline
 
@@ -422,11 +487,12 @@ ollama pull llama3.2:latest
 |------|---------|
 | `Dockerfile` | Multi-stage build (targets: `backend`, `frontend`) |
 | `docker-compose.yml` | Orchestrates backend/frontend/test containers; uses host Ollama |
-| `.dockerignore` | Excludes data/, tests/, .git/ from build context |
+| `.dockerignore` | Excludes data/, tests/, dist/, .git/ from build context |
 | `deploy/docker-compose.gcp.yml` | GCP host override: localhost-only port binds + host-gateway mapping |
-| `deploy/nginx-rfactor2_engineer.conf` | HTTP reverse-proxy config (Nginx -> frontend/backend) |
+| `deploy/nginx-rfactor2_engineer.conf` | HTTP reverse-proxy config (Nginx -> frontend/backend, TLS, Basic Auth) |
 | `deploy/.htpasswd` | Basic Auth credentials file (hashed) copied to host Nginx |
-| `scripts/deploy_gcp.ps1` | One-command deploy to the configured GCP host |
+| `scripts/release_and_deploy.ps1` | Master release orchestration: RC → tag → GitHub Release → deploy |
+| `scripts/deploy_gcp.ps1` | Deploy a specific tagged artifact to the GCP host (requires `-ReleaseTag`) |
 
 ## GCP Deployment
 
@@ -495,31 +561,54 @@ curl -u racef1:100fuchupabien -I https://car-setup.com/            # expected 20
 curl -u racef1:100fuchupabien https://car-setup.com/api/models     # expected JSON response
 ```
 
-### Deploy / update procedure
+### Release and deploy procedure
 
-From repository root:
+**All production deploys must go through the formal release pipeline — never deploy from a dirty tree or an untagged commit.**
 
-```bash
-powershell -ExecutionPolicy Bypass -NoProfile -File scripts/deploy_gcp.ps1
+The canonical entry point is `scripts/release_and_deploy.ps1`. It enforces:
+1. Abort if working tree is dirty.
+2. Merge one or more source branches into `develop`.
+3. Run Docker unit tests on `develop`; tag RC (`vX.Y.Z-rc.N`) and push.
+4. Merge `develop` into `main`; run Docker unit tests again.
+5. Tag release (`vX.Y.Z`) on `main` and push.
+6. Create `dist/rfactor2_engineer-vX.Y.Z.tar.gz` via `git archive <tag>`.
+7. Publish a GitHub Release with that artifact.
+8. Call `deploy_gcp.ps1 -ReleaseTag vX.Y.Z -UseGithubReleaseArtifact`.
+
+```powershell
+# Full release from a feature branch
+powershell -ExecutionPolicy Bypass -NoProfile -File scripts/release_and_deploy.ps1 `
+    -VersionBump patch `
+    -SourceBranches feat/your-branch
+
+# Release with no pending merges (develop is already current)
+powershell -ExecutionPolicy Bypass -NoProfile -File scripts/release_and_deploy.ps1 -VersionBump minor
 ```
 
-What the script does:
-1. Creates a tar artifact from `git archive` (tracked files only).
-2. Uploads/extracts to `/home/bitor/apps/rFactor2_engineer`.
-3. Runs `docker compose -f deploy/docker-compose.gcp.yml up -d --build`.
-4. Installs/validates/reloads Nginx config.
-5. Runs health checks for frontend/backend/nginx endpoints.
+**Emergency redeploy from an existing tag** (no new release):
 
-If only config/code changed and you want to skip image rebuild:
-
-```bash
-powershell -ExecutionPolicy Bypass -NoProfile -File scripts/deploy_gcp.ps1 -SkipDockerBuild
+```powershell
+powershell -ExecutionPolicy Bypass -NoProfile -File scripts/deploy_gcp.ps1 `
+    -ReleaseTag v1.0.1 -UseGithubReleaseArtifact
 ```
+
+What `deploy_gcp.ps1` does:
+1. Asserts clean working tree.
+2. Downloads the artifact from the GitHub Release (or uses `git archive <tag>` if not using GitHub artifact).
+3. Uploads the tarball to the remote host via `scp`.
+4. Extracts on remote: removes app-code files (non-`data/`), then runs `tar -xzf`.
+   - `data/` is **intentionally preserved** — it contains Docker-owned session uploads.
+   - Plain `rm -rf` handles bitor-owned files; `sudo` is used only as a fallback for any
+     Docker-owned files that exist outside `data/` (edge case).
+5. Copies `deploy/` config files and starts services with `docker compose ... up -d --build`.
+6. Installs and reloads Nginx config.
+7. Runs health checks for frontend/backend/nginx endpoints.
 
 ### Operational notes
 
 - Do not expose backend/frontend directly to public interfaces; keep loopback bindings and route through Nginx.
 - Do not replace `deploy/nginx-rfactor2_engineer.conf` with a non-TLS variant; future deploys copy that file directly onto the host.
+- The `data/` directory on the remote host is owned by the Docker container user (root). Never run `sudo rm -rf $RemoteDir` or a broad sweep; use `find ... -not -name data` patterns when clearing old code.
 - After benchmark/temporary tasks, purge temporary Docker test artifacts (see cleanup scripts in this document).
 
 ## Git Workflow
