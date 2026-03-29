@@ -26,6 +26,12 @@ python app/asana_oauth2_test.py
 
 # Force full re-authorization (opens browser)
 python app/asana_oauth2_test.py --reauth
+
+# Also write the token into Copilot's mcp.json (Windows machine only)
+python app/asana_oauth2_test.py --update-mcp
+
+# Combine flags as needed
+python app/asana_oauth2_test.py --reauth --update-mcp
 ```
 
 ### Expected output (verified 2026-03-28)
@@ -189,6 +195,10 @@ The mcp.json needs:
 
 **Note:** Do **not** hardcode `Mcp-Session-Id` in mcp.json — it must be generated per connection by the MCP client at runtime. The legacy scripts (`asana_token_manager.py`) incorrectly persisted a static UUID there.
 
-**Token refresh:** The access token expires every hour. The Windows machine will need either:
-- A scheduled task running token refresh (using `asana_token_manager.py` or equivalent)
-- Or an MCP proxy that handles OAuth2 refresh transparently
+**Token refresh:** The access token expires every hour. On the Windows machine, run:
+
+```bash
+python app/asana_oauth2_test.py --update-mcp
+```
+
+This refreshes the token (if needed) and writes it into mcp.json. Can be scheduled as a recurring task.

@@ -30,6 +30,7 @@ TOKEN_FILE = os.path.join(os.path.dirname(__file__), "..", "asana_token.json")
 OAUTH_AUTHORIZE_URL = "https://app.asana.com/-/oauth_authorize"
 OAUTH_TOKEN_URL = "https://app.asana.com/-/oauth_token"
 MCP_ENDPOINT = "https://mcp.asana.com/v2/mcp"
+MCP_JSON_PATH = os.path.expandvars(r"%USERPROFILE%\AppData\Local\github-copilot\intellij\mcp.json")
 
 
 # ── Token persistence ────────────────────────────────────────────────────────
@@ -138,6 +139,32 @@ def ensure_valid_token() -> str:
     token_data = exchange_code(code)
     print("  Token obtained successfully.")
     return token_data["access_token"]
+
+
+# ── mcp.json updater ─────────────────────────────────────────────────────────
+
+def update_mcp_json(access_token: str):
+    """Write the Bearer token into the Copilot mcp.json on the Windows machine."""
+    if not os.path.exists(MCP_JSON_PATH):
+        print(f"  ✗ mcp.json not found at {MCP_JSON_PATH}")
+        print("    (expected on the Windows machine only)")
+        return
+
+    with open(MCP_JSON_PATH, "r", encoding="utf-8") as f:
+        config = json.load(f)
+
+    server = config.setdefault("servers", {}).setdefault("asana-mcp", {})
+    server["url"] = MCP_ENDPOINT
+    req_init = server.setdefault("requestInit", {})
+    headers = req_init.setdefault("headers", {})
+    headers["Authorization"] = f"Bearer {access_token}"
+    headers["Accept"] = "application/json, text/event-stream"
+    # Do NOT write a static Mcp-Session-Id — the MCP client generates one per connection
+    headers.pop("Mcp-Session-Id", None)
+
+    with open(MCP_JSON_PATH, "w", encoding="utf-8") as f:
+        json.dump(config, f, indent=4)
+    print(f"  ✓ mcp.json updated at {MCP_JSON_PATH}")
 
 
 # ── MCP JSON-RPC helpers ──────────────────────────────────────────────────────
@@ -304,6 +331,10 @@ def main():
         access_token = token_data["access_token"]
     else:
         access_token = ensure_valid_token()
+
+    if "--update-mcp" in sys.argv:
+        print("\n── Updating mcp.json ───────────────────────────────")
+        update_mcp_json(access_token)
 
     run_mcp_tests(access_token)
 
