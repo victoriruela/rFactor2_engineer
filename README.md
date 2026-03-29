@@ -41,8 +41,11 @@ rFactor2_engineer/
 ### 1. Requisitos Previos
 
 - Python 3.9 o superior.
-- [Ollama](https://ollama.com/) instalado en el sistema.
-- El archivo `Llama-3.2-3B-Instruct-Q4_0.gguf` en la carpeta `models/`.
+- [Ollama](https://ollama.com/) instalado y corriendo en el sistema.
+- Modelo `llama3.2:3b` descargado en Ollama (**requisito obligatorio** para la app y los tests de integración):
+  ```
+  ollama pull llama3.2:3b
+  ```
 
 ### 2. Instalación de Dependencias
 

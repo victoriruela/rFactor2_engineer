@@ -1,0 +1,31 @@
+appId: web
+---
+# Prerequisite: backend running at :8000, Streamlit at :8501
+# Prerequisite: tests/fixtures/sample.csv exists (minimal MoTeC CSV)
+# Prerequisite: tests/fixtures/sample.svm exists (minimal rFactor2 setup)
+
+- launchApp:
+    browser: chrome
+    url: "http://localhost:8501"
+
+# Verify the app loads
+- assertVisible: "rFactor2 Engineer"
+
+# Upload telemetry file
+- tapOn:
+    text: "Browse files"
+    index: 0
+- inputText: "tests/fixtures/sample.csv"
+
+# Upload setup file
+- tapOn:
+    text: "Browse files"
+    index: 1
+- inputText: "tests/fixtures/sample.svm"
+
+# Verify telemetry tab is visible after upload
+- assertVisible: "📊"
+- tapOn: "📊"
+
+# Verify lap data appears
+- assertVisible: "Vuelta"

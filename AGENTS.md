@@ -40,12 +40,33 @@ rFactor2_engineer/
 │   └── streamlit_app.py           # Streamlit UI, file upload, results display
 ├── .streamlit/
 │   └── config.toml                # maxUploadSize = 20000
+├── tests/                         # Unit + integration test suite (pytest)
+│   ├── conftest.py                # Shared fixtures (DataFrames, SVM content, setup dicts)
+│   ├── core/
+│   │   ├── test_telemetry_parser.py  # 20 tests: CSV, SVM, .mat, _filter_incomplete_laps
+│   │   └── test_ai_agents.py         # 29 tests: pure functions + AIAngineer (mocked LLM)
+│   ├── integration/
+│   │   ├── conftest.py            # Auto-skip guard if Ollama/llama3.2 unavailable
+│   │   └── test_ai_pipeline.py    # 3 tests: full AI pipeline with real LLM (opt-in)
+│   ├── test_main.py               # 12 tests: all FastAPI endpoints (real parsers, mocked AI)
+│   └── fixtures/
+│       ├── sample.csv             # 2-lap MoTeC CSV with GPS + telemetry columns
+│       └── sample.svm             # Minimal rFactor2 setup file
+├── e2e/
+│   ├── api/
+│   │   ├── conftest.py            # httpx async client, auto-skip if server offline
+│   │   └── test_endpoints.py      # 5 tests against live backend (:8000)
+│   └── web/
+│       ├── upload_telemetry.yaml  # Maestro Web flow: file upload → telemetry tab
+│       └── ai_analysis.yaml       # Maestro Web flow: AI analysis → results visible
 ├── data/                          # Runtime: uploaded session files (uuid dirs)
 ├── models/                        # Optional: local .gguf model files
-├── requirements.txt               # Python dependencies
+├── pytest.ini                     # asyncio_mode=auto, testpaths=tests, markers
+├── requirements.txt               # Python runtime dependencies
+├── requirements-dev.txt           # Test dependencies (pytest, httpx, pytest-mock, etc.)
 ├── ASANA.md                       # Asana MCP plugin docs
 ├── asana-mcp-plugin.zip           # Asana MCP plugin (install to ~/.claude/asana-mcp/)
-├── CONSTANTS.md                   # All hardcoded values (see below)
+├── CONSTANTS.md                   # Index of domain constant files
 ├── SPECIFICATION.md               # Original project spec
 └── README.md                      # User-facing docs (Spanish)
 ```
@@ -191,6 +212,60 @@ All hardcoded values (ports, paths, thresholds, parameter lists, telemetry chann
 ## Language
 
 All user-facing output (driving analysis, setup recommendations, parameter names) is in **Spanish (Castellano)**. Prompts explicitly instruct the LLM to respond in Spanish. The Translation Agent produces Spanish-friendly parameter names.
+
+## Test Infrastructure
+
+### Running tests
+
+```bash
+# Install test dependencies (one-time)
+pip install -r requirements-dev.txt
+
+# Unit tests — fast, no Ollama required (~0.5s)
+pytest tests/ --ignore=tests/integration -v
+
+# Integration tests — real LLM, requires ollama + llama3.2:latest (~3min)
+pytest -m integration -v
+
+# E2E API tests — requires backend running at :8000
+pytest e2e/api/ -v
+
+# E2E Web tests — requires backend + Streamlit + Maestro installed
+maestro test e2e/web/upload_telemetry.yaml
+```
+
+### System requirement
+
+`llama3.2:latest` (= 3b, 2.0 GB) is a **hard project requirement** — the same model the app uses in production. Pull it once:
+
+```bash
+ollama pull llama3.2:latest
+```
+
+Note: `llama3.2:3b` and `llama3.2:latest` are the same weights (`:latest` is the canonical alias). Always use `:latest` as the tag to avoid 404 errors on machines that only pulled via the default alias.
+
+### Mocking strategy
+
+| Layer | Approach | Reason |
+|---|---|---|
+| `scipy.io.loadmat` | Mocked in unit tests | Real MoTeC `.mat` binary format cannot be reproduced with `scipy.io.savemat`; mock accurately mirrors `mat_struct.Value` interface |
+| `ChatOllama` / LLM | Mocked in unit tests | Non-deterministic, slow, requires Ollama; covered by `tests/integration/` with real model |
+| `parse_csv_file` / `parse_svm_file` in endpoint tests | **Real files** — not mocked | Mocking parsers hides ~200 lines of GPS/lap/subsampling logic in `app/main.py` |
+| `ai_engineer.analyze` in endpoint tests | Mocked | Only the LLM boundary; all data pipeline before it runs for real |
+
+### Test layout
+
+```
+tests/
+├── core/test_telemetry_parser.py   # CSV, SVM, .mat parsing; _filter_incomplete_laps
+├── core/test_ai_agents.py          # Pure functions + AIAngineer unit tests
+├── test_main.py                    # All endpoints (real parsers, mocked AI)
+└── integration/test_ai_pipeline.py # Full AI pipeline with real Ollama (opt-in)
+
+e2e/
+├── api/test_endpoints.py           # Live backend smoke tests
+└── web/*.yaml                      # Maestro Web flows (Streamlit UI)
+```
 
 ## Development Methodology
 
