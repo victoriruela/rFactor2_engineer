@@ -135,7 +135,10 @@ requests                   # HTTP calls (Ollama API, frontend→backend)
 |----------|---------|---------|
 | `OLLAMA_BASE_URL` | `http://localhost:11434` | Ollama API endpoint |
 | `OLLAMA_MODEL` | `llama3.2:latest` | Model tag passed to ChatOllama |
-| `RF2_API_URL` | `http://localhost:8000` | Backend URL used by Streamlit frontend |
+| `RF2_API_URL` | `http://localhost:8000` | Backend URL used by Streamlit Python code (server-side requests) |
+| `RF2_BROWSER_API_BASE_URL` | `/api` | Base URL injected into the browser-side JS chunked uploader. `/api` in production (Nginx prefix); `http://localhost:8000` for local dev without Nginx. |
+| `RF2_PROD_URL` | *(unset)* | Production API base URL for prod-circuit E2E tests, e.g. `https://car-setup.com/api`. Not used at runtime. |
+| `RF2_PROD_BASIC_AUTH` | *(unset)* | Nginx BasicAuth credentials for prod-circuit E2E tests, format `user:password`. Not used at runtime. |
 
 Set in `.env` at project root (loaded by python-dotenv). In Docker, backend points to host Ollama via `OLLAMA_BASE_URL=http://host.docker.internal:11434`.
 
@@ -372,7 +375,11 @@ docker compose --profile test run --rm test ruff check app/ frontend/ tests/
 docker compose --profile test run --rm test pytest -m integration -v
 
 # E2E API tests — requires backend container running at :8000
-docker compose --profile test run --rm test pytest e2e/api/ -v
+docker compose --profile test run --rm test pytest e2e/api/test_endpoints.py -v
+
+# Prod-circuit E2E tests — hit the real domain through Cloudflare + Nginx + BasicAuth
+# These are NEVER run inside Docker (they target a live external URL); run from the host:
+# RF2_PROD_URL=https://car-setup.com/api RF2_PROD_BASIC_AUTH=racef1:secret pytest e2e/api/test_prod_upload.py -v
 ```
 
 To pass custom arguments through the wrapper, append them after the script path:
@@ -437,8 +444,16 @@ tests/
 └── integration/test_ai_pipeline.py # Full AI pipeline with real Ollama (opt-in)
 
 e2e/
-├── api/test_endpoints.py           # Live backend smoke tests
+├── api/test_endpoints.py           # Live backend smoke tests (localhost:8000, no Nginx)
+├── api/test_prod_upload.py         # Prod-circuit: Cloudflare→Nginx BasicAuth→backend
+│                                   # Opt-in via RF2_PROD_URL + RF2_PROD_BASIC_AUTH
 └── web/*.yaml                      # Maestro Web flows (Streamlit UI)
+
+**Why prod-circuit tests exist**: unit and local E2E tests bypass Nginx and BasicAuth entirely.
+Bugs that only manifest through Nginx (e.g. `credentials: 'omit'` in the browser JS dropping
+stored BasicAuth → 401) are invisible without testing the full stack.
+`test_prod_upload.py` specifically verifies unauthenticated requests return 401 and that the
+full chunked upload cycle works end-to-end through Cloudflare and Nginx.
 ```
 
 ## Docker
