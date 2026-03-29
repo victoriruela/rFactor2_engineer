@@ -14,6 +14,7 @@ OLLAMA_MODEL_TAG = os.getenv("OLLAMA_MODEL", "llama3.2:latest")
 JIMMY_API_URL = os.getenv("JIMMY_API_URL", "https://chatjimmy.ai/api/chat")
 JIMMY_MODEL_TAG = "llama3.1-8B"
 JIMMY_STATS_RE = re.compile(r"<\|stats\|>.*?<\|/stats\|>", re.DOTALL)
+JIMMY_RUNTIME_CONFIG_PATH = "app/core/jimmy_runtime_config.v1.json"
 
 
 def list_available_models():
@@ -251,18 +252,138 @@ class AIAngineer:
         self.output_parser = StrOutputParser()
         self.mapping_path = "app/core/param_mapping.json"
         self.mapping = self._load_mapping()
+        self.jimmy_runtime_config = self._load_jimmy_runtime_config()
         # Memoria del ingeniero jefe: historial de decisiones
         self.chief_memory = []
         self._telemetry_cache = ""
         self._agent_reports_cache = []
+
+    def _load_jimmy_runtime_config(self):
+        default_cfg = {
+            "selectedModel": JIMMY_MODEL_TAG,
+            "prompt": {"systemPrompt": ""},
+            "sampling": {"topK": 8, "temperature": 0.0},
+            "parseCleanup": {
+                "stripStatsTags": True,
+                "stripOuterQuotes": True,
+                "trimWhitespace": True,
+                "extractFirstJsonObject": True,
+                "removeTrailingCommasBeforeParse": True,
+            },
+            "fallbackPolicy": {
+                "maxRetriesPerStage": 1,
+                "failureSignal": {
+                    "degraded": True,
+                    "reasonField": "fallback_reason",
+                },
+            },
+        }
+        try:
+            if not os.path.exists(JIMMY_RUNTIME_CONFIG_PATH):
+                return default_cfg
+            with open(JIMMY_RUNTIME_CONFIG_PATH, "r", encoding="utf-8") as f:
+                loaded = json.load(f)
+            merged = default_cfg.copy()
+            for key in ("prompt", "sampling", "parseCleanup", "fallbackPolicy"):
+                merged[key] = {**default_cfg.get(key, {}), **loaded.get(key, {})}
+            for key, value in loaded.items():
+                if key not in merged:
+                    merged[key] = value
+            return merged
+        except Exception as e:
+            print(f"Advertencia: no se pudo cargar runtime Jimmy ({e}). Usando defaults.")
+            return default_cfg
+
+    def _jimmy_parse_cleanup_cfg(self):
+        return self.jimmy_runtime_config.get("parseCleanup", {})
+
+    def _jimmy_fallback_cfg(self):
+        return self.jimmy_runtime_config.get("fallbackPolicy", {})
+
+    def _jimmy_max_retries(self):
+        cfg = self._jimmy_fallback_cfg()
+        retries = cfg.get("maxRetriesPerStage", 1)
+        try:
+            return max(0, int(retries))
+        except Exception:
+            return 1
+
+    def _sanitize_jimmy_text(self, text):
+        cleaned = "" if text is None else str(text)
+        cleanup_cfg = self._jimmy_parse_cleanup_cfg()
+        if cleanup_cfg.get("stripStatsTags", True):
+            cleaned = JIMMY_STATS_RE.sub("", cleaned)
+        if cleanup_cfg.get("trimWhitespace", True):
+            cleaned = cleaned.strip()
+        if cleanup_cfg.get("stripOuterQuotes", True):
+            if len(cleaned) >= 2 and cleaned.startswith('"') and cleaned.endswith('"'):
+                cleaned = cleaned[1:-1].strip()
+        return cleaned
+
+    def _extract_json_candidate(self, response_text):
+        cleanup_cfg = self._jimmy_parse_cleanup_cfg()
+        raw = "" if response_text is None else str(response_text)
+        if cleanup_cfg.get("trimWhitespace", True):
+            raw = raw.strip()
+
+        if cleanup_cfg.get("extractFirstJsonObject", True):
+            start = raw.find('{')
+            if start == -1:
+                return None
+            depth = 0
+            for i, ch in enumerate(raw[start:], start):
+                if ch == '{':
+                    depth += 1
+                elif ch == '}':
+                    depth -= 1
+                    if depth == 0:
+                        return raw[start:i + 1]
+            return None
+        return raw
+
+    def _parse_json_candidate(self, candidate):
+        if candidate is None:
+            return None
+        try:
+            return json.loads(candidate)
+        except json.JSONDecodeError:
+            cleanup_cfg = self._jimmy_parse_cleanup_cfg()
+            if not cleanup_cfg.get("removeTrailingCommasBeforeParse", True):
+                return None
+            cleaned = re.sub(r',\s*\}', '}', candidate)
+            cleaned = re.sub(r',\s*\]', ']', cleaned)
+            try:
+                return json.loads(cleaned)
+            except json.JSONDecodeError:
+                return None
+
+    async def _get_text_from_llm(self, prompt, inputs, min_len=1):
+        provider = getattr(self, "_provider", "ollama")
+        attempts = 1
+        if provider == "jimmy":
+            attempts = self._jimmy_max_retries() + 1
+
+        for attempt in range(1, attempts + 1):
+            try:
+                response = await self._call_llm_text(prompt, inputs)
+            except Exception as e:
+                print(f"Error en LLM texto (intento {attempt}/{attempts}): {e}")
+                continue
+
+            cleaned = response.strip() if isinstance(response, str) else ""
+            if len(cleaned) >= max(1, int(min_len)):
+                return cleaned
+            print(f"Respuesta de texto demasiado corta (intento {attempt}/{attempts}).")
+
+        return None
 
     def _init_llm(self, model_tag=None, provider="ollama"):
         provider_key = (provider or "ollama").lower()
         if provider_key == "jimmy":
             self.llm = None
             self._provider = "jimmy"
-            self._current_model = JIMMY_MODEL_TAG
-            print(f"LLM listo: jimmy/{JIMMY_MODEL_TAG}")
+            self._current_model = self.jimmy_runtime_config.get("selectedModel", JIMMY_MODEL_TAG)
+            print(f"LLM listo: jimmy/{self._current_model}")
             return
 
         if provider_key != "ollama":
@@ -285,6 +406,8 @@ class AIAngineer:
         return prompt_tmpl.format(**inputs)
 
     def _call_jimmy_api(self, prompt_text):
+        sampling_cfg = self.jimmy_runtime_config.get("sampling", {})
+        prompt_cfg = self.jimmy_runtime_config.get("prompt", {})
         response = requests.post(
             JIMMY_API_URL,
             headers={
@@ -296,19 +419,17 @@ class AIAngineer:
             json={
                 "messages": [{"role": "user", "content": prompt_text}],
                 "chatOptions": {
-                    "selectedModel": JIMMY_MODEL_TAG,
-                    "systemPrompt": "",
-                    "topK": 8,
+                    "selectedModel": self.jimmy_runtime_config.get("selectedModel", JIMMY_MODEL_TAG),
+                    "systemPrompt": prompt_cfg.get("systemPrompt", ""),
+                    "topK": sampling_cfg.get("topK", 8),
+                    "temperature": sampling_cfg.get("temperature", 0.0),
                 },
                 "attachment": None,
             },
             timeout=90,
         )
         response.raise_for_status()
-        text = JIMMY_STATS_RE.sub("", response.text).strip()
-        if len(text) >= 2 and text.startswith('"') and text.endswith('"'):
-            text = text[1:-1].strip()
-        return text
+        return self._sanitize_jimmy_text(response.text)
 
     async def _call_llm_text(self, prompt, inputs):
         provider = getattr(self, "_provider", "ollama")
@@ -344,36 +465,32 @@ class AIAngineer:
     def _get_friendly_name(self, key, item_type='parameter'):
         return self.mapping.get(item_type + "s", {}).get(key, key)
 
-    async def _get_json_from_llm(self, prompt, inputs):
-        try:
-            response = await self._call_llm_text(prompt, inputs)
-        except Exception as e:
-            print(f"Error en LLM: {e}")
-            return None
+    async def _get_json_from_llm(self, prompt, inputs, validate_fn=None):
+        provider = getattr(self, "_provider", "ollama")
+        attempts = 1
+        if provider == "jimmy":
+            attempts = self._jimmy_max_retries() + 1
 
-        try:
-            start = response.find('{')
-            if start != -1:
-                depth = 0
-                for i, ch in enumerate(response[start:], start):
-                    if ch == '{':
-                        depth += 1
-                    elif ch == '}':
-                        depth -= 1
-                        if depth == 0:
-                            candidate = response[start:i+1]
-                            try:
-                                return json.loads(candidate)
-                            except json.JSONDecodeError:
-                                cleaned = re.sub(r',\s*\}', '}', candidate)
-                                cleaned = re.sub(r',\s*\]', ']', cleaned)
-                                try:
-                                    return json.loads(cleaned)
-                                except json.JSONDecodeError:
-                                    pass
-                            break
-        except Exception as e:
-            print(f"Error en LLM JSON: {e}")
+        for attempt in range(1, attempts + 1):
+            try:
+                response = await self._call_llm_text(prompt, inputs)
+            except Exception as e:
+                print(f"Error en LLM (intento {attempt}/{attempts}): {e}")
+                continue
+
+            try:
+                candidate = self._extract_json_candidate(response)
+                parsed = self._parse_json_candidate(candidate)
+                if parsed is None:
+                    print(f"JSON no parseable (intento {attempt}/{attempts}).")
+                    continue
+                if validate_fn and not validate_fn(parsed):
+                    print(f"JSON inválido para el contrato esperado (intento {attempt}/{attempts}).")
+                    continue
+                return parsed
+            except Exception as e:
+                print(f"Error en LLM JSON (intento {attempt}/{attempts}): {e}")
+
         return None
 
     async def update_mappings(self, setup_data):
@@ -507,6 +624,7 @@ class AIAngineer:
         self.chief_memory = []
         self._telemetry_cache = telemetry_summary
         self._agent_reports_cache = []
+        fallback_reasons = []
 
         # 1. Actualizar mapeos si hay nuevos parámetros
         await self.update_mappings(setup_data)
@@ -515,14 +633,17 @@ class AIAngineer:
         # Usar resumen filtrado (solo canales de técnica de pilotaje) si está disponible
         driving_input = driving_telemetry_summary if driving_telemetry_summary is not None else telemetry_summary
         try:
-            driving_analysis = await self._call_llm_text(DRIVING_PROMPT, {
+            driving_analysis = await self._get_text_from_llm(DRIVING_PROMPT, {
                 "telemetry_summary": driving_input,
                 "session_stats": json.dumps(session_stats or {}, indent=2)
-            })
+            }, min_len=10)
+            if not driving_analysis:
+                raise ValueError("driving_analysis_empty_or_too_short")
             print(f"[DEBUG driving_analysis] {repr(driving_analysis[:300])}")
         except Exception as e:
             print(f"Error en driving_chain: {e}")
             driving_analysis = "No se pudo obtener el análisis de conducción."
+            fallback_reasons.append("driving_analysis_empty_or_too_short")
 
         # 3. Análisis de Setup por secciones (un agente por cada sección)
         specialist_reports = []
@@ -561,7 +682,7 @@ class AIAngineer:
             "current_setup": current_setup_summary,
             "memory_context": "N/A",
             "fixed_params_prompt": fixed_params_prompt
-        })
+        }, validate_fn=lambda data: isinstance(data, dict) and isinstance(data.get("full_setup", {}).get("sections", None), list))
         print(f"[DEBUG chief_engineer_report] {repr(str(chief_engineer_report)[:300])}")
 
         # Guardar razonamiento del jefe en memoria (con contexto completo)
@@ -606,6 +727,7 @@ class AIAngineer:
 
                     all_reco_map[internal_name][internal_p_name] = item
         else:
+            fallback_reasons.append("chief_none")
             # Fallback: usar informes de especialistas si el jefe no respondió
             for s_report in specialist_reports:
                 s_name = s_report.get("name", "")
@@ -617,10 +739,26 @@ class AIAngineer:
 
         full_setup_recommendations = self._format_full_setup(all_reco_map, setup_data)
 
-        return {
+        fallback_cfg = self._jimmy_fallback_cfg()
+        failure_signal_cfg = fallback_cfg.get("failureSignal", {})
+        should_signal_degraded = bool(failure_signal_cfg.get("degraded", False))
+        reason_field = failure_signal_cfg.get("reasonField", "fallback_reason")
+        unique_reasons = []
+        for reason in fallback_reasons:
+            if reason not in unique_reasons:
+                unique_reasons.append(reason)
+        fallback_reason_text = "; ".join(unique_reasons)
+
+        result = {
             "driving_analysis": driving_analysis,
             "setup_analysis": "Análisis completo realizado por el equipo de ingenieros de pista. Se han evaluado todos los canales de telemetría curva a curva.",
             "full_setup": full_setup_recommendations,
             "agent_reports": specialist_reports,
             "chief_reasoning": chief_reasoning
         }
+
+        if provider_key == "jimmy" and should_signal_degraded and fallback_reason_text:
+            result["degraded"] = True
+            result[reason_field] = fallback_reason_text
+
+        return result
