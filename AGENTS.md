@@ -75,6 +75,12 @@ rFactor2_engineer/
 │   └── web/
 │       ├── upload_telemetry.yaml  # Maestro Web flow: file upload → telemetry tab
 │       └── ai_analysis.yaml       # Maestro Web flow: AI analysis → results visible
+├── scripts/
+│   ├── release_and_deploy.ps1     # Master release orchestration (RC → tag → publish → deploy)
+│   ├── deploy_gcp.ps1             # Deploy tagged artifact to GCP host (requires -ReleaseTag)
+│   ├── run_docker_test.ps1        # Wrapper: docker compose test run with container cleanup
+│   ├── cleanup_docker_test_artifacts.ps1  # Remove exited test containers/images
+│   └── grid_search_jimmy_500.py   # New large-scale grid search with 500 runs in batches of 10
 ├── deploy/
 │   ├── docker-compose.gcp.yml     # GCP host override (loopback port binds + host-gateway)
 │   ├── nginx-rfactor2_engineer.conf  # Nginx reverse-proxy config (TLS, Basic Auth, proxy)
@@ -141,6 +147,8 @@ requests                   # HTTP calls (Ollama API, frontend→backend)
 | `RF2_PROD_BASIC_AUTH` | *(unset)* | Nginx BasicAuth credentials for prod-circuit E2E tests, format `user:password`. Not used at runtime. |
 
 Set in `.env` at project root (loaded by python-dotenv). In Docker, backend points to host Ollama via `OLLAMA_BASE_URL=http://host.docker.internal:11434`.
+For local Docker validation, the `frontend` service must set `RF2_BROWSER_API_BASE_URL=http://localhost:8000`
+so the browser talks directly to the backend; Streamlit on `:8501` does not proxy `/api` locally.
 
 ## API Endpoints
 
@@ -211,25 +219,31 @@ Translates any new section/parameter names to Spanish-friendly names. Results sa
 ### 2. Driving Analysis Agent
 **Prompt**: `DRIVING_PROMPT`
 Input: telemetry summary + session stats.
-Output: 5 driving improvement points with real numeric values. Strictly forbidden from suggesting setup changes.
+Output: 5 driving improvement points with real numeric values, organized by **numbered curves** ("Curva 1", "Curva 2"...) with curve type description (horquilla, chicane, ese rápida...). Each point compares the same curve across multiple laps, citing real telemetry values. Strictly forbidden from suggesting setup changes. Distance ranges from Lap Distance are used internally but not shown in output headers.
 
 ### 3. Section Specialist Agents (one per setup section)
 **Prompt**: `SECTION_AGENT_PROMPT`
 Runs once per section (GENERAL, FRONTWING, REARWING, BODYAERO, SUSPENSION, CONTROLS, ENGINE, DRIVELINE, FRONTLEFT, FRONTRIGHT, REARLEFT, REARRIGHT, etc.). Skips BASIC, LEFTFENDER, RIGHTFENDER. Also skips Gear*Setting parameters.
 Input: full telemetry + section's current parameters + fixed params list.
 Output: JSON with `items` array (parameter, new_value, reason) and `summary`.
+Specialists explicitly acknowledge parameters that are already well-configured and reason about why no change is needed in the `summary` field.
 
 ### 4. Chief Engineer Agent
 **Prompt**: `CHIEF_ENGINEER_PROMPT`
-Consolidates all specialist reports into a coherent setup. Rules:
-- Permissive: accept specialist recommendations unless contradictory
-- Preserve specialist reasoning verbatim when accepting changes
-- Enforce symmetry (FL≈FR, RL≈RR) unless telemetry justifies asymmetry
-- Respect fixed params absolutely
+Consolidates all specialist reports into a coherent setup via **holistic review**. Rules:
+- Reviews ALL specialist proposals against full telemetry + setup context
+- Approves changes with technical merit; rejects redundant or contradictory changes
+- Detects and corrects physical incoherencies (e.g. "lower rear wing to reduce understeer" is wrong)
+- **Reason ownership**: if accepting a specialist proposal unchanged → copies specialist reason verbatim; if modifying → writes own detailed reason
+- Enforces axle symmetry (FL≈FR, RL≈RR) unless telemetry justifies asymmetry
+- Acknowledges parameters that are already correct and need no changes
+- Respects fixed params absolutely
+- `chief_reasoning` is **mandatory always** — must explain overall strategy and each proposal acceptance/modification/rejection
 Output: JSON with `full_setup.sections[]` and `chief_reasoning`.
 
 ### Response formatting
-`_format_full_setup()` merges chief's recommendations with the original setup data, computing change percentages for display.
+`_format_full_setup()` merges chief's recommendations with the original setup data, computing change percentages for display. Sections with zero proposed changes are **excluded** from the output (only sections with at least one changed parameter are included).
+Additionally, `setup_agent_reports` is built from the final consolidated map (after chief + deterministic post-processing) so frontend reasoning values match the final setup table. Specialist summaries from the original reports are propagated into `setup_agent_reports`.
 
 ## File Parsing
 
@@ -334,6 +348,31 @@ All hardcoded values (ports, paths, thresholds, parameter lists, telemetry chann
 **Section name resolution**: LLM may return friendly names instead of internal names. Both `AIAngineer.analyze()` and `_format_full_setup()` use reverse-mapping dicts to handle this.
 
 **Ollama auto-start**: `_ensure_ollama_running()` checks health via `GET /api/tags`, starts `ollama serve` as background process if needed, waits up to 15s.
+
+**Jimmy specialist normalization**: `AIAngineer._normalize_specialist_report()` accepts alternate JSON keys from Jimmy responses (`recomendaciones`, `parametro`, `nuevo_valor`, `motivo`, etc.) and maps them to the canonical `items[{parameter,new_value,reason}]` shape. Specialist `summary` is preserved and passed to the chief engineer context.
+
+**Jimmy chief-item normalization**: Chief engineer section items are now normalized through the same canonical shape (`parameter`, `new_value`, `reason`) and accept alternate keys such as `newValue`, `nuevoValor`, `parametro`, and `motivo`. This prevents false "no setup changes" outcomes when Jimmy returns variant field names.
+
+**Reason sanitization against prompt leakage**: the backend sanitizes `reason` and `chief_reasoning` fields to strip internal/template artifacts (e.g. "COPIA AQUI...", "OBLIGATORIO:", `chartInstance`). If a chief item reason is invalid, it falls back to the specialist reason for that same section/parameter; if no specialist reason exists, it uses a safe generic fallback in Spanish.
+
+**Specialist-first consolidation merge**: the final recommendation map is built from specialist proposals first, then chief proposals are applied as overrides for parameters explicitly returned by the chief. This avoids accidental loss of valid specialist changes when the chief response is partial or noisy.
+
+**Deterministic axle symmetry post-processing**: after chief consolidation, the backend enforces symmetry for `FRONTLEFT/FRONTRIGHT` and `REARLEFT/REARRIGHT` when asymmetric values are not explicitly justified by telemetry in the item reasons. If needed, it harmonizes to the more conservative value (smaller absolute delta from current setup) and annotates the reason.
+
+**Frontend reasoning alignment**: the frontend reasoning panel should consume `setup_agent_reports` (fallback to `agent_reports` only for backward compatibility). This avoids mismatches where specialist raw reports differ from the final setup after chief corrections.
+
+**Frontend re-analysis path**: The Streamlit UI now re-runs analysis using local temp files via `POST /analyze` whenever local files are available, instead of always calling `POST /analyze_session`. This avoids `404 Session not found` after a successful prior analysis consumed stored backend session files.
+
+**Prompt benchmarking protocol (Jimmy) — mandatory**: Any change to Jimmy runtime settings (`app/core/jimmy_runtime_config.v1.json`) or prompt behavior must be backed by a comparative run of `scripts/benchmark_prompt_matrix.py` against the benchmark fixtures. Required evidence in the same PR/commit:
+- `docs/benchmark/results/<run_folder>/summary.csv`
+- `docs/benchmark/results/<run_folder>/results.json`
+- Updated `selectionEvidence` in `jimmy_runtime_config.v1.json` pointing to that run
+
+**Use batch grid search for major iterations**: For large-scale tuning, prefer the new `scripts/grid_search_jimmy_500.py`, which performs 500 candidate runs in parallel batches of 10 and auto-selects the best scoring profile into `best_run.json`.
+
+No prompt/runtime change is considered valid if it lacks benchmark evidence showing no regression in JSON validity, recommendation coverage, and driving-analysis non-empty rate.
+
+**Frontend session analysis timeout**: `frontend/streamlit_app.py` posts stored sessions to `/analyze_session` with a long-running Requests timeout tuple `(10, 1800)`. Never use `timeout=0` with `requests`; urllib3 rejects non-positive timeouts before the backend call is made.
 
 ## Language
 
@@ -454,6 +493,15 @@ Bugs that only manifest through Nginx (e.g. `credentials: 'omit'` in the browser
 stored BasicAuth → 401) are invisible without testing the full stack.
 `test_prod_upload.py` specifically verifies unauthenticated requests return 401 and that the
 full chunked upload cycle works end-to-end through Cloudflare and Nginx.
+
+**Complementary local-browser topology**: local RC validation exercises a different path:
+browser on `http://localhost:8501` → backend on `http://localhost:8000`.
+That path requires:
+- `RF2_BROWSER_API_BASE_URL=http://localhost:8000` in local Docker frontend runs
+- FastAPI CORS enabled for `http://localhost:8501`
+
+Without those two pieces, the browser would incorrectly call `http://localhost:8501/api/...`
+(no proxy there) or hit cross-origin failures even though production works.
 ```
 
 ## Docker
@@ -584,11 +632,21 @@ The canonical entry point is `scripts/release_and_deploy.ps1`. It enforces:
 1. Abort if working tree is dirty.
 2. Merge one or more source branches into `develop`.
 3. Run Docker unit tests on `develop`; tag RC (`vX.Y.Z-rc.N`) and push.
-4. Merge `develop` into `main`; run Docker unit tests again.
-5. Tag release (`vX.Y.Z`) on `main` and push.
-6. Create `dist/rfactor2_engineer-vX.Y.Z.tar.gz` via `git archive <tag>`.
-7. Publish a GitHub Release with that artifact.
-8. Call `deploy_gcp.ps1 -ReleaseTag vX.Y.Z -UseGithubReleaseArtifact`.
+4. **MANDATORY GATE**: ask the human owner to validate that RC locally.
+   - "Validate locally" means the agent must start the local Docker stack from `develop`/RC:
+     `docker compose up -d --build`
+   - The agent must provide the user the exact URLs to visit:
+     - Frontend: `http://localhost:8501`
+     - Backend API: `http://localhost:8000` (sanity check: `/models`)
+   - The agent must wait for explicit user approval after the user tests those local URLs.
+5. Only after explicit human approval: merge `develop` into `main`; run Docker unit tests again.
+6. Tag release (`vX.Y.Z`) on `main` and push.
+7. Create `dist/rfactor2_engineer-vX.Y.Z.tar.gz` via `git archive <tag>`.
+8. Publish a GitHub Release with that artifact.
+9. Call `deploy_gcp.ps1 -ReleaseTag vX.Y.Z -UseGithubReleaseArtifact`.
+
+**Mandatory policy for all agents**: never continue automatically from RC to `main`/deploy.
+After RC push, start local Docker for RC validation, provide local URLs, and wait for user confirmation before proceeding.
 
 ```powershell
 # Full release from a feature branch
@@ -724,7 +782,9 @@ PHASE_COMPLETE:
   8. Run full test suite on develop (unit + integration + E2E)
   9. If tests fail → fix on develop, commit fix
   10. Tag Release Candidate: vX.Y.Z-rc.N
-  11. Update Asana project status: "Phase complete — RC tagged"
+  11. Ask user to validate RC locally and WAIT for explicit approval
+  12. After approval: merge develop → main, create release tag, publish artifact, deploy
+  13. Update Asana project status: "Phase complete — RC validated and released"
 ```
 
 ---
@@ -901,5 +961,9 @@ After every merge into develop:
 [ ] Asana status updated: Done
 [ ] All tasks complete → full test suite green
 [ ] RC tagged on develop
+[ ] User asked to validate RC locally
+[ ] Local Docker stack for RC started (`docker compose up -d --build`)
+[ ] Local validation URLs shared (`http://localhost:8501`, `http://localhost:8000`)
+[ ] Explicit user approval received
 [ ] Asana project status updated
 ```

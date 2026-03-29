@@ -4,6 +4,7 @@ import subprocess
 import time
 import os
 import logging
+import unicodedata
 import requests
 from langchain_ollama import ChatOllama
 from langchain_core.output_parsers import StrOutputParser
@@ -16,6 +17,9 @@ JIMMY_API_URL = os.getenv("JIMMY_API_URL", "https://chatjimmy.ai/api/chat")
 JIMMY_MODEL_TAG = "llama3.1-8B"
 JIMMY_STATS_RE = re.compile(r"<\|stats\|>.*?<\|/stats\|>", re.DOTALL)
 JIMMY_RUNTIME_CONFIG_PATH = "app/core/jimmy_runtime_config.v1.json"
+# Jimmy llama3.1-8B has ~8K token context; keep total prompt well under that.
+# Full prompt = template (~1.5K chars) + telemetry + section_data + fixed_params.
+JIMMY_MAX_TELEMETRY_CHARS = 4_000
 logger = logging.getLogger(__name__)
 
 
@@ -48,7 +52,7 @@ def _find_ollama_exe():
 # --- PROMPTS ---
 
 DRIVING_PROMPT = """
-Eres un ingeniero de pista experto en rFactor 2. Analiza los datos de telemetría VUELTA A VUELTA y CURVA A CURVA para evaluar la técnica de conducción del piloto. Responde en CASTELLANO.
+Eres un ingeniero de pista experto en rFactor 2. Analiza los datos de telemetría para evaluar la técnica de conducción del piloto. Responde en CASTELLANO.
 
 IMPORTANTE: Tu análisis debe centrarse EXCLUSIVAMENTE en la conducción (frenada, trazada, uso del acelerador, marchas, etc.).
 PROHIBIDO sugerir cambios en el setup del coche. Tu trabajo es decir al piloto qué está haciendo mal y cómo mejorar su técnica, no qué cambiar en el coche.
@@ -59,20 +63,27 @@ DATOS DE TELEMETRÍA:
 ESTADÍSTICAS DE SESIÓN:
 {session_stats}
 
-ANÁLISIS REQUERIDO:
-1. Examina los datos punto a punto para identificar el comportamiento en las CURVAS. Compara cómo el piloto toma la misma curva en diferentes vueltas usando la columna "Lap Distance" para ubicarte.
-2. Identifica problemas específicos en curvas (frenadas tardías, falta de velocidad de paso por curva, aceleraciones bruscas que causan sobreviraje, etc.)
-3. Compara la EVOLUCIÓN: ¿mejora o empeora el rendimiento en sectores específicos del circuito?
-4. Identifica patrones: ¿el desgaste o temperatura afectan al rendimiento en las últimas vueltas por la forma de conducir?
+METODOLOGÍA OBLIGATORIA — Análisis POR CURVA, comparando ENTRE VUELTAS:
+1. Usa los datos de "Lap Distance" para identificar las CURVAS principales del circuito. Los rangos de distancia son para TU análisis interno — NO los incluyas en la salida.
+2. Numera las curvas secuencialmente: Curva 1, Curva 2, Curva 3... y describe brevemente el tipo (horquilla, chicane, ese rápida, curva lenta de derechas, etc.).
+3. Para CADA curva, COMPARA el comportamiento del piloto ENTRE DIFERENTES VUELTAS: ¿frena más tarde en unas que en otras? ¿La velocidad de paso varía? ¿Hay sobreviraje por aceleración brusca?
+4. Detecta PATRONES REPETITIVOS: si el piloto comete el mismo error en la misma curva en varias vueltas, es un patrón que debe corregir. Si mejora progresivamente, destácalo.
+5. Identifica si el desgaste, la temperatura de neumáticos o el combustible afectan la conducción en las últimas vueltas.
 
-Escribe EXACTAMENTE 5 puntos de mejora DE CONDUCCIÓN. Cada punto debe ser ÚNICO y diferente a los demás.
+Escribe EXACTAMENTE 5 puntos de mejora DE CONDUCCIÓN. Cada punto debe referirse a una CURVA CONCRETA del circuito.
 Formato obligatorio para cada punto:
-- Vuelta N (Distancia Xm): [análisis de curva con valores numéricos REALES de conducción] → [acción correctiva específica de CONDUCCIÓN]
+
+**Curva N** (tipo de curva): [Patrón detectado comparando vueltas: cita valores numéricos REALES de velocidad, frenada %, throttle %, RPM, G Force de cada vuelta comparada] → [Acción correctiva específica de CONDUCCIÓN]
+
+Ejemplo:
+**Curva 3** (horquilla lenta de derechas): En la vuelta 2 el piloto frena al 85% y pasa a 78 km/h, pero en las vueltas 5 y 7 frena solo al 62% y entra a 94 km/h, perdiendo el vértice y saliendo abierto → Frenar más progresivamente antes del vértice, manteniendo al menos 75% de frenada hasta los 82 km/h para clavar el apex.
 
 Reglas ESTRICTAS:
 - USA valores numéricos REALES de los datos (velocidad, frenada %, throttle %, RPM, G Force, etc.)
-- Céntrate en COMPARAR curvas entre vueltas.
-- PROHIBIDO repetir ideas.
+- Cada punto debe COMPARAR la misma curva en AL MENOS 2-3 vueltas diferentes.
+- NO incluyas rangos de metros/distancia en el título de la curva. Los datos de Lap Distance son para tu análisis interno.
+- PROHIBIDO hacer un análisis "por vuelta" (vuelta 1, vuelta 2...). El análisis es "por curva" comparando vueltas.
+- PROHIBIDO repetir ideas o curvas.
 - PROHIBIDO sugerir cambios de setup (presiones, muelles, alerones, etc.).
 - Sin introducción, sin conclusión, solo los 5 puntos.
 """
@@ -94,15 +105,20 @@ Como experto en esta sección, debes evaluar CÓMO cada parámetro actual influy
 2. Compara la evolución entre vueltas: ¿empeoran las temperaturas o presiones afectando al grip en curva?
 3. Propón cambios CONCRETOS con valores numéricos basados en lo que observas en los datos.
 
+REGLA DE SIMETRÍA (OBLIGATORIA):
+Si esta sección corresponde a un neumático o rueda de un lado (izquierdo/derecho), los valores que propongas DEBEN ser IDÉNTICOS al otro lado del mismo eje, SALVO que la telemetría muestre una asimetría clara (G Force lateral, temperaturas asimétricas, desgaste desigual) causada por el trazado del circuito. Si propones un valor asimétrico, DEBES justificarlo explícitamente con datos de telemetría.
+Ejemplo: si propones CamberSetting=-3.2 para FRONTLEFT, debes proponer CamberSetting=-3.2 también para FRONTRIGHT, a menos que los datos demuestren que el circuito requiere asimetría.
+
 PARÁMETROS FIJOS (REGLA CRÍTICA):
 Los siguientes parámetros NO pueden ser modificados bajo ninguna circunstancia: {fixed_params_prompt}
 DEBES tener en cuenta sus valores actuales para tu análisis global, pero TIENES PROHIBIDO proponer un nuevo valor para ellos. Si crees que uno de estos parámetros es la causa del problema, menciónalo en el análisis de otros parámetros, pero no sugieras cambiarlo.
 
 IMPORTANTE:
 - Solo propón cambios en los parámetros que REALMENTE necesiten ser modificados.
-- Si un parámetro está bien configurado según la telemetría, NO lo incluyas en la respuesta.
+- Si un parámetro está bien configurado según la telemetría, NO lo incluyas en "items". Es perfectamente válido y esperado que algunos o todos los parámetros estén bien configurados.
 - Puedes proponer cambios en todos, algunos o NINGUNO de los parámetros.
-- Si no hay cambios necesarios en ningún parámetro, devuelve un JSON con "items" vacío y un campo "summary" explicando por qué.
+- Si no hay cambios necesarios en ningún parámetro, devuelve un JSON con "items" vacío y un campo "summary" explicando POR QUÉ los valores actuales son correctos para este circuito y esta telemetría.
+- En el "summary", menciona brevemente qué parámetros revisaste y por qué están bien o por qué propones cambiarlos.
 
 Reglas:
 1. Cada "reason" DEBE ser una explicación técnica EXTREMADAMENTE DETALLADA (mínimo 2-3 frases), citando valores numéricos REALES y comparando el comportamiento en curvas entre vueltas.
@@ -142,18 +158,40 @@ Informes de los especialistas:
 {memory_context}
 
 TU ROL COMO INGENIERO JEFE (REGLAS DE ORO):
-1. SER PERMISIVO: Los especialistas son expertos en su área. Tu labor NO es filtrar por sistema, sino ELIMINAR O MODIFICAR SOLO aquello que sea incoherente, peligroso o contradictorio. Si una propuesta de un especialista tiene sentido técnico basado en la telemetría, DEBES incluirla.
-2. RESPETAR LAS EXPLICACIONES:
-   - Si aceptas el cambio de un especialista SIN modificar el valor propuesto, DEBES usar la explicación (reason) íntegra del especialista, o ampliarla. No la resumas.
-   - Si modificas el valor o descartas una propuesta, DEBES dar una explicación (reason) detallada de por qué tu decisión es mejor para el balance global del coche.
-3. VISIÓN GLOBAL Y COHERENCIA: Verifica que los cambios no se contradigan entre ejes (delantero/trasero) o secciones.
-4. SIMETRÍA:
-   - Mantén simetría (FRONTLEFT ≈ FRONTRIGHT, etc.) a menos que la telemetría (G Force Lat, temperaturas asimétricas) justifique claramente una asimetría por el diseño del circuito.
-5. EXPLICACIONES DETALLADAS: El piloto necesita entender el "porqué". Evita frases cortas. Cita siempre valores de telemetría.
+
+1. REVISAR HOLÍSTICAMENTE: Analiza TODAS las propuestas de los especialistas en el contexto de la telemetría completa y el setup actual. Tu trabajo es:
+   a) APROBAR cambios que tengan sentido técnico y sean coherentes con la telemetría.
+   b) RECHAZAR cambios que sean redundantes (si otro cambio ya resuelve el mismo problema, puede que no haga falta tocar más valores — salvo que ambos cambios sean necesarios conjuntamente).
+   c) CORREGIR cambios con errores técnicos (ej: un especialista que sugiere bajar el alerón trasero para reducir subviraje — esto es INCORRECTO porque reducir carga trasera AUMENTA el subviraje. Debes detectar y corregir estos errores).
+   d) ACEPTAR que algunos parámetros pueden estar ya bien configurados y NO necesitar cambios. Esto es perfectamente válido.
+
+2. PROPIEDAD DE LAS EXPLICACIONES (REGLA CRÍTICA):
+   - Si ACEPTAS un cambio de un especialista SIN modificar el valor: COPIA la explicación (reason) ÍNTEGRA del especialista. No la resumas ni reformules.
+   - Si MODIFICAS un valor o RECHAZAS una propuesta: escribe TU PROPIA explicación detallada, citando datos de telemetría y explicando el mecanismo físico.
+
+3. SIMETRÍA POR EJE:
+   - Mantén simetría (FRONTLEFT ≈ FRONTRIGHT, REARLEFT ≈ REARRIGHT) a menos que la telemetría (G Force lateral, temperaturas asimétricas, desgaste desigual) justifique claramente una asimetría por el diseño del circuito.
+   - Si un especialista propone valores diferentes entre lados del mismo eje SIN justificación telimétrica explícita, IGUALA ambos lados al valor más razonable y explica por qué.
+
+4. COHERENCIA FÍSICA: Verifica que cada cambio propuesto produce el efecto descrito. Ejemplos de errores comunes que DEBES detectar:
+   - Reducir alerón trasero NO reduce subviraje (lo aumenta al quitar carga trasera)
+   - Endurecer suspensión trasera NO mejora tracción (la empeora)
+   - Aumentar camber negativo más allá de cierto punto REDUCE grip en recta
+   Cuando detectes un error así, corrige el valor O la dirección del cambio.
+
+5. EXPLICACIONES DETALLADAS: El piloto necesita entender el "porqué" de cada decisión. Cita valores de telemetría. Evita frases genéricas.
+
 6. PARÁMETROS FIJOS (REGLA CRÍTICA):
    Los siguientes parámetros han sido fijados por el piloto y NO PUEDEN ser modificados: {fixed_params_prompt}
-   Si un especialista ha propuesto un cambio para uno de estos parámetros, DEBES descartar esa propuesta específica, pero puedes usar su razonamiento para ajustar otros parámetros relacionados que NO estén fijos.
+   Si un especialista ha propuesto un cambio para uno de estos parámetros, DESCARTA esa propuesta, pero puedes usar su razonamiento para ajustar otros parámetros relacionados no fijos.
+
 7. IMPORTANTE: El nombre de la sección en el JSON ("name") DEBE ser el nombre interno (ej: "FRONTLEFT", "SUSPENSION").
+
+8. RAZONAMIENTO GLOBAL OBLIGATORIO: El campo "chief_reasoning" es OBLIGATORIO siempre. Debe contener:
+   - Tu valoración global de la telemetría y el setup.
+   - Para cada propuesta de cada especialista: si la apruebas, si la modificas, o si la rechazas, y POR QUÉ.
+   - Si NO modificas nada de lo que proponen los especialistas, explica por qué todas las propuestas son correctas.
+   - Si algún parámetro ya está bien y no necesita cambios, menciónalo también.
 
 JSON puro:
 {{
@@ -162,12 +200,12 @@ JSON puro:
       {{
         "name": "FRONTLEFT",
         "items": [
-          {{ "parameter": "CamberSetting", "new_value": "-3.2", "reason": "COPIA AQUÍ LA RAZÓN DEL ESPECIALISTA SI NO MODIFICAS EL VALOR, O EXPLICA TU CAMBIO DETALLADAMENTE..." }}
+          {{ "parameter": "CamberSetting", "new_value": "-3.2", "reason": "COPIA AQUÍ LA RAZÓN ÍNTEGRA DEL ESPECIALISTA SI ACEPTAS SIN CAMBIOS, O ESCRIBE TU PROPIA EXPLICACIÓN DETALLADA SI MODIFICAS O CORRIGES..." }}
         ]
       }}
     ]
   }},
-  "chief_reasoning": "Resumen global de la estrategia de setup adoptada y correcciones importantes realizadas a las propuestas de los especialistas."
+  "chief_reasoning": "OBLIGATORIO: Valoración global de la telemetría y el setup. Para cada sección: qué propuestas aceptas, cuáles modificas, cuáles rechazas, y por qué. Cita datos de telemetría."
 }}
 """
 
@@ -607,6 +645,278 @@ class AIAngineer:
                     lines.append(f"  {k} = {v}")
         return "\n".join(lines)
 
+    def _normalize_specialist_report(self, report):
+        """Normaliza variaciones de esquema JSON de especialistas (especialmente Jimmy)."""
+        if not isinstance(report, dict):
+            return {"items": [], "summary": ""}
+
+        summary = report.get("summary") or report.get("resumen") or ""
+        summary = str(summary).strip()
+
+        raw_items = None
+        for key in ("items", "recommendations", "recomendaciones", "changes", "cambios", "proposals"):
+            candidate = report.get(key)
+            if candidate is not None:
+                raw_items = candidate
+                break
+
+        if raw_items is None:
+            raw_items = []
+        elif isinstance(raw_items, dict):
+            raw_items = [raw_items]
+        elif not isinstance(raw_items, list):
+            raw_items = []
+
+        normalized_items = []
+        for item in raw_items:
+            normalized = self._normalize_recommendation_item(item)
+            if normalized:
+                normalized_items.append(normalized)
+
+        return {
+            "items": normalized_items,
+            "summary": summary,
+        }
+
+    @staticmethod
+    def _normalize_token(text):
+        if text is None:
+            return ""
+        normalized = unicodedata.normalize("NFKD", str(text))
+        normalized = "".join(ch for ch in normalized if not unicodedata.combining(ch))
+        normalized = re.sub(r"[^a-zA-Z0-9]+", "", normalized).lower()
+        return normalized
+
+    def _normalize_recommendation_item(self, item):
+        """Normaliza un item de recomendación (especialista o chief) con claves alternativas."""
+        if not isinstance(item, dict):
+            return None
+
+        parameter = (
+            item.get("parameter")
+            or item.get("parametro")
+            or item.get("name")
+            or item.get("key")
+            or item.get("param")
+        )
+        new_value = (
+            item.get("new_value")
+            or item.get("newValue")
+            or item.get("nuevo_valor")
+            or item.get("nuevoValor")
+            or item.get("new")
+            or item.get("value")
+            or item.get("valor")
+        )
+        reason = (
+            item.get("reason")
+            or item.get("razon")
+            or item.get("motivo")
+            or item.get("justificacion")
+            or ""
+        )
+
+        if parameter is None or new_value is None:
+            return None
+
+        return {
+            "parameter": str(parameter).strip(),
+            "new_value": str(new_value).strip(),
+            "reason": str(reason).strip(),
+        }
+
+    @staticmethod
+    def _looks_like_internal_text(text):
+        low = str(text or "").strip().lower()
+        if not low:
+            return True
+
+        markers = (
+            "copia aqui",
+            "copia aquí",
+            "escribe tu propia",
+            "obligatorio:",
+            "json puro",
+            "chartinstance",
+            "minimalist",
+            "assistant",
+            "_goals",
+            "telimétrica",
+        )
+        return any(marker in low for marker in markers)
+
+    def _sanitize_reason_text(self, reason_text, fallback_text):
+        reason = re.sub(r"\s+", " ", str(reason_text or "")).strip()
+        if self._looks_like_internal_text(reason):
+            return fallback_text
+        return reason
+
+    def _build_fallback_chief_reasoning(self, specialist_reports):
+        section_count = len(specialist_reports or [])
+        item_count = 0
+        no_change_sections = 0
+        for report in specialist_reports or []:
+            items = report.get("items", []) if isinstance(report, dict) else []
+            if not items:
+                no_change_sections += 1
+            item_count += len(items) if isinstance(items, list) else 0
+
+        return (
+            "Consolidacion del Ingeniero Jefe: se revisaron "
+            f"{section_count} secciones y {item_count} propuestas de cambio. "
+            "Se mantienen los cambios tecnicamente coherentes y se descartan textos internos no validos. "
+            f"Secciones sin cambios necesarios: {no_change_sections}."
+        )
+
+    @staticmethod
+    def _has_asymmetry_justification(reason_text):
+        text = str(reason_text or "").lower()
+        markers = (
+            "asimetr",
+            "g force lat",
+            "g-force lat",
+            "temperatur",
+            "desgaste",
+            "lado interior",
+            "lado exterior",
+            "trazado",
+            "circuito",
+        )
+        return any(marker in text for marker in markers)
+
+    @staticmethod
+    def _pick_more_conservative_value(current_left, current_right, value_left, value_right):
+        curr_l = _extract_numeric(current_left)
+        curr_r = _extract_numeric(current_right)
+        val_l = _extract_numeric(value_left)
+        val_r = _extract_numeric(value_right)
+
+        if None in (curr_l, curr_r, val_l, val_r):
+            return value_left
+
+        delta_if_left = abs(curr_l - val_l) + abs(curr_r - val_l)
+        delta_if_right = abs(curr_l - val_r) + abs(curr_r - val_r)
+        return value_left if delta_if_left <= delta_if_right else value_right
+
+    def _enforce_axle_symmetry(self, all_reco_map, setup_data):
+        """Armoniza valores izquierda/derecha por eje cuando no hay justificación explícita de asimetría."""
+        axle_pairs = [("FRONTLEFT", "FRONTRIGHT"), ("REARLEFT", "REARRIGHT")]
+        suffix = " Ajuste del Ingeniero Jefe: se armoniza por simetría de eje al no existir justificación explícita de asimetría en telemetría."
+
+        for left_sec, right_sec in axle_pairs:
+            left_reco = all_reco_map.get(left_sec, {})
+            right_reco = all_reco_map.get(right_sec, {})
+            if not left_reco and not right_reco:
+                continue
+
+            if left_sec not in all_reco_map:
+                all_reco_map[left_sec] = {}
+                left_reco = all_reco_map[left_sec]
+            if right_sec not in all_reco_map:
+                all_reco_map[right_sec] = {}
+                right_reco = all_reco_map[right_sec]
+
+            left_setup = setup_data.get(left_sec, {})
+            right_setup = setup_data.get(right_sec, {})
+            param_keys = set(left_reco.keys()) | set(right_reco.keys())
+
+            for param_key in param_keys:
+                left_item = left_reco.get(param_key)
+                right_item = right_reco.get(param_key)
+
+                if left_item and right_item:
+                    left_val = self._clean_value(left_item.get("new_value", ""))
+                    right_val = self._clean_value(right_item.get("new_value", ""))
+                    if left_val == right_val:
+                        continue
+
+                    reason_text = f"{left_item.get('reason', '')} {right_item.get('reason', '')}".strip()
+                    if self._has_asymmetry_justification(reason_text):
+                        continue
+
+                    chosen = self._pick_more_conservative_value(
+                        self._clean_value(left_setup.get(param_key, "")),
+                        self._clean_value(right_setup.get(param_key, "")),
+                        left_val,
+                        right_val,
+                    )
+                    left_item["new_value"] = chosen
+                    right_item["new_value"] = chosen
+                    left_item["reason"] = f"{left_item.get('reason', '').strip()}{suffix}".strip()
+                    right_item["reason"] = f"{right_item.get('reason', '').strip()}{suffix}".strip()
+                    continue
+
+                source_item = left_item or right_item
+                if not source_item:
+                    continue
+
+                if self._has_asymmetry_justification(source_item.get("reason", "")):
+                    continue
+
+                mirrored = {
+                    "parameter": source_item.get("parameter", param_key),
+                    "new_value": self._clean_value(source_item.get("new_value", "")),
+                    "reason": f"{source_item.get('reason', '').strip()}{suffix}".strip(),
+                }
+
+                if left_item is None:
+                    left_reco[param_key] = dict(mirrored)
+                if right_item is None:
+                    right_reco[param_key] = dict(mirrored)
+
+    def _build_setup_agent_reports(self, all_reco_map, specialist_reports=None):
+        """Construye reportes de agentes alineados con el setup final consolidado."""
+        # Indexar summaries de especialistas por nombre de sección
+        specialist_summaries = {}
+        for sr in (specialist_reports or []):
+            s_name = sr.get("name", "")
+            if s_name and sr.get("summary", "").strip():
+                specialist_summaries[s_name] = self._sanitize_reason_text(
+                    sr["summary"].strip(),
+                    f"Analisis consolidado para {self._get_friendly_name(s_name, 'section')}."
+                )
+
+        reports = []
+        for section_key, items_map in all_reco_map.items():
+            if not items_map:
+                continue
+
+            normalized_items = []
+            for param_key, item in items_map.items():
+                normalized = self._normalize_recommendation_item(item)
+                if not normalized:
+                    continue
+                normalized_items.append(
+                    {
+                        "parameter": self._get_friendly_name(param_key),
+                        "new_value": self._clean_value(normalized.get("new_value", "")),
+                        "reason": self._sanitize_reason_text(
+                            normalized.get("reason", ""),
+                            "Cambio consolidado por el Ingeniero Jefe en base a telemetria y coherencia global."
+                        ),
+                    }
+                )
+
+            if not normalized_items:
+                continue
+
+            # Usar el summary del especialista si existe, o uno genérico
+            summary = specialist_summaries.get(
+                section_key,
+                f"Valores consolidados para {self._get_friendly_name(section_key, 'section')}."
+            )
+
+            reports.append(
+                {
+                    "name": section_key,
+                    "friendly_name": self._get_friendly_name(section_key, "section"),
+                    "summary": summary,
+                    "items": normalized_items,
+                }
+            )
+
+        return reports
+
     def _format_full_setup(self, all_reco_map, setup_data):
         """Formatea las recomendaciones finales con porcentajes de cambio."""
         full_setup_recommendations = {"sections": []}
@@ -647,7 +957,10 @@ class AIAngineer:
 
                 if reco:
                     reco_val = self._clean_value(reco.get('new_value', clean_curr))
-                    reason = reco.get('reason', "Sin cambios requeridos.")
+                    reason = self._sanitize_reason_text(
+                        reco.get('reason', "Sin cambios requeridos."),
+                        "Cambio validado por el Ingeniero Jefe segun telemetria y equilibrio global del setup."
+                    )
                     reason = re.sub(r'\b\d+//', '', reason)
 
                     # Calcular porcentaje de cambio
@@ -666,7 +979,12 @@ class AIAngineer:
                     "param_key": param_key
                 })
 
-            if items:
+            # Solo incluir secciones que tengan al menos un cambio propuesto
+            has_changes = any(
+                str(it.get('current', '')) != str(it.get('new', ''))
+                for it in items
+            )
+            if items and has_changes:
                 full_setup_recommendations["sections"].append({
                     "name": friendly_section,
                     "section_key": section_name,
@@ -716,9 +1034,25 @@ class AIAngineer:
         # 1. Actualizar mapeos si hay nuevos parámetros
         await self.update_mappings(setup_data)
 
+        # Provider-aware telemetry truncation: Jimmy's small context needs much shorter input.
+        if provider_key == "jimmy" and len(telemetry_summary) > JIMMY_MAX_TELEMETRY_CHARS:
+            ai_telemetry = telemetry_summary[:JIMMY_MAX_TELEMETRY_CHARS] + "\n... [datos truncados para ajuste de contexto LLM]"
+        else:
+            ai_telemetry = telemetry_summary
+
+        self._log_event(
+            logging.INFO,
+            "telemetry_sizes",
+            original_len=len(telemetry_summary),
+            ai_len=len(ai_telemetry),
+            provider=provider_key,
+        )
+
         # 2. Análisis de Conducción
         # Usar resumen filtrado (solo canales de técnica de pilotaje) si está disponible
         driving_input = driving_telemetry_summary if driving_telemetry_summary is not None else telemetry_summary
+        if provider_key == "jimmy" and len(driving_input) > JIMMY_MAX_TELEMETRY_CHARS:
+            driving_input = driving_input[:JIMMY_MAX_TELEMETRY_CHARS] + "\n... [datos truncados]"
         try:
             driving_analysis = await self._get_text_from_llm(DRIVING_PROMPT, {
                 "telemetry_summary": driving_input,
@@ -761,14 +1095,22 @@ class AIAngineer:
             friendly_section = self._get_friendly_name(section_name, 'section')
             report = await self._get_json_from_llm(SECTION_AGENT_PROMPT, {
                 "section_name": friendly_section,
-                "telemetry_summary": telemetry_summary,
+                "telemetry_summary": ai_telemetry,
                 "section_data": json.dumps(cleaned_data, indent=2),
                 "context_data": "N/A",
                 "circuit_name": circuit_name,
                 "fixed_params_prompt": fixed_params_prompt
             })
             if report:
-                specialist_reports.append({"name": section_name, "items": report.get("items", [])})
+                normalized_report = self._normalize_specialist_report(report)
+                specialist_reports.append(
+                    {
+                        "name": section_name,
+                        "friendly_name": self._get_friendly_name(section_name, 'section'),
+                        "items": normalized_report.get("items", []),
+                        "summary": normalized_report.get("summary", ""),
+                    }
+                )
 
         specialist_items = sum(
             len(r.get("items", [])) for r in specialist_reports if isinstance(r.get("items", []), list)
@@ -796,7 +1138,7 @@ class AIAngineer:
         # Ingeniero Jefe (paso final de consolidación)
         chief_engineer_report = await self._get_json_from_llm(CHIEF_ENGINEER_PROMPT, {
             "specialist_reports": json.dumps(specialist_reports, indent=2),
-            "telemetry_summary": telemetry_summary,
+            "telemetry_summary": ai_telemetry,
             "circuit_name": circuit_name,
             "current_setup": current_setup_summary,
             "memory_context": "N/A",
@@ -818,7 +1160,10 @@ class AIAngineer:
         # Guardar razonamiento del jefe en memoria (con contexto completo)
         chief_reasoning = ""
         if chief_engineer_report:
-            chief_reasoning = chief_engineer_report.get("chief_reasoning", "")
+            chief_reasoning = self._sanitize_reason_text(
+                chief_engineer_report.get("chief_reasoning", ""),
+                self._build_fallback_chief_reasoning(specialist_reports),
+            )
             self._agent_reports_cache = specialist_reports
             self.chief_memory.append({
                 "action": "análisis_inicial",
@@ -826,11 +1171,38 @@ class AIAngineer:
                 "agent_reports": json.dumps(specialist_reports, indent=2, default=str),
                 "timestamp": time.strftime("%H:%M:%S")
             })
+        else:
+            chief_reasoning = self._build_fallback_chief_reasoning(specialist_reports)
 
         # 4. Formatear respuesta para el frontal
         all_reco_map = {}
+        specialist_map = {}
+        chief_map = {}
 
-        # Solo usamos las recomendaciones del ingeniero jefe (tiene la última palabra)
+        inv_params = {v: k for k, v in self.mapping.get("parameters", {}).items()}
+
+        # Base determinista: propuestas de especialistas (se preservan por defecto)
+        for s_report in specialist_reports:
+            s_name = s_report.get("name", "")
+            if not s_name:
+                continue
+            specialist_map.setdefault(s_name, {})
+            for item in s_report.get("items", []):
+                normalized_item = self._normalize_recommendation_item(item)
+                if not normalized_item:
+                    continue
+
+                p_name = normalized_item.get("parameter", "")
+                internal_p_name = inv_params.get(p_name, p_name)
+                summary_fallback = (s_report.get("summary") or "").strip()
+                fallback_reason = summary_fallback or "Cambio propuesto por especialista y validado en consolidacion."
+                normalized_item["reason"] = self._sanitize_reason_text(
+                    normalized_item.get("reason", ""),
+                    fallback_reason,
+                )
+                specialist_map[s_name][internal_p_name] = normalized_item
+
+        # Override del jefe: solo reemplaza/ajusta parametros que si devolvio.
         if chief_engineer_report and "full_setup" in chief_engineer_report:
             chief_sections = chief_engineer_report["full_setup"].get("sections", [])
             for c_section in chief_sections:
@@ -844,28 +1216,59 @@ class AIAngineer:
                 if s_name in inv_sections:
                     internal_name = inv_sections[s_name]
 
-                if internal_name not in all_reco_map:
-                    all_reco_map[internal_name] = {}
+                if internal_name not in chief_map:
+                    chief_map[internal_name] = {}
 
                 for item in c_section.get("items", []):
-                    p_name = item.get("parameter", "")
-                    # Intento de corrección si el LLM usó el nombre amigable del parámetro
-                    internal_p_name = p_name
-                    inv_params = {v: k for k, v in self.mapping.get("parameters", {}).items()}
-                    if p_name in inv_params:
-                        internal_p_name = inv_params[p_name]
+                    normalized_item = self._normalize_recommendation_item(item)
+                    if not normalized_item:
+                        continue
 
-                    all_reco_map[internal_name][internal_p_name] = item
-        else:
-            fallback_reasons.append("chief_none")
-            # Fallback: usar informes de especialistas si el jefe no respondió
-            for s_report in specialist_reports:
-                s_name = s_report.get("name", "")
-                if s_name not in all_reco_map:
-                    all_reco_map[s_name] = {}
-                for item in s_report.get("items", []):
-                    p_name = item.get("parameter", "")
-                    all_reco_map[s_name][p_name] = item
+                    p_name = normalized_item.get("parameter", "")
+                    # Intento de corrección si el LLM usó el nombre amigable del parámetro
+                    internal_p_name = inv_params.get(p_name, p_name)
+
+                    specialist_reason = (
+                        specialist_map.get(internal_name, {})
+                        .get(internal_p_name, {})
+                        .get("reason", "")
+                    )
+                    fallback_reason = specialist_reason or "Cambio consolidado por el Ingeniero Jefe en base a telemetria."
+                    normalized_item["reason"] = self._sanitize_reason_text(
+                        normalized_item.get("reason", ""),
+                        fallback_reason,
+                    )
+
+                    chief_map[internal_name][internal_p_name] = normalized_item
+
+        # Merge final: conservar especialistas y aplicar overrides del jefe.
+        for section_name, section_items in specialist_map.items():
+            all_reco_map.setdefault(section_name, {}).update(section_items)
+        for section_name, section_items in chief_map.items():
+            all_reco_map.setdefault(section_name, {}).update(section_items)
+
+        # Fallback secundario: si el chief devolvió JSON válido pero sin ítems dentro,
+        # mantener solo especialistas y marcar motivo de degradacion.
+        chief_total_items = sum(len(v) for v in chief_map.values())
+        if chief_total_items == 0 and specialist_reports and "chief_no_items" not in fallback_reasons:
+            fallback_reasons.append("chief_no_items")
+            self._log_event(
+                logging.WARNING,
+                "chief_fallback_to_specialists",
+                reason="chief_no_items",
+                specialist_reports=len(specialist_reports),
+            )
+
+        self._log_event(
+            logging.INFO,
+            "reco_map_summary",
+            sections=list(all_reco_map.keys()),
+            items_per_section={k: len(v) for k, v in all_reco_map.items()},
+        )
+
+        # Normalización determinista para evitar asimetrías izquierda/derecha no justificadas.
+        self._enforce_axle_symmetry(all_reco_map, setup_data)
+        setup_agent_reports = self._build_setup_agent_reports(all_reco_map, specialist_reports)
 
         full_setup_recommendations = self._format_full_setup(all_reco_map, setup_data)
 
@@ -884,6 +1287,7 @@ class AIAngineer:
             "setup_analysis": "Análisis completo realizado por el equipo de ingenieros de pista. Se han evaluado todos los canales de telemetría curva a curva.",
             "full_setup": full_setup_recommendations,
             "agent_reports": specialist_reports,
+            "setup_agent_reports": setup_agent_reports,
             "chief_reasoning": chief_reasoning
         }
 

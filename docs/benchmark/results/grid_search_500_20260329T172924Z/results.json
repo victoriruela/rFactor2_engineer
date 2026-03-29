@@ -1,0 +1,2342 @@
+{
+  "generated_at": "2026-03-29T17:30:36.970364+00:00",
+  "total_runs": 20,
+  "batch_size": 10,
+  "timeout_seconds": 90,
+  "fixtures_dir": "tests/integration/fixtures/benchmark_cases",
+  "matrix_path": "docs/benchmark/results/grid_search_500_20260329T172924Z/matrix.generated.json",
+  "best": {
+    "selected_at": "2026-03-29T17:30:36.962797+00:00",
+    "run_id": "grid500_013",
+    "prompt_variant": "grid500_s4_k4_t0.2",
+    "systemPrompt": "Eres Jimmy (llama3.1-8B) ingeniero de pista rFactor2. Tono tecnico, breve y accionable. Si se solicita estructura, responde SOLO JSON estricto, sin texto extra ni markdown. No inventes vueltas, curvas ni distancias fuera de la telemetria dada. Especialistas: entrega items con parameter, new_value y reason, enfocados en cambios reales. Chief: integra propuestas validas de especialistas y conserva su razonamiento tecnico.",
+    "topK": 4,
+    "temperature": 0.2,
+    "score": 0.9775000000000001,
+    "metrics": {
+      "json_validity_rate": 0.95,
+      "json_validity_breakdown": {
+        "specialists": {
+          "valid": 17,
+          "total": 17,
+          "rate": 1.0
+        },
+        "chief": {
+          "valid": 2,
+          "total": 3,
+          "rate": 0.6666666666666666
+        }
+      },
+      "driving_analysis_non_empty_rate": 1.0,
+      "recommendation_coverage_by_section": {
+        "by_case": {
+          "case_01_suzuka_baseline": 1.0,
+          "case_02_suzuka_mid_understeer": 1.0,
+          "case_03_suzuka_exit_oversteer": 1.0
+        },
+        "average": 1.0
+      },
+      "latency_ms": {
+        "average": 6633.926184666052,
+        "p95": 8691.19813649777
+      },
+      "qualitative_rubric": {
+        "status": "pending_manual_scoring",
+        "scale": "1-5",
+        "dimensions": [
+          "telemetry_specificity",
+          "causal_quality",
+          "actionability",
+          "consistency_with_fixed_params"
+        ],
+        "per_case": {
+          "case_01_suzuka_baseline": {
+            "telemetry_specificity": null,
+            "causal_quality": null,
+            "actionability": null,
+            "consistency_with_fixed_params": null,
+            "notes": ""
+          },
+          "case_02_suzuka_mid_understeer": {
+            "telemetry_specificity": null,
+            "causal_quality": null,
+            "actionability": null,
+            "consistency_with_fixed_params": null,
+            "notes": ""
+          },
+          "case_03_suzuka_exit_oversteer": {
+            "telemetry_specificity": null,
+            "causal_quality": null,
+            "actionability": null,
+            "consistency_with_fixed_params": null,
+            "notes": ""
+          }
+        }
+      },
+      "refusal_rate": 0.0,
+      "lap_reference_violation_rate": 0.0
+    }
+  },
+  "runs": [
+    {
+      "run_config": {
+        "run_id": "grid500_013",
+        "prompt_variant": "grid500_s4_k4_t0.2",
+        "systemPrompt": "Eres Jimmy (llama3.1-8B) ingeniero de pista rFactor2. Tono tecnico, breve y accionable. Si se solicita estructura, responde SOLO JSON estricto, sin texto extra ni markdown. No inventes vueltas, curvas ni distancias fuera de la telemetria dada. Especialistas: entrega items con parameter, new_value y reason, enfocados en cambios reales. Chief: integra propuestas validas de especialistas y conserva su razonamiento tecnico.",
+        "topK": 4,
+        "temperature": 0.2,
+        "metadata": {
+          "search": "grid500",
+          "index": 13
+        },
+        "prompt_overrides": {}
+      },
+      "score": 0.9775000000000001,
+      "metrics": {
+        "json_validity_rate": 0.95,
+        "json_validity_breakdown": {
+          "specialists": {
+            "valid": 17,
+            "total": 17,
+            "rate": 1.0
+          },
+          "chief": {
+            "valid": 2,
+            "total": 3,
+            "rate": 0.6666666666666666
+          }
+        },
+        "driving_analysis_non_empty_rate": 1.0,
+        "recommendation_coverage_by_section": {
+          "by_case": {
+            "case_01_suzuka_baseline": 1.0,
+            "case_02_suzuka_mid_understeer": 1.0,
+            "case_03_suzuka_exit_oversteer": 1.0
+          },
+          "average": 1.0
+        },
+        "latency_ms": {
+          "average": 6633.926184666052,
+          "p95": 8691.19813649777
+        },
+        "qualitative_rubric": {
+          "status": "pending_manual_scoring",
+          "scale": "1-5",
+          "dimensions": [
+            "telemetry_specificity",
+            "causal_quality",
+            "actionability",
+            "consistency_with_fixed_params"
+          ],
+          "per_case": {
+            "case_01_suzuka_baseline": {
+              "telemetry_specificity": null,
+              "causal_quality": null,
+              "actionability": null,
+              "consistency_with_fixed_params": null,
+              "notes": ""
+            },
+            "case_02_suzuka_mid_understeer": {
+              "telemetry_specificity": null,
+              "causal_quality": null,
+              "actionability": null,
+              "consistency_with_fixed_params": null,
+              "notes": ""
+            },
+            "case_03_suzuka_exit_oversteer": {
+              "telemetry_specificity": null,
+              "causal_quality": null,
+              "actionability": null,
+              "consistency_with_fixed_params": null,
+              "notes": ""
+            }
+          }
+        },
+        "refusal_rate": 0.0,
+        "lap_reference_violation_rate": 0.0
+      },
+      "case_summaries": [
+        {
+          "case_id": "case_01_suzuka_baseline",
+          "latency_ms": 8985.044483997626,
+          "specialist_total": 6,
+          "specialist_valid": 6,
+          "chief_valid": true,
+          "coverage_rate": 1.0,
+          "driving_analysis_non_empty": true,
+          "refusal_text": false,
+          "lap_reference_violation": false
+        },
+        {
+          "case_id": "case_02_suzuka_mid_understeer",
+          "latency_ms": 6046.5810089990555,
+          "specialist_total": 6,
+          "specialist_valid": 6,
+          "chief_valid": false,
+          "coverage_rate": 1.0,
+          "driving_analysis_non_empty": true,
+          "refusal_text": false,
+          "lap_reference_violation": false
+        },
+        {
+          "case_id": "case_03_suzuka_exit_oversteer",
+          "latency_ms": 4870.153061001474,
+          "specialist_total": 5,
+          "specialist_valid": 5,
+          "chief_valid": true,
+          "coverage_rate": 1.0,
+          "driving_analysis_non_empty": true,
+          "refusal_text": false,
+          "lap_reference_violation": false
+        }
+      ]
+    },
+    {
+      "run_config": {
+        "run_id": "grid500_006",
+        "prompt_variant": "grid500_s2_k2_t0.0",
+        "systemPrompt": "Eres Jimmy (llama3.1-8B) ingeniero de pista rFactor2. Tono tecnico, breve y accionable. Si se solicita estructura, responde SOLO JSON estricto, sin texto extra ni markdown. No inventes vueltas, curvas ni distancias fuera de la telemetria dada. Especialistas: entrega items con parameter, new_value y reason, enfocados en cambios reales. Chief: integra propuestas validas de especialistas y conserva su razonamiento tecnico.",
+        "topK": 2,
+        "temperature": 0.0,
+        "metadata": {
+          "search": "grid500",
+          "index": 6
+        },
+        "prompt_overrides": {}
+      },
+      "score": 0.9550000000000002,
+      "metrics": {
+        "json_validity_rate": 0.9,
+        "json_validity_breakdown": {
+          "specialists": {
+            "valid": 17,
+            "total": 17,
+            "rate": 1.0
+          },
+          "chief": {
+            "valid": 1,
+            "total": 3,
+            "rate": 0.3333333333333333
+          }
+        },
+        "driving_analysis_non_empty_rate": 1.0,
+        "recommendation_coverage_by_section": {
+          "by_case": {
+            "case_01_suzuka_baseline": 1.0,
+            "case_02_suzuka_mid_understeer": 1.0,
+            "case_03_suzuka_exit_oversteer": 1.0
+          },
+          "average": 1.0
+        },
+        "latency_ms": {
+          "average": 12141.340171331345,
+          "p95": 13571.71853029904
+        },
+        "qualitative_rubric": {
+          "status": "pending_manual_scoring",
+          "scale": "1-5",
+          "dimensions": [
+            "telemetry_specificity",
+            "causal_quality",
+            "actionability",
+            "consistency_with_fixed_params"
+          ],
+          "per_case": {
+            "case_01_suzuka_baseline": {
+              "telemetry_specificity": null,
+              "causal_quality": null,
+              "actionability": null,
+              "consistency_with_fixed_params": null,
+              "notes": ""
+            },
+            "case_02_suzuka_mid_understeer": {
+              "telemetry_specificity": null,
+              "causal_quality": null,
+              "actionability": null,
+              "consistency_with_fixed_params": null,
+              "notes": ""
+            },
+            "case_03_suzuka_exit_oversteer": {
+              "telemetry_specificity": null,
+              "causal_quality": null,
+              "actionability": null,
+              "consistency_with_fixed_params": null,
+              "notes": ""
+            }
+          }
+        },
+        "refusal_rate": 0.0,
+        "lap_reference_violation_rate": 0.0
+      },
+      "case_summaries": [
+        {
+          "case_id": "case_01_suzuka_baseline",
+          "latency_ms": 13732.948872999259,
+          "specialist_total": 6,
+          "specialist_valid": 6,
+          "chief_valid": false,
+          "coverage_rate": 1.0,
+          "driving_analysis_non_empty": true,
+          "refusal_text": false,
+          "lap_reference_violation": false
+        },
+        {
+          "case_id": "case_02_suzuka_mid_understeer",
+          "latency_ms": 10570.426194997708,
+          "specialist_total": 6,
+          "specialist_valid": 6,
+          "chief_valid": true,
+          "coverage_rate": 1.0,
+          "driving_analysis_non_empty": true,
+          "refusal_text": false,
+          "lap_reference_violation": false
+        },
+        {
+          "case_id": "case_03_suzuka_exit_oversteer",
+          "latency_ms": 12120.64544599707,
+          "specialist_total": 5,
+          "specialist_valid": 5,
+          "chief_valid": false,
+          "coverage_rate": 1.0,
+          "driving_analysis_non_empty": true,
+          "refusal_text": false,
+          "lap_reference_violation": false
+        }
+      ]
+    },
+    {
+      "run_config": {
+        "run_id": "grid500_004",
+        "prompt_variant": "grid500_s5_k1_t0.3",
+        "systemPrompt": "Eres Jimmy (llama3.1-8B) ingeniero de pista rFactor2. Tono tecnico, breve y accionable. Si se solicita estructura, responde SOLO JSON estricto, sin texto extra ni markdown. No inventes vueltas, curvas ni distancias fuera de la telemetria dada. Especialistas: entrega items con parameter, new_value y reason, enfocados en cambios reales. Chief: integra propuestas validas de especialistas y conserva su razonamiento tecnico.",
+        "topK": 1,
+        "temperature": 0.3,
+        "metadata": {
+          "search": "grid500",
+          "index": 4
+        },
+        "prompt_overrides": {}
+      },
+      "score": 0.9550000000000002,
+      "metrics": {
+        "json_validity_rate": 0.9,
+        "json_validity_breakdown": {
+          "specialists": {
+            "valid": 17,
+            "total": 17,
+            "rate": 1.0
+          },
+          "chief": {
+            "valid": 1,
+            "total": 3,
+            "rate": 0.3333333333333333
+          }
+        },
+        "driving_analysis_non_empty_rate": 1.0,
+        "recommendation_coverage_by_section": {
+          "by_case": {
+            "case_01_suzuka_baseline": 1.0,
+            "case_02_suzuka_mid_understeer": 1.0,
+            "case_03_suzuka_exit_oversteer": 1.0
+          },
+          "average": 1.0
+        },
+        "latency_ms": {
+          "average": 12690.120212000087,
+          "p95": 19179.851172201234
+        },
+        "qualitative_rubric": {
+          "status": "pending_manual_scoring",
+          "scale": "1-5",
+          "dimensions": [
+            "telemetry_specificity",
+            "causal_quality",
+            "actionability",
+            "consistency_with_fixed_params"
+          ],
+          "per_case": {
+            "case_01_suzuka_baseline": {
+              "telemetry_specificity": null,
+              "causal_quality": null,
+              "actionability": null,
+              "consistency_with_fixed_params": null,
+              "notes": ""
+            },
+            "case_02_suzuka_mid_understeer": {
+              "telemetry_specificity": null,
+              "causal_quality": null,
+              "actionability": null,
+              "consistency_with_fixed_params": null,
+              "notes": ""
+            },
+            "case_03_suzuka_exit_oversteer": {
+              "telemetry_specificity": null,
+              "causal_quality": null,
+              "actionability": null,
+              "consistency_with_fixed_params": null,
+              "notes": ""
+            }
+          }
+        },
+        "refusal_rate": 0.0,
+        "lap_reference_violation_rate": 0.0
+      },
+      "case_summaries": [
+        {
+          "case_id": "case_01_suzuka_baseline",
+          "latency_ms": 13972.972849998769,
+          "specialist_total": 6,
+          "specialist_valid": 6,
+          "chief_valid": false,
+          "coverage_rate": 1.0,
+          "driving_analysis_non_empty": true,
+          "refusal_text": false,
+          "lap_reference_violation": false
+        },
+        {
+          "case_id": "case_02_suzuka_mid_understeer",
+          "latency_ms": 19758.393208001507,
+          "specialist_total": 6,
+          "specialist_valid": 6,
+          "chief_valid": true,
+          "coverage_rate": 1.0,
+          "driving_analysis_non_empty": true,
+          "refusal_text": false,
+          "lap_reference_violation": false
+        },
+        {
+          "case_id": "case_03_suzuka_exit_oversteer",
+          "latency_ms": 4338.994577999983,
+          "specialist_total": 5,
+          "specialist_valid": 5,
+          "chief_valid": false,
+          "coverage_rate": 1.0,
+          "driving_analysis_non_empty": true,
+          "refusal_text": false,
+          "lap_reference_violation": false
+        }
+      ]
+    },
+    {
+      "run_config": {
+        "run_id": "grid500_001",
+        "prompt_variant": "grid500_s2_k1_t0.0",
+        "systemPrompt": "Eres Jimmy (llama3.1-8B) ingeniero de pista rFactor2. Tono tecnico, breve y accionable. Si se solicita estructura, responde SOLO JSON estricto, sin texto extra ni markdown. No inventes vueltas, curvas ni distancias fuera de la telemetria dada. Especialistas: entrega items con parameter, new_value y reason, enfocados en cambios reales. Chief: integra propuestas validas de especialistas y conserva su razonamiento tecnico.",
+        "topK": 1,
+        "temperature": 0.0,
+        "metadata": {
+          "search": "grid500",
+          "index": 1
+        },
+        "prompt_overrides": {}
+      },
+      "score": 0.9325000000000001,
+      "metrics": {
+        "json_validity_rate": 0.85,
+        "json_validity_breakdown": {
+          "specialists": {
+            "valid": 16,
+            "total": 17,
+            "rate": 0.9411764705882353
+          },
+          "chief": {
+            "valid": 1,
+            "total": 3,
+            "rate": 0.3333333333333333
+          }
+        },
+        "driving_analysis_non_empty_rate": 1.0,
+        "recommendation_coverage_by_section": {
+          "by_case": {
+            "case_01_suzuka_baseline": 1.0,
+            "case_02_suzuka_mid_understeer": 1.0,
+            "case_03_suzuka_exit_oversteer": 1.0
+          },
+          "average": 1.0
+        },
+        "latency_ms": {
+          "average": 9362.851874998645,
+          "p95": 13702.965084798416
+        },
+        "qualitative_rubric": {
+          "status": "pending_manual_scoring",
+          "scale": "1-5",
+          "dimensions": [
+            "telemetry_specificity",
+            "causal_quality",
+            "actionability",
+            "consistency_with_fixed_params"
+          ],
+          "per_case": {
+            "case_01_suzuka_baseline": {
+              "telemetry_specificity": null,
+              "causal_quality": null,
+              "actionability": null,
+              "consistency_with_fixed_params": null,
+              "notes": ""
+            },
+            "case_02_suzuka_mid_understeer": {
+              "telemetry_specificity": null,
+              "causal_quality": null,
+              "actionability": null,
+              "consistency_with_fixed_params": null,
+              "notes": ""
+            },
+            "case_03_suzuka_exit_oversteer": {
+              "telemetry_specificity": null,
+              "causal_quality": null,
+              "actionability": null,
+              "consistency_with_fixed_params": null,
+              "notes": ""
+            }
+          }
+        },
+        "refusal_rate": 0.0,
+        "lap_reference_violation_rate": 0.0
+      },
+      "case_summaries": [
+        {
+          "case_id": "case_01_suzuka_baseline",
+          "latency_ms": 14325.792430998263,
+          "specialist_total": 6,
+          "specialist_valid": 6,
+          "chief_valid": false,
+          "coverage_rate": 1.0,
+          "driving_analysis_non_empty": true,
+          "refusal_text": false,
+          "lap_reference_violation": false
+        },
+        {
+          "case_id": "case_02_suzuka_mid_understeer",
+          "latency_ms": 8097.518968999793,
+          "specialist_total": 6,
+          "specialist_valid": 5,
+          "chief_valid": true,
+          "coverage_rate": 1.0,
+          "driving_analysis_non_empty": true,
+          "refusal_text": false,
+          "lap_reference_violation": false
+        },
+        {
+          "case_id": "case_03_suzuka_exit_oversteer",
+          "latency_ms": 5665.244224997878,
+          "specialist_total": 5,
+          "specialist_valid": 5,
+          "chief_valid": false,
+          "coverage_rate": 1.0,
+          "driving_analysis_non_empty": true,
+          "refusal_text": false,
+          "lap_reference_violation": false
+        }
+      ]
+    },
+    {
+      "run_config": {
+        "run_id": "grid500_014",
+        "prompt_variant": "grid500_s5_k4_t0.3",
+        "systemPrompt": "Eres Jimmy (llama3.1-8B) ingeniero de pista rFactor2. Tono tecnico, breve y accionable. Si se solicita estructura, responde SOLO JSON estricto, sin texto extra ni markdown. No inventes vueltas, curvas ni distancias fuera de la telemetria dada. Especialistas: entrega items con parameter, new_value y reason, enfocados en cambios reales. Chief: integra propuestas validas de especialistas y conserva su razonamiento tecnico.",
+        "topK": 4,
+        "temperature": 0.3,
+        "metadata": {
+          "search": "grid500",
+          "index": 14
+        },
+        "prompt_overrides": {}
+      },
+      "score": 0.9325000000000001,
+      "metrics": {
+        "json_validity_rate": 0.85,
+        "json_validity_breakdown": {
+          "specialists": {
+            "valid": 16,
+            "total": 17,
+            "rate": 0.9411764705882353
+          },
+          "chief": {
+            "valid": 1,
+            "total": 3,
+            "rate": 0.3333333333333333
+          }
+        },
+        "driving_analysis_non_empty_rate": 1.0,
+        "recommendation_coverage_by_section": {
+          "by_case": {
+            "case_01_suzuka_baseline": 1.0,
+            "case_02_suzuka_mid_understeer": 1.0,
+            "case_03_suzuka_exit_oversteer": 1.0
+          },
+          "average": 1.0
+        },
+        "latency_ms": {
+          "average": 11303.859440001057,
+          "p95": 23674.506774000107
+        },
+        "qualitative_rubric": {
+          "status": "pending_manual_scoring",
+          "scale": "1-5",
+          "dimensions": [
+            "telemetry_specificity",
+            "causal_quality",
+            "actionability",
+            "consistency_with_fixed_params"
+          ],
+          "per_case": {
+            "case_01_suzuka_baseline": {
+              "telemetry_specificity": null,
+              "causal_quality": null,
+              "actionability": null,
+              "consistency_with_fixed_params": null,
+              "notes": ""
+            },
+            "case_02_suzuka_mid_understeer": {
+              "telemetry_specificity": null,
+              "causal_quality": null,
+              "actionability": null,
+              "consistency_with_fixed_params": null,
+              "notes": ""
+            },
+            "case_03_suzuka_exit_oversteer": {
+              "telemetry_specificity": null,
+              "causal_quality": null,
+              "actionability": null,
+              "consistency_with_fixed_params": null,
+              "notes": ""
+            }
+          }
+        },
+        "refusal_rate": 0.0,
+        "lap_reference_violation_rate": 0.0
+      },
+      "case_summaries": [
+        {
+          "case_id": "case_01_suzuka_baseline",
+          "latency_ms": 25813.184755999828,
+          "specialist_total": 6,
+          "specialist_valid": 6,
+          "chief_valid": false,
+          "coverage_rate": 1.0,
+          "driving_analysis_non_empty": true,
+          "refusal_text": false,
+          "lap_reference_violation": false
+        },
+        {
+          "case_id": "case_02_suzuka_mid_understeer",
+          "latency_ms": 3671.9886280006904,
+          "specialist_total": 6,
+          "specialist_valid": 5,
+          "chief_valid": false,
+          "coverage_rate": 1.0,
+          "driving_analysis_non_empty": true,
+          "refusal_text": false,
+          "lap_reference_violation": false
+        },
+        {
+          "case_id": "case_03_suzuka_exit_oversteer",
+          "latency_ms": 4426.404936002655,
+          "specialist_total": 5,
+          "specialist_valid": 5,
+          "chief_valid": true,
+          "coverage_rate": 1.0,
+          "driving_analysis_non_empty": true,
+          "refusal_text": false,
+          "lap_reference_violation": false
+        }
+      ]
+    },
+    {
+      "run_config": {
+        "run_id": "grid500_015",
+        "prompt_variant": "grid500_s1_k4_t0.4",
+        "systemPrompt": "Eres Jimmy (llama3.1-8B) ingeniero de pista rFactor2. Tono tecnico, breve y accionable. Si se solicita estructura, responde SOLO JSON estricto, sin texto extra ni markdown. No inventes vueltas, curvas ni distancias fuera de la telemetria dada. Especialistas: entrega items con parameter, new_value y reason, enfocados en cambios reales. Chief: integra propuestas validas de especialistas y conserva su razonamiento tecnico.",
+        "topK": 4,
+        "temperature": 0.4,
+        "metadata": {
+          "search": "grid500",
+          "index": 15
+        },
+        "prompt_overrides": {}
+      },
+      "score": 0.9325000000000001,
+      "metrics": {
+        "json_validity_rate": 0.85,
+        "json_validity_breakdown": {
+          "specialists": {
+            "valid": 16,
+            "total": 17,
+            "rate": 0.9411764705882353
+          },
+          "chief": {
+            "valid": 1,
+            "total": 3,
+            "rate": 0.3333333333333333
+          }
+        },
+        "driving_analysis_non_empty_rate": 1.0,
+        "recommendation_coverage_by_section": {
+          "by_case": {
+            "case_01_suzuka_baseline": 1.0,
+            "case_02_suzuka_mid_understeer": 1.0,
+            "case_03_suzuka_exit_oversteer": 1.0
+          },
+          "average": 1.0
+        },
+        "latency_ms": {
+          "average": 11482.665475000735,
+          "p95": 22890.54362460156
+        },
+        "qualitative_rubric": {
+          "status": "pending_manual_scoring",
+          "scale": "1-5",
+          "dimensions": [
+            "telemetry_specificity",
+            "causal_quality",
+            "actionability",
+            "consistency_with_fixed_params"
+          ],
+          "per_case": {
+            "case_01_suzuka_baseline": {
+              "telemetry_specificity": null,
+              "causal_quality": null,
+              "actionability": null,
+              "consistency_with_fixed_params": null,
+              "notes": ""
+            },
+            "case_02_suzuka_mid_understeer": {
+              "telemetry_specificity": null,
+              "causal_quality": null,
+              "actionability": null,
+              "consistency_with_fixed_params": null,
+              "notes": ""
+            },
+            "case_03_suzuka_exit_oversteer": {
+              "telemetry_specificity": null,
+              "causal_quality": null,
+              "actionability": null,
+              "consistency_with_fixed_params": null,
+              "notes": ""
+            }
+          }
+        },
+        "refusal_rate": 0.0,
+        "lap_reference_violation_rate": 0.0
+      },
+      "case_summaries": [
+        {
+          "case_id": "case_01_suzuka_baseline",
+          "latency_ms": 24880.86754500182,
+          "specialist_total": 6,
+          "specialist_valid": 6,
+          "chief_valid": false,
+          "coverage_rate": 1.0,
+          "driving_analysis_non_empty": true,
+          "refusal_text": false,
+          "lap_reference_violation": false
+        },
+        {
+          "case_id": "case_02_suzuka_mid_understeer",
+          "latency_ms": 4977.6283409992175,
+          "specialist_total": 6,
+          "specialist_valid": 5,
+          "chief_valid": false,
+          "coverage_rate": 1.0,
+          "driving_analysis_non_empty": true,
+          "refusal_text": false,
+          "lap_reference_violation": false
+        },
+        {
+          "case_id": "case_03_suzuka_exit_oversteer",
+          "latency_ms": 4589.500539001165,
+          "specialist_total": 5,
+          "specialist_valid": 5,
+          "chief_valid": true,
+          "coverage_rate": 1.0,
+          "driving_analysis_non_empty": true,
+          "refusal_text": false,
+          "lap_reference_violation": false
+        }
+      ]
+    },
+    {
+      "run_config": {
+        "run_id": "grid500_003",
+        "prompt_variant": "grid500_s4_k1_t0.2",
+        "systemPrompt": "Eres Jimmy (llama3.1-8B) ingeniero de pista rFactor2. Tono tecnico, breve y accionable. Si se solicita estructura, responde SOLO JSON estricto, sin texto extra ni markdown. No inventes vueltas, curvas ni distancias fuera de la telemetria dada. Especialistas: entrega items con parameter, new_value y reason, enfocados en cambios reales. Chief: integra propuestas validas de especialistas y conserva su razonamiento tecnico.",
+        "topK": 1,
+        "temperature": 0.2,
+        "metadata": {
+          "search": "grid500",
+          "index": 3
+        },
+        "prompt_overrides": {}
+      },
+      "score": 0.9325000000000001,
+      "metrics": {
+        "json_validity_rate": 0.85,
+        "json_validity_breakdown": {
+          "specialists": {
+            "valid": 16,
+            "total": 17,
+            "rate": 0.9411764705882353
+          },
+          "chief": {
+            "valid": 1,
+            "total": 3,
+            "rate": 0.3333333333333333
+          }
+        },
+        "driving_analysis_non_empty_rate": 1.0,
+        "recommendation_coverage_by_section": {
+          "by_case": {
+            "case_01_suzuka_baseline": 1.0,
+            "case_02_suzuka_mid_understeer": 1.0,
+            "case_03_suzuka_exit_oversteer": 1.0
+          },
+          "average": 1.0
+        },
+        "latency_ms": {
+          "average": 11692.911836334437,
+          "p95": 16438.004930600437
+        },
+        "qualitative_rubric": {
+          "status": "pending_manual_scoring",
+          "scale": "1-5",
+          "dimensions": [
+            "telemetry_specificity",
+            "causal_quality",
+            "actionability",
+            "consistency_with_fixed_params"
+          ],
+          "per_case": {
+            "case_01_suzuka_baseline": {
+              "telemetry_specificity": null,
+              "causal_quality": null,
+              "actionability": null,
+              "consistency_with_fixed_params": null,
+              "notes": ""
+            },
+            "case_02_suzuka_mid_understeer": {
+              "telemetry_specificity": null,
+              "causal_quality": null,
+              "actionability": null,
+              "consistency_with_fixed_params": null,
+              "notes": ""
+            },
+            "case_03_suzuka_exit_oversteer": {
+              "telemetry_specificity": null,
+              "causal_quality": null,
+              "actionability": null,
+              "consistency_with_fixed_params": null,
+              "notes": ""
+            }
+          }
+        },
+        "refusal_rate": 0.0,
+        "lap_reference_violation_rate": 0.0
+      },
+      "case_summaries": [
+        {
+          "case_id": "case_01_suzuka_baseline",
+          "latency_ms": 13971.154841001407,
+          "specialist_total": 6,
+          "specialist_valid": 6,
+          "chief_valid": false,
+          "coverage_rate": 1.0,
+          "driving_analysis_non_empty": true,
+          "refusal_text": false,
+          "lap_reference_violation": false
+        },
+        {
+          "case_id": "case_02_suzuka_mid_understeer",
+          "latency_ms": 16712.09938500033,
+          "specialist_total": 6,
+          "specialist_valid": 5,
+          "chief_valid": true,
+          "coverage_rate": 1.0,
+          "driving_analysis_non_empty": true,
+          "refusal_text": false,
+          "lap_reference_violation": false
+        },
+        {
+          "case_id": "case_03_suzuka_exit_oversteer",
+          "latency_ms": 4395.481283001573,
+          "specialist_total": 5,
+          "specialist_valid": 5,
+          "chief_valid": false,
+          "coverage_rate": 1.0,
+          "driving_analysis_non_empty": true,
+          "refusal_text": false,
+          "lap_reference_violation": false
+        }
+      ]
+    },
+    {
+      "run_config": {
+        "run_id": "grid500_020",
+        "prompt_variant": "grid500_s1_k8_t0.4",
+        "systemPrompt": "Eres Jimmy (llama3.1-8B) ingeniero de pista rFactor2. Tono tecnico, breve y accionable. Si se solicita estructura, responde SOLO JSON estricto, sin texto extra ni markdown. No inventes vueltas, curvas ni distancias fuera de la telemetria dada. Especialistas: entrega items con parameter, new_value y reason, enfocados en cambios reales. Chief: integra propuestas validas de especialistas y conserva su razonamiento tecnico.",
+        "topK": 8,
+        "temperature": 0.4,
+        "metadata": {
+          "search": "grid500",
+          "index": 20
+        },
+        "prompt_overrides": {}
+      },
+      "score": 0.9100000000000001,
+      "metrics": {
+        "json_validity_rate": 0.8,
+        "json_validity_breakdown": {
+          "specialists": {
+            "valid": 15,
+            "total": 17,
+            "rate": 0.8823529411764706
+          },
+          "chief": {
+            "valid": 1,
+            "total": 3,
+            "rate": 0.3333333333333333
+          }
+        },
+        "driving_analysis_non_empty_rate": 1.0,
+        "recommendation_coverage_by_section": {
+          "by_case": {
+            "case_01_suzuka_baseline": 1.0,
+            "case_02_suzuka_mid_understeer": 1.0,
+            "case_03_suzuka_exit_oversteer": 1.0
+          },
+          "average": 1.0
+        },
+        "latency_ms": {
+          "average": 7097.190703666759,
+          "p95": 10786.34740309899
+        },
+        "qualitative_rubric": {
+          "status": "pending_manual_scoring",
+          "scale": "1-5",
+          "dimensions": [
+            "telemetry_specificity",
+            "causal_quality",
+            "actionability",
+            "consistency_with_fixed_params"
+          ],
+          "per_case": {
+            "case_01_suzuka_baseline": {
+              "telemetry_specificity": null,
+              "causal_quality": null,
+              "actionability": null,
+              "consistency_with_fixed_params": null,
+              "notes": ""
+            },
+            "case_02_suzuka_mid_understeer": {
+              "telemetry_specificity": null,
+              "causal_quality": null,
+              "actionability": null,
+              "consistency_with_fixed_params": null,
+              "notes": ""
+            },
+            "case_03_suzuka_exit_oversteer": {
+              "telemetry_specificity": null,
+              "causal_quality": null,
+              "actionability": null,
+              "consistency_with_fixed_params": null,
+              "notes": ""
+            }
+          }
+        },
+        "refusal_rate": 0.0,
+        "lap_reference_violation_rate": 0.0
+      },
+      "case_summaries": [
+        {
+          "case_id": "case_01_suzuka_baseline",
+          "latency_ms": 11321.868408998853,
+          "specialist_total": 6,
+          "specialist_valid": 5,
+          "chief_valid": false,
+          "coverage_rate": 1.0,
+          "driving_analysis_non_empty": true,
+          "refusal_text": false,
+          "lap_reference_violation": false
+        },
+        {
+          "case_id": "case_02_suzuka_mid_understeer",
+          "latency_ms": 5966.658350000216,
+          "specialist_total": 6,
+          "specialist_valid": 5,
+          "chief_valid": true,
+          "coverage_rate": 1.0,
+          "driving_analysis_non_empty": true,
+          "refusal_text": false,
+          "lap_reference_violation": false
+        },
+        {
+          "case_id": "case_03_suzuka_exit_oversteer",
+          "latency_ms": 4003.045352001209,
+          "specialist_total": 5,
+          "specialist_valid": 5,
+          "chief_valid": false,
+          "coverage_rate": 1.0,
+          "driving_analysis_non_empty": true,
+          "refusal_text": false,
+          "lap_reference_violation": false
+        }
+      ]
+    },
+    {
+      "run_config": {
+        "run_id": "grid500_002",
+        "prompt_variant": "grid500_s3_k1_t0.1",
+        "systemPrompt": "Eres Jimmy (llama3.1-8B) ingeniero de pista rFactor2. Tono tecnico, breve y accionable. Si se solicita estructura, responde SOLO JSON estricto, sin texto extra ni markdown. No inventes vueltas, curvas ni distancias fuera de la telemetria dada. Especialistas: entrega items con parameter, new_value y reason, enfocados en cambios reales. Chief: integra propuestas validas de especialistas y conserva su razonamiento tecnico.",
+        "topK": 1,
+        "temperature": 0.1,
+        "metadata": {
+          "search": "grid500",
+          "index": 2
+        },
+        "prompt_overrides": {}
+      },
+      "score": 0.9100000000000001,
+      "metrics": {
+        "json_validity_rate": 0.8,
+        "json_validity_breakdown": {
+          "specialists": {
+            "valid": 16,
+            "total": 17,
+            "rate": 0.9411764705882353
+          },
+          "chief": {
+            "valid": 0,
+            "total": 3,
+            "rate": 0.0
+          }
+        },
+        "driving_analysis_non_empty_rate": 1.0,
+        "recommendation_coverage_by_section": {
+          "by_case": {
+            "case_01_suzuka_baseline": 1.0,
+            "case_02_suzuka_mid_understeer": 1.0,
+            "case_03_suzuka_exit_oversteer": 1.0
+          },
+          "average": 1.0
+        },
+        "latency_ms": {
+          "average": 10609.258692998992,
+          "p95": 13972.543517999293
+        },
+        "qualitative_rubric": {
+          "status": "pending_manual_scoring",
+          "scale": "1-5",
+          "dimensions": [
+            "telemetry_specificity",
+            "causal_quality",
+            "actionability",
+            "consistency_with_fixed_params"
+          ],
+          "per_case": {
+            "case_01_suzuka_baseline": {
+              "telemetry_specificity": null,
+              "causal_quality": null,
+              "actionability": null,
+              "consistency_with_fixed_params": null,
+              "notes": ""
+            },
+            "case_02_suzuka_mid_understeer": {
+              "telemetry_specificity": null,
+              "causal_quality": null,
+              "actionability": null,
+              "consistency_with_fixed_params": null,
+              "notes": ""
+            },
+            "case_03_suzuka_exit_oversteer": {
+              "telemetry_specificity": null,
+              "causal_quality": null,
+              "actionability": null,
+              "consistency_with_fixed_params": null,
+              "notes": ""
+            }
+          }
+        },
+        "refusal_rate": 0.0,
+        "lap_reference_violation_rate": 0.0
+      },
+      "case_summaries": [
+        {
+          "case_id": "case_01_suzuka_baseline",
+          "latency_ms": 14332.660112999292,
+          "specialist_total": 6,
+          "specialist_valid": 6,
+          "chief_valid": false,
+          "coverage_rate": 1.0,
+          "driving_analysis_non_empty": true,
+          "refusal_text": false,
+          "lap_reference_violation": false
+        },
+        {
+          "case_id": "case_02_suzuka_mid_understeer",
+          "latency_ms": 6763.621802998387,
+          "specialist_total": 6,
+          "specialist_valid": 5,
+          "chief_valid": false,
+          "coverage_rate": 1.0,
+          "driving_analysis_non_empty": true,
+          "refusal_text": false,
+          "lap_reference_violation": false
+        },
+        {
+          "case_id": "case_03_suzuka_exit_oversteer",
+          "latency_ms": 10731.494162999297,
+          "specialist_total": 5,
+          "specialist_valid": 5,
+          "chief_valid": false,
+          "coverage_rate": 1.0,
+          "driving_analysis_non_empty": true,
+          "refusal_text": false,
+          "lap_reference_violation": false
+        }
+      ]
+    },
+    {
+      "run_config": {
+        "run_id": "grid500_005",
+        "prompt_variant": "grid500_s1_k1_t0.4",
+        "systemPrompt": "Eres Jimmy (llama3.1-8B) ingeniero de pista rFactor2. Tono tecnico, breve y accionable. Si se solicita estructura, responde SOLO JSON estricto, sin texto extra ni markdown. No inventes vueltas, curvas ni distancias fuera de la telemetria dada. Especialistas: entrega items con parameter, new_value y reason, enfocados en cambios reales. Chief: integra propuestas validas de especialistas y conserva su razonamiento tecnico.",
+        "topK": 1,
+        "temperature": 0.4,
+        "metadata": {
+          "search": "grid500",
+          "index": 5
+        },
+        "prompt_overrides": {}
+      },
+      "score": 0.9100000000000001,
+      "metrics": {
+        "json_validity_rate": 0.8,
+        "json_validity_breakdown": {
+          "specialists": {
+            "valid": 15,
+            "total": 17,
+            "rate": 0.8823529411764706
+          },
+          "chief": {
+            "valid": 1,
+            "total": 3,
+            "rate": 0.3333333333333333
+          }
+        },
+        "driving_analysis_non_empty_rate": 1.0,
+        "recommendation_coverage_by_section": {
+          "by_case": {
+            "case_01_suzuka_baseline": 1.0,
+            "case_02_suzuka_mid_understeer": 1.0,
+            "case_03_suzuka_exit_oversteer": 1.0
+          },
+          "average": 1.0
+        },
+        "latency_ms": {
+          "average": 10610.45360699912,
+          "p95": 14572.908703299254
+        },
+        "qualitative_rubric": {
+          "status": "pending_manual_scoring",
+          "scale": "1-5",
+          "dimensions": [
+            "telemetry_specificity",
+            "causal_quality",
+            "actionability",
+            "consistency_with_fixed_params"
+          ],
+          "per_case": {
+            "case_01_suzuka_baseline": {
+              "telemetry_specificity": null,
+              "causal_quality": null,
+              "actionability": null,
+              "consistency_with_fixed_params": null,
+              "notes": ""
+            },
+            "case_02_suzuka_mid_understeer": {
+              "telemetry_specificity": null,
+              "causal_quality": null,
+              "actionability": null,
+              "consistency_with_fixed_params": null,
+              "notes": ""
+            },
+            "case_03_suzuka_exit_oversteer": {
+              "telemetry_specificity": null,
+              "causal_quality": null,
+              "actionability": null,
+              "consistency_with_fixed_params": null,
+              "notes": ""
+            }
+          }
+        },
+        "refusal_rate": 0.0,
+        "lap_reference_violation_rate": 0.0
+      },
+      "case_summaries": [
+        {
+          "case_id": "case_01_suzuka_baseline",
+          "latency_ms": 13870.85673099864,
+          "specialist_total": 6,
+          "specialist_valid": 5,
+          "chief_valid": false,
+          "coverage_rate": 1.0,
+          "driving_analysis_non_empty": true,
+          "refusal_text": false,
+          "lap_reference_violation": false
+        },
+        {
+          "case_id": "case_02_suzuka_mid_understeer",
+          "latency_ms": 14650.914477999322,
+          "specialist_total": 6,
+          "specialist_valid": 5,
+          "chief_valid": true,
+          "coverage_rate": 1.0,
+          "driving_analysis_non_empty": true,
+          "refusal_text": false,
+          "lap_reference_violation": false
+        },
+        {
+          "case_id": "case_03_suzuka_exit_oversteer",
+          "latency_ms": 3309.5896119993995,
+          "specialist_total": 5,
+          "specialist_valid": 5,
+          "chief_valid": false,
+          "coverage_rate": 1.0,
+          "driving_analysis_non_empty": true,
+          "refusal_text": false,
+          "lap_reference_violation": false
+        }
+      ]
+    },
+    {
+      "run_config": {
+        "run_id": "grid500_007",
+        "prompt_variant": "grid500_s3_k2_t0.1",
+        "systemPrompt": "Eres Jimmy (llama3.1-8B) ingeniero de pista rFactor2. Tono tecnico, breve y accionable. Si se solicita estructura, responde SOLO JSON estricto, sin texto extra ni markdown. No inventes vueltas, curvas ni distancias fuera de la telemetria dada. Especialistas: entrega items con parameter, new_value y reason, enfocados en cambios reales. Chief: integra propuestas validas de especialistas y conserva su razonamiento tecnico.",
+        "topK": 2,
+        "temperature": 0.1,
+        "metadata": {
+          "search": "grid500",
+          "index": 7
+        },
+        "prompt_overrides": {}
+      },
+      "score": 0.9100000000000001,
+      "metrics": {
+        "json_validity_rate": 0.8,
+        "json_validity_breakdown": {
+          "specialists": {
+            "valid": 15,
+            "total": 17,
+            "rate": 0.8823529411764706
+          },
+          "chief": {
+            "valid": 1,
+            "total": 3,
+            "rate": 0.3333333333333333
+          }
+        },
+        "driving_analysis_non_empty_rate": 1.0,
+        "recommendation_coverage_by_section": {
+          "by_case": {
+            "case_01_suzuka_baseline": 1.0,
+            "case_02_suzuka_mid_understeer": 1.0,
+            "case_03_suzuka_exit_oversteer": 1.0
+          },
+          "average": 1.0
+        },
+        "latency_ms": {
+          "average": 11274.65719433288,
+          "p95": 13996.838316299909
+        },
+        "qualitative_rubric": {
+          "status": "pending_manual_scoring",
+          "scale": "1-5",
+          "dimensions": [
+            "telemetry_specificity",
+            "causal_quality",
+            "actionability",
+            "consistency_with_fixed_params"
+          ],
+          "per_case": {
+            "case_01_suzuka_baseline": {
+              "telemetry_specificity": null,
+              "causal_quality": null,
+              "actionability": null,
+              "consistency_with_fixed_params": null,
+              "notes": ""
+            },
+            "case_02_suzuka_mid_understeer": {
+              "telemetry_specificity": null,
+              "causal_quality": null,
+              "actionability": null,
+              "consistency_with_fixed_params": null,
+              "notes": ""
+            },
+            "case_03_suzuka_exit_oversteer": {
+              "telemetry_specificity": null,
+              "causal_quality": null,
+              "actionability": null,
+              "consistency_with_fixed_params": null,
+              "notes": ""
+            }
+          }
+        },
+        "refusal_rate": 0.0,
+        "lap_reference_violation_rate": 0.0
+      },
+      "case_summaries": [
+        {
+          "case_id": "case_01_suzuka_baseline",
+          "latency_ms": 14262.980591000087,
+          "specialist_total": 6,
+          "specialist_valid": 6,
+          "chief_valid": false,
+          "coverage_rate": 1.0,
+          "driving_analysis_non_empty": true,
+          "refusal_text": false,
+          "lap_reference_violation": false
+        },
+        {
+          "case_id": "case_02_suzuka_mid_understeer",
+          "latency_ms": 7959.433148000244,
+          "specialist_total": 6,
+          "specialist_valid": 5,
+          "chief_valid": false,
+          "coverage_rate": 1.0,
+          "driving_analysis_non_empty": true,
+          "refusal_text": false,
+          "lap_reference_violation": false
+        },
+        {
+          "case_id": "case_03_suzuka_exit_oversteer",
+          "latency_ms": 11601.557843998307,
+          "specialist_total": 5,
+          "specialist_valid": 4,
+          "chief_valid": true,
+          "coverage_rate": 1.0,
+          "driving_analysis_non_empty": true,
+          "refusal_text": false,
+          "lap_reference_violation": false
+        }
+      ]
+    },
+    {
+      "run_config": {
+        "run_id": "grid500_011",
+        "prompt_variant": "grid500_s2_k4_t0.0",
+        "systemPrompt": "Eres Jimmy (llama3.1-8B) ingeniero de pista rFactor2. Tono tecnico, breve y accionable. Si se solicita estructura, responde SOLO JSON estricto, sin texto extra ni markdown. No inventes vueltas, curvas ni distancias fuera de la telemetria dada. Especialistas: entrega items con parameter, new_value y reason, enfocados en cambios reales. Chief: integra propuestas validas de especialistas y conserva su razonamiento tecnico.",
+        "topK": 4,
+        "temperature": 0.0,
+        "metadata": {
+          "search": "grid500",
+          "index": 11
+        },
+        "prompt_overrides": {}
+      },
+      "score": 0.9075000000000001,
+      "metrics": {
+        "json_validity_rate": 0.85,
+        "json_validity_breakdown": {
+          "specialists": {
+            "valid": 16,
+            "total": 17,
+            "rate": 0.9411764705882353
+          },
+          "chief": {
+            "valid": 1,
+            "total": 3,
+            "rate": 0.3333333333333333
+          }
+        },
+        "driving_analysis_non_empty_rate": 1.0,
+        "recommendation_coverage_by_section": {
+          "by_case": {
+            "case_01_suzuka_baseline": 1.0,
+            "case_02_suzuka_mid_understeer": 1.0,
+            "case_03_suzuka_exit_oversteer": 0.75
+          },
+          "average": 0.9166666666666666
+        },
+        "latency_ms": {
+          "average": 7016.015133665253,
+          "p95": 9944.219367699043
+        },
+        "qualitative_rubric": {
+          "status": "pending_manual_scoring",
+          "scale": "1-5",
+          "dimensions": [
+            "telemetry_specificity",
+            "causal_quality",
+            "actionability",
+            "consistency_with_fixed_params"
+          ],
+          "per_case": {
+            "case_01_suzuka_baseline": {
+              "telemetry_specificity": null,
+              "causal_quality": null,
+              "actionability": null,
+              "consistency_with_fixed_params": null,
+              "notes": ""
+            },
+            "case_02_suzuka_mid_understeer": {
+              "telemetry_specificity": null,
+              "causal_quality": null,
+              "actionability": null,
+              "consistency_with_fixed_params": null,
+              "notes": ""
+            },
+            "case_03_suzuka_exit_oversteer": {
+              "telemetry_specificity": null,
+              "causal_quality": null,
+              "actionability": null,
+              "consistency_with_fixed_params": null,
+              "notes": ""
+            }
+          }
+        },
+        "refusal_rate": 0.0,
+        "lap_reference_violation_rate": 0.0
+      },
+      "case_summaries": [
+        {
+          "case_id": "case_01_suzuka_baseline",
+          "latency_ms": 10361.716138999327,
+          "specialist_total": 6,
+          "specialist_valid": 6,
+          "chief_valid": false,
+          "coverage_rate": 1.0,
+          "driving_analysis_non_empty": true,
+          "refusal_text": false,
+          "lap_reference_violation": false
+        },
+        {
+          "case_id": "case_02_suzuka_mid_understeer",
+          "latency_ms": 6186.748425996484,
+          "specialist_total": 6,
+          "specialist_valid": 6,
+          "chief_valid": false,
+          "coverage_rate": 1.0,
+          "driving_analysis_non_empty": true,
+          "refusal_text": false,
+          "lap_reference_violation": false
+        },
+        {
+          "case_id": "case_03_suzuka_exit_oversteer",
+          "latency_ms": 4499.58083599995,
+          "specialist_total": 5,
+          "specialist_valid": 4,
+          "chief_valid": true,
+          "coverage_rate": 0.75,
+          "driving_analysis_non_empty": true,
+          "refusal_text": false,
+          "lap_reference_violation": false
+        }
+      ]
+    },
+    {
+      "run_config": {
+        "run_id": "grid500_008",
+        "prompt_variant": "grid500_s4_k2_t0.2",
+        "systemPrompt": "Eres Jimmy (llama3.1-8B) ingeniero de pista rFactor2. Tono tecnico, breve y accionable. Si se solicita estructura, responde SOLO JSON estricto, sin texto extra ni markdown. No inventes vueltas, curvas ni distancias fuera de la telemetria dada. Especialistas: entrega items con parameter, new_value y reason, enfocados en cambios reales. Chief: integra propuestas validas de especialistas y conserva su razonamiento tecnico.",
+        "topK": 2,
+        "temperature": 0.2,
+        "metadata": {
+          "search": "grid500",
+          "index": 8
+        },
+        "prompt_overrides": {}
+      },
+      "score": 0.9050000000000001,
+      "metrics": {
+        "json_validity_rate": 0.9,
+        "json_validity_breakdown": {
+          "specialists": {
+            "valid": 16,
+            "total": 17,
+            "rate": 0.9411764705882353
+          },
+          "chief": {
+            "valid": 2,
+            "total": 3,
+            "rate": 0.6666666666666666
+          }
+        },
+        "driving_analysis_non_empty_rate": 1.0,
+        "recommendation_coverage_by_section": {
+          "by_case": {
+            "case_01_suzuka_baseline": 1.0,
+            "case_02_suzuka_mid_understeer": 1.0,
+            "case_03_suzuka_exit_oversteer": 0.5
+          },
+          "average": 0.8333333333333334
+        },
+        "latency_ms": {
+          "average": 10733.822151665663,
+          "p95": 13754.391620897877
+        },
+        "qualitative_rubric": {
+          "status": "pending_manual_scoring",
+          "scale": "1-5",
+          "dimensions": [
+            "telemetry_specificity",
+            "causal_quality",
+            "actionability",
+            "consistency_with_fixed_params"
+          ],
+          "per_case": {
+            "case_01_suzuka_baseline": {
+              "telemetry_specificity": null,
+              "causal_quality": null,
+              "actionability": null,
+              "consistency_with_fixed_params": null,
+              "notes": ""
+            },
+            "case_02_suzuka_mid_understeer": {
+              "telemetry_specificity": null,
+              "causal_quality": null,
+              "actionability": null,
+              "consistency_with_fixed_params": null,
+              "notes": ""
+            },
+            "case_03_suzuka_exit_oversteer": {
+              "telemetry_specificity": null,
+              "causal_quality": null,
+              "actionability": null,
+              "consistency_with_fixed_params": null,
+              "notes": ""
+            }
+          }
+        },
+        "refusal_rate": 0.0,
+        "lap_reference_violation_rate": 0.0
+      },
+      "case_summaries": [
+        {
+          "case_id": "case_01_suzuka_baseline",
+          "latency_ms": 13773.883006997494,
+          "specialist_total": 6,
+          "specialist_valid": 5,
+          "chief_valid": true,
+          "coverage_rate": 1.0,
+          "driving_analysis_non_empty": true,
+          "refusal_text": false,
+          "lap_reference_violation": false
+        },
+        {
+          "case_id": "case_02_suzuka_mid_understeer",
+          "latency_ms": 13578.969146001327,
+          "specialist_total": 6,
+          "specialist_valid": 6,
+          "chief_valid": false,
+          "coverage_rate": 1.0,
+          "driving_analysis_non_empty": true,
+          "refusal_text": false,
+          "lap_reference_violation": false
+        },
+        {
+          "case_id": "case_03_suzuka_exit_oversteer",
+          "latency_ms": 4848.614301998168,
+          "specialist_total": 5,
+          "specialist_valid": 5,
+          "chief_valid": true,
+          "coverage_rate": 0.5,
+          "driving_analysis_non_empty": true,
+          "refusal_text": false,
+          "lap_reference_violation": false
+        }
+      ]
+    },
+    {
+      "run_config": {
+        "run_id": "grid500_012",
+        "prompt_variant": "grid500_s3_k4_t0.1",
+        "systemPrompt": "Eres Jimmy (llama3.1-8B) ingeniero de pista rFactor2. Tono tecnico, breve y accionable. Si se solicita estructura, responde SOLO JSON estricto, sin texto extra ni markdown. No inventes vueltas, curvas ni distancias fuera de la telemetria dada. Especialistas: entrega items con parameter, new_value y reason, enfocados en cambios reales. Chief: integra propuestas validas de especialistas y conserva su razonamiento tecnico.",
+        "topK": 4,
+        "temperature": 0.1,
+        "metadata": {
+          "search": "grid500",
+          "index": 12
+        },
+        "prompt_overrides": {}
+      },
+      "score": 0.8966666666666668,
+      "metrics": {
+        "json_validity_rate": 0.9,
+        "json_validity_breakdown": {
+          "specialists": {
+            "valid": 16,
+            "total": 17,
+            "rate": 0.9411764705882353
+          },
+          "chief": {
+            "valid": 2,
+            "total": 3,
+            "rate": 0.6666666666666666
+          }
+        },
+        "driving_analysis_non_empty_rate": 1.0,
+        "recommendation_coverage_by_section": {
+          "by_case": {
+            "case_01_suzuka_baseline": 0.6666666666666666,
+            "case_02_suzuka_mid_understeer": 1.0,
+            "case_03_suzuka_exit_oversteer": 0.75
+          },
+          "average": 0.8055555555555556
+        },
+        "latency_ms": {
+          "average": 10852.664060667545,
+          "p95": 21782.45308480182
+        },
+        "qualitative_rubric": {
+          "status": "pending_manual_scoring",
+          "scale": "1-5",
+          "dimensions": [
+            "telemetry_specificity",
+            "causal_quality",
+            "actionability",
+            "consistency_with_fixed_params"
+          ],
+          "per_case": {
+            "case_01_suzuka_baseline": {
+              "telemetry_specificity": null,
+              "causal_quality": null,
+              "actionability": null,
+              "consistency_with_fixed_params": null,
+              "notes": ""
+            },
+            "case_02_suzuka_mid_understeer": {
+              "telemetry_specificity": null,
+              "causal_quality": null,
+              "actionability": null,
+              "consistency_with_fixed_params": null,
+              "notes": ""
+            },
+            "case_03_suzuka_exit_oversteer": {
+              "telemetry_specificity": null,
+              "causal_quality": null,
+              "actionability": null,
+              "consistency_with_fixed_params": null,
+              "notes": ""
+            }
+          }
+        },
+        "refusal_rate": 0.0,
+        "lap_reference_violation_rate": 0.0
+      },
+      "case_summaries": [
+        {
+          "case_id": "case_01_suzuka_baseline",
+          "latency_ms": 23562.13253000169,
+          "specialist_total": 6,
+          "specialist_valid": 6,
+          "chief_valid": true,
+          "coverage_rate": 0.6666666666666666,
+          "driving_analysis_non_empty": true,
+          "refusal_text": false,
+          "lap_reference_violation": false
+        },
+        {
+          "case_id": "case_02_suzuka_mid_understeer",
+          "latency_ms": 5765.338078002969,
+          "specialist_total": 6,
+          "specialist_valid": 6,
+          "chief_valid": true,
+          "coverage_rate": 1.0,
+          "driving_analysis_non_empty": true,
+          "refusal_text": false,
+          "lap_reference_violation": false
+        },
+        {
+          "case_id": "case_03_suzuka_exit_oversteer",
+          "latency_ms": 3230.521573997976,
+          "specialist_total": 5,
+          "specialist_valid": 4,
+          "chief_valid": false,
+          "coverage_rate": 0.75,
+          "driving_analysis_non_empty": true,
+          "refusal_text": false,
+          "lap_reference_violation": false
+        }
+      ]
+    },
+    {
+      "run_config": {
+        "run_id": "grid500_016",
+        "prompt_variant": "grid500_s2_k8_t0.0",
+        "systemPrompt": "Eres Jimmy (llama3.1-8B) ingeniero de pista rFactor2. Tono tecnico, breve y accionable. Si se solicita estructura, responde SOLO JSON estricto, sin texto extra ni markdown. No inventes vueltas, curvas ni distancias fuera de la telemetria dada. Especialistas: entrega items con parameter, new_value y reason, enfocados en cambios reales. Chief: integra propuestas validas de especialistas y conserva su razonamiento tecnico.",
+        "topK": 8,
+        "temperature": 0.0,
+        "metadata": {
+          "search": "grid500",
+          "index": 16
+        },
+        "prompt_overrides": {}
+      },
+      "score": 0.8850000000000001,
+      "metrics": {
+        "json_validity_rate": 0.8,
+        "json_validity_breakdown": {
+          "specialists": {
+            "valid": 15,
+            "total": 17,
+            "rate": 0.8823529411764706
+          },
+          "chief": {
+            "valid": 1,
+            "total": 3,
+            "rate": 0.3333333333333333
+          }
+        },
+        "driving_analysis_non_empty_rate": 1.0,
+        "recommendation_coverage_by_section": {
+          "by_case": {
+            "case_01_suzuka_baseline": 1.0,
+            "case_02_suzuka_mid_understeer": 1.0,
+            "case_03_suzuka_exit_oversteer": 0.75
+          },
+          "average": 0.9166666666666666
+        },
+        "latency_ms": {
+          "average": 5546.76276500201,
+          "p95": 6160.855892003019
+        },
+        "qualitative_rubric": {
+          "status": "pending_manual_scoring",
+          "scale": "1-5",
+          "dimensions": [
+            "telemetry_specificity",
+            "causal_quality",
+            "actionability",
+            "consistency_with_fixed_params"
+          ],
+          "per_case": {
+            "case_01_suzuka_baseline": {
+              "telemetry_specificity": null,
+              "causal_quality": null,
+              "actionability": null,
+              "consistency_with_fixed_params": null,
+              "notes": ""
+            },
+            "case_02_suzuka_mid_understeer": {
+              "telemetry_specificity": null,
+              "causal_quality": null,
+              "actionability": null,
+              "consistency_with_fixed_params": null,
+              "notes": ""
+            },
+            "case_03_suzuka_exit_oversteer": {
+              "telemetry_specificity": null,
+              "causal_quality": null,
+              "actionability": null,
+              "consistency_with_fixed_params": null,
+              "notes": ""
+            }
+          }
+        },
+        "refusal_rate": 0.0,
+        "lap_reference_violation_rate": 0.0
+      },
+      "case_summaries": [
+        {
+          "case_id": "case_01_suzuka_baseline",
+          "latency_ms": 6241.78687800304,
+          "specialist_total": 6,
+          "specialist_valid": 6,
+          "chief_valid": false,
+          "coverage_rate": 1.0,
+          "driving_analysis_non_empty": true,
+          "refusal_text": false,
+          "lap_reference_violation": false
+        },
+        {
+          "case_id": "case_02_suzuka_mid_understeer",
+          "latency_ms": 4966.024399000162,
+          "specialist_total": 6,
+          "specialist_valid": 5,
+          "chief_valid": false,
+          "coverage_rate": 1.0,
+          "driving_analysis_non_empty": true,
+          "refusal_text": false,
+          "lap_reference_violation": false
+        },
+        {
+          "case_id": "case_03_suzuka_exit_oversteer",
+          "latency_ms": 5432.477018002828,
+          "specialist_total": 5,
+          "specialist_valid": 4,
+          "chief_valid": true,
+          "coverage_rate": 0.75,
+          "driving_analysis_non_empty": true,
+          "refusal_text": false,
+          "lap_reference_violation": false
+        }
+      ]
+    },
+    {
+      "run_config": {
+        "run_id": "grid500_017",
+        "prompt_variant": "grid500_s3_k8_t0.1",
+        "systemPrompt": "Eres Jimmy (llama3.1-8B) ingeniero de pista rFactor2. Tono tecnico, breve y accionable. Si se solicita estructura, responde SOLO JSON estricto, sin texto extra ni markdown. No inventes vueltas, curvas ni distancias fuera de la telemetria dada. Especialistas: entrega items con parameter, new_value y reason, enfocados en cambios reales. Chief: integra propuestas validas de especialistas y conserva su razonamiento tecnico.",
+        "topK": 8,
+        "temperature": 0.1,
+        "metadata": {
+          "search": "grid500",
+          "index": 17
+        },
+        "prompt_overrides": {}
+      },
+      "score": 0.8850000000000001,
+      "metrics": {
+        "json_validity_rate": 0.8,
+        "json_validity_breakdown": {
+          "specialists": {
+            "valid": 14,
+            "total": 17,
+            "rate": 0.8235294117647058
+          },
+          "chief": {
+            "valid": 2,
+            "total": 3,
+            "rate": 0.6666666666666666
+          }
+        },
+        "driving_analysis_non_empty_rate": 1.0,
+        "recommendation_coverage_by_section": {
+          "by_case": {
+            "case_01_suzuka_baseline": 1.0,
+            "case_02_suzuka_mid_understeer": 0.75,
+            "case_03_suzuka_exit_oversteer": 1.0
+          },
+          "average": 0.9166666666666666
+        },
+        "latency_ms": {
+          "average": 11276.75505600079,
+          "p95": 19849.321539801895
+        },
+        "qualitative_rubric": {
+          "status": "pending_manual_scoring",
+          "scale": "1-5",
+          "dimensions": [
+            "telemetry_specificity",
+            "causal_quality",
+            "actionability",
+            "consistency_with_fixed_params"
+          ],
+          "per_case": {
+            "case_01_suzuka_baseline": {
+              "telemetry_specificity": null,
+              "causal_quality": null,
+              "actionability": null,
+              "consistency_with_fixed_params": null,
+              "notes": ""
+            },
+            "case_02_suzuka_mid_understeer": {
+              "telemetry_specificity": null,
+              "causal_quality": null,
+              "actionability": null,
+              "consistency_with_fixed_params": null,
+              "notes": ""
+            },
+            "case_03_suzuka_exit_oversteer": {
+              "telemetry_specificity": null,
+              "causal_quality": null,
+              "actionability": null,
+              "consistency_with_fixed_params": null,
+              "notes": ""
+            }
+          }
+        },
+        "refusal_rate": 0.0,
+        "lap_reference_violation_rate": 0.0
+      },
+      "case_summaries": [
+        {
+          "case_id": "case_01_suzuka_baseline",
+          "latency_ms": 4732.952226000634,
+          "specialist_total": 6,
+          "specialist_valid": 6,
+          "chief_valid": false,
+          "coverage_rate": 1.0,
+          "driving_analysis_non_empty": true,
+          "refusal_text": false,
+          "lap_reference_violation": false
+        },
+        {
+          "case_id": "case_02_suzuka_mid_understeer",
+          "latency_ms": 21174.48780700215,
+          "specialist_total": 6,
+          "specialist_valid": 4,
+          "chief_valid": true,
+          "coverage_rate": 0.75,
+          "driving_analysis_non_empty": true,
+          "refusal_text": false,
+          "lap_reference_violation": false
+        },
+        {
+          "case_id": "case_03_suzuka_exit_oversteer",
+          "latency_ms": 7922.825134999584,
+          "specialist_total": 5,
+          "specialist_valid": 4,
+          "chief_valid": true,
+          "coverage_rate": 1.0,
+          "driving_analysis_non_empty": true,
+          "refusal_text": false,
+          "lap_reference_violation": false
+        }
+      ]
+    },
+    {
+      "run_config": {
+        "run_id": "grid500_018",
+        "prompt_variant": "grid500_s4_k8_t0.2",
+        "systemPrompt": "Eres Jimmy (llama3.1-8B) ingeniero de pista rFactor2. Tono tecnico, breve y accionable. Si se solicita estructura, responde SOLO JSON estricto, sin texto extra ni markdown. No inventes vueltas, curvas ni distancias fuera de la telemetria dada. Especialistas: entrega items con parameter, new_value y reason, enfocados en cambios reales. Chief: integra propuestas validas de especialistas y conserva su razonamiento tecnico.",
+        "topK": 8,
+        "temperature": 0.2,
+        "metadata": {
+          "search": "grid500",
+          "index": 18
+        },
+        "prompt_overrides": {}
+      },
+      "score": 0.8766666666666668,
+      "metrics": {
+        "json_validity_rate": 0.8,
+        "json_validity_breakdown": {
+          "specialists": {
+            "valid": 15,
+            "total": 17,
+            "rate": 0.8823529411764706
+          },
+          "chief": {
+            "valid": 1,
+            "total": 3,
+            "rate": 0.3333333333333333
+          }
+        },
+        "driving_analysis_non_empty_rate": 1.0,
+        "recommendation_coverage_by_section": {
+          "by_case": {
+            "case_01_suzuka_baseline": 0.6666666666666666,
+            "case_02_suzuka_mid_understeer": 1.0,
+            "case_03_suzuka_exit_oversteer": 1.0
+          },
+          "average": 0.8888888888888888
+        },
+        "latency_ms": {
+          "average": 7670.02497966799,
+          "p95": 9118.936166201092
+        },
+        "qualitative_rubric": {
+          "status": "pending_manual_scoring",
+          "scale": "1-5",
+          "dimensions": [
+            "telemetry_specificity",
+            "causal_quality",
+            "actionability",
+            "consistency_with_fixed_params"
+          ],
+          "per_case": {
+            "case_01_suzuka_baseline": {
+              "telemetry_specificity": null,
+              "causal_quality": null,
+              "actionability": null,
+              "consistency_with_fixed_params": null,
+              "notes": ""
+            },
+            "case_02_suzuka_mid_understeer": {
+              "telemetry_specificity": null,
+              "causal_quality": null,
+              "actionability": null,
+              "consistency_with_fixed_params": null,
+              "notes": ""
+            },
+            "case_03_suzuka_exit_oversteer": {
+              "telemetry_specificity": null,
+              "causal_quality": null,
+              "actionability": null,
+              "consistency_with_fixed_params": null,
+              "notes": ""
+            }
+          }
+        },
+        "refusal_rate": 0.0,
+        "lap_reference_violation_rate": 0.0
+      },
+      "case_summaries": [
+        {
+          "case_id": "case_01_suzuka_baseline",
+          "latency_ms": 8167.921270000079,
+          "specialist_total": 6,
+          "specialist_valid": 5,
+          "chief_valid": false,
+          "coverage_rate": 0.6666666666666666,
+          "driving_analysis_non_empty": true,
+          "refusal_text": false,
+          "lap_reference_violation": false
+        },
+        {
+          "case_id": "case_02_suzuka_mid_understeer",
+          "latency_ms": 9224.604488001205,
+          "specialist_total": 6,
+          "specialist_valid": 5,
+          "chief_valid": false,
+          "coverage_rate": 1.0,
+          "driving_analysis_non_empty": true,
+          "refusal_text": false,
+          "lap_reference_violation": false
+        },
+        {
+          "case_id": "case_03_suzuka_exit_oversteer",
+          "latency_ms": 5617.549181002687,
+          "specialist_total": 5,
+          "specialist_valid": 5,
+          "chief_valid": true,
+          "coverage_rate": 1.0,
+          "driving_analysis_non_empty": true,
+          "refusal_text": false,
+          "lap_reference_violation": false
+        }
+      ]
+    },
+    {
+      "run_config": {
+        "run_id": "grid500_009",
+        "prompt_variant": "grid500_s5_k2_t0.3",
+        "systemPrompt": "Eres Jimmy (llama3.1-8B) ingeniero de pista rFactor2. Tono tecnico, breve y accionable. Si se solicita estructura, responde SOLO JSON estricto, sin texto extra ni markdown. No inventes vueltas, curvas ni distancias fuera de la telemetria dada. Especialistas: entrega items con parameter, new_value y reason, enfocados en cambios reales. Chief: integra propuestas validas de especialistas y conserva su razonamiento tecnico.",
+        "topK": 2,
+        "temperature": 0.3,
+        "metadata": {
+          "search": "grid500",
+          "index": 9
+        },
+        "prompt_overrides": {}
+      },
+      "score": 0.8766666666666668,
+      "metrics": {
+        "json_validity_rate": 0.8,
+        "json_validity_breakdown": {
+          "specialists": {
+            "valid": 15,
+            "total": 17,
+            "rate": 0.8823529411764706
+          },
+          "chief": {
+            "valid": 1,
+            "total": 3,
+            "rate": 0.3333333333333333
+          }
+        },
+        "driving_analysis_non_empty_rate": 1.0,
+        "recommendation_coverage_by_section": {
+          "by_case": {
+            "case_01_suzuka_baseline": 0.6666666666666666,
+            "case_02_suzuka_mid_understeer": 1.0,
+            "case_03_suzuka_exit_oversteer": 1.0
+          },
+          "average": 0.8888888888888888
+        },
+        "latency_ms": {
+          "average": 12674.884434334672,
+          "p95": 19014.183830301772
+        },
+        "qualitative_rubric": {
+          "status": "pending_manual_scoring",
+          "scale": "1-5",
+          "dimensions": [
+            "telemetry_specificity",
+            "causal_quality",
+            "actionability",
+            "consistency_with_fixed_params"
+          ],
+          "per_case": {
+            "case_01_suzuka_baseline": {
+              "telemetry_specificity": null,
+              "causal_quality": null,
+              "actionability": null,
+              "consistency_with_fixed_params": null,
+              "notes": ""
+            },
+            "case_02_suzuka_mid_understeer": {
+              "telemetry_specificity": null,
+              "causal_quality": null,
+              "actionability": null,
+              "consistency_with_fixed_params": null,
+              "notes": ""
+            },
+            "case_03_suzuka_exit_oversteer": {
+              "telemetry_specificity": null,
+              "causal_quality": null,
+              "actionability": null,
+              "consistency_with_fixed_params": null,
+              "notes": ""
+            }
+          }
+        },
+        "refusal_rate": 0.0,
+        "lap_reference_violation_rate": 0.0
+      },
+      "case_summaries": [
+        {
+          "case_id": "case_01_suzuka_baseline",
+          "latency_ms": 13869.340034001652,
+          "specialist_total": 6,
+          "specialist_valid": 4,
+          "chief_valid": false,
+          "coverage_rate": 0.6666666666666666,
+          "driving_analysis_non_empty": true,
+          "refusal_text": false,
+          "lap_reference_violation": false
+        },
+        {
+          "case_id": "case_02_suzuka_mid_understeer",
+          "latency_ms": 19585.833141001785,
+          "specialist_total": 6,
+          "specialist_valid": 6,
+          "chief_valid": true,
+          "coverage_rate": 1.0,
+          "driving_analysis_non_empty": true,
+          "refusal_text": false,
+          "lap_reference_violation": false
+        },
+        {
+          "case_id": "case_03_suzuka_exit_oversteer",
+          "latency_ms": 4569.480128000578,
+          "specialist_total": 5,
+          "specialist_valid": 5,
+          "chief_valid": false,
+          "coverage_rate": 1.0,
+          "driving_analysis_non_empty": true,
+          "refusal_text": false,
+          "lap_reference_violation": false
+        }
+      ]
+    },
+    {
+      "run_config": {
+        "run_id": "grid500_010",
+        "prompt_variant": "grid500_s1_k2_t0.4",
+        "systemPrompt": "Eres Jimmy (llama3.1-8B) ingeniero de pista rFactor2. Tono tecnico, breve y accionable. Si se solicita estructura, responde SOLO JSON estricto, sin texto extra ni markdown. No inventes vueltas, curvas ni distancias fuera de la telemetria dada. Especialistas: entrega items con parameter, new_value y reason, enfocados en cambios reales. Chief: integra propuestas validas de especialistas y conserva su razonamiento tecnico.",
+        "topK": 2,
+        "temperature": 0.4,
+        "metadata": {
+          "search": "grid500",
+          "index": 10
+        },
+        "prompt_overrides": {}
+      },
+      "score": 0.8575,
+      "metrics": {
+        "json_validity_rate": 0.85,
+        "json_validity_breakdown": {
+          "specialists": {
+            "valid": 16,
+            "total": 17,
+            "rate": 0.9411764705882353
+          },
+          "chief": {
+            "valid": 1,
+            "total": 3,
+            "rate": 0.3333333333333333
+          }
+        },
+        "driving_analysis_non_empty_rate": 1.0,
+        "recommendation_coverage_by_section": {
+          "by_case": {
+            "case_01_suzuka_baseline": 1.0,
+            "case_02_suzuka_mid_understeer": 1.0,
+            "case_03_suzuka_exit_oversteer": 0.25
+          },
+          "average": 0.75
+        },
+        "latency_ms": {
+          "average": 11186.605393667074,
+          "p95": 13594.41323240062
+        },
+        "qualitative_rubric": {
+          "status": "pending_manual_scoring",
+          "scale": "1-5",
+          "dimensions": [
+            "telemetry_specificity",
+            "causal_quality",
+            "actionability",
+            "consistency_with_fixed_params"
+          ],
+          "per_case": {
+            "case_01_suzuka_baseline": {
+              "telemetry_specificity": null,
+              "causal_quality": null,
+              "actionability": null,
+              "consistency_with_fixed_params": null,
+              "notes": ""
+            },
+            "case_02_suzuka_mid_understeer": {
+              "telemetry_specificity": null,
+              "causal_quality": null,
+              "actionability": null,
+              "consistency_with_fixed_params": null,
+              "notes": ""
+            },
+            "case_03_suzuka_exit_oversteer": {
+              "telemetry_specificity": null,
+              "causal_quality": null,
+              "actionability": null,
+              "consistency_with_fixed_params": null,
+              "notes": ""
+            }
+          }
+        },
+        "refusal_rate": 0.0,
+        "lap_reference_violation_rate": 0.0
+      },
+      "case_summaries": [
+        {
+          "case_id": "case_01_suzuka_baseline",
+          "latency_ms": 13845.38726900064,
+          "specialist_total": 6,
+          "specialist_valid": 5,
+          "chief_valid": false,
+          "coverage_rate": 1.0,
+          "driving_analysis_non_empty": true,
+          "refusal_text": false,
+          "lap_reference_violation": false
+        },
+        {
+          "case_id": "case_02_suzuka_mid_understeer",
+          "latency_ms": 11335.646903000452,
+          "specialist_total": 6,
+          "specialist_valid": 6,
+          "chief_valid": false,
+          "coverage_rate": 1.0,
+          "driving_analysis_non_empty": true,
+          "refusal_text": false,
+          "lap_reference_violation": false
+        },
+        {
+          "case_id": "case_03_suzuka_exit_oversteer",
+          "latency_ms": 8378.782009000133,
+          "specialist_total": 5,
+          "specialist_valid": 5,
+          "chief_valid": true,
+          "coverage_rate": 0.25,
+          "driving_analysis_non_empty": true,
+          "refusal_text": false,
+          "lap_reference_violation": false
+        }
+      ]
+    },
+    {
+      "run_config": {
+        "run_id": "grid500_019",
+        "prompt_variant": "grid500_s5_k8_t0.3",
+        "systemPrompt": "Eres Jimmy (llama3.1-8B) ingeniero de pista rFactor2. Tono tecnico, breve y accionable. Si se solicita estructura, responde SOLO JSON estricto, sin texto extra ni markdown. No inventes vueltas, curvas ni distancias fuera de la telemetria dada. Especialistas: entrega items con parameter, new_value y reason, enfocados en cambios reales. Chief: integra propuestas validas de especialistas y conserva su razonamiento tecnico.",
+        "topK": 8,
+        "temperature": 0.3,
+        "metadata": {
+          "search": "grid500",
+          "index": 19
+        },
+        "prompt_overrides": {}
+      },
+      "score": 0.8400000000000001,
+      "metrics": {
+        "json_validity_rate": 0.7,
+        "json_validity_breakdown": {
+          "specialists": {
+            "valid": 13,
+            "total": 17,
+            "rate": 0.7647058823529411
+          },
+          "chief": {
+            "valid": 1,
+            "total": 3,
+            "rate": 0.3333333333333333
+          }
+        },
+        "driving_analysis_non_empty_rate": 1.0,
+        "recommendation_coverage_by_section": {
+          "by_case": {
+            "case_01_suzuka_baseline": 1.0,
+            "case_02_suzuka_mid_understeer": 1.0,
+            "case_03_suzuka_exit_oversteer": 0.75
+          },
+          "average": 0.9166666666666666
+        },
+        "latency_ms": {
+          "average": 9993.26388233385,
+          "p95": 13989.563498201824
+        },
+        "qualitative_rubric": {
+          "status": "pending_manual_scoring",
+          "scale": "1-5",
+          "dimensions": [
+            "telemetry_specificity",
+            "causal_quality",
+            "actionability",
+            "consistency_with_fixed_params"
+          ],
+          "per_case": {
+            "case_01_suzuka_baseline": {
+              "telemetry_specificity": null,
+              "causal_quality": null,
+              "actionability": null,
+              "consistency_with_fixed_params": null,
+              "notes": ""
+            },
+            "case_02_suzuka_mid_understeer": {
+              "telemetry_specificity": null,
+              "causal_quality": null,
+              "actionability": null,
+              "consistency_with_fixed_params": null,
+              "notes": ""
+            },
+            "case_03_suzuka_exit_oversteer": {
+              "telemetry_specificity": null,
+              "causal_quality": null,
+              "actionability": null,
+              "consistency_with_fixed_params": null,
+              "notes": ""
+            }
+          }
+        },
+        "refusal_rate": 0.0,
+        "lap_reference_violation_rate": 0.0
+      },
+      "case_summaries": [
+        {
+          "case_id": "case_01_suzuka_baseline",
+          "latency_ms": 11411.593176999304,
+          "specialist_total": 6,
+          "specialist_valid": 5,
+          "chief_valid": true,
+          "coverage_rate": 1.0,
+          "driving_analysis_non_empty": true,
+          "refusal_text": false,
+          "lap_reference_violation": false
+        },
+        {
+          "case_id": "case_02_suzuka_mid_understeer",
+          "latency_ms": 14276.004645002104,
+          "specialist_total": 6,
+          "specialist_valid": 5,
+          "chief_valid": false,
+          "coverage_rate": 1.0,
+          "driving_analysis_non_empty": true,
+          "refusal_text": false,
+          "lap_reference_violation": false
+        },
+        {
+          "case_id": "case_03_suzuka_exit_oversteer",
+          "latency_ms": 4292.19382500014,
+          "specialist_total": 5,
+          "specialist_valid": 3,
+          "chief_valid": false,
+          "coverage_rate": 0.75,
+          "driving_analysis_non_empty": true,
+          "refusal_text": false,
+          "lap_reference_violation": false
+        }
+      ]
+    }
+  ]
+}

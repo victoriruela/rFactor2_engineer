@@ -9,13 +9,16 @@ import json as _json
 import shutil
 import tempfile
 import uuid
+import re
 
 FIXED_PARAMS_FILE = "app/core/fixed_params.json"
 API_BASE_URL = os.environ.get("RF2_API_URL", "http://localhost:8000")
 BROWSER_API_BASE_URL = os.environ.get("RF2_BROWSER_API_BASE_URL", "/api")
 UPLOAD_CHUNK_SIZE = 64 * 1024 * 1024
+ANALYSIS_REQUEST_TIMEOUT = (10, 1800)
 TEMP_UPLOAD_ROOT = os.path.join(tempfile.gettempdir(), "rfactor2_engineer_uploads")
 CLIENT_SESSION_COOKIE = "rf2_session_id"
+SESSION_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{8,128}$")
 
 
 def _ensure_temp_upload_root():
@@ -82,42 +85,47 @@ def _safe_cookie_value(cookie_name):
                 return None
 
 
+def _is_valid_session_id(value):
+    return isinstance(value, str) and bool(SESSION_ID_PATTERN.fullmatch(value.strip()))
+
+
 def _ensure_client_session_id():
     existing = st.session_state.get("client_session_id")
-    if isinstance(existing, str) and existing.strip():
+    if _is_valid_session_id(existing):
         return existing
 
-        cookie_value = _safe_cookie_value(CLIENT_SESSION_COOKIE)
-        if cookie_value:
-                st.session_state["client_session_id"] = cookie_value
-                return cookie_value
+    cookie_value = _safe_cookie_value(CLIENT_SESSION_COOKIE)
+    if _is_valid_session_id(cookie_value):
+        st.session_state["client_session_id"] = cookie_value
+        return cookie_value
 
-        generated = uuid.uuid4().hex
-        st.session_state["client_session_id"] = generated
+    generated = uuid.uuid4().hex
+    st.session_state["client_session_id"] = generated
 
-        if _is_streamlit_mocked():
-                return generated
+    if _is_streamlit_mocked():
+        return generated
 
-        components.html(
-                f"""
-                <script>
-                    document.cookie = "{CLIENT_SESSION_COOKIE}={generated}; path=/; max-age=31536000; SameSite=Lax";
-                    window.parent.location.reload();
-                </script>
-                """,
-                height=0,
-        )
-        st.stop()
+    components.html(
+            f"""
+            <script>
+                document.cookie = "{CLIENT_SESSION_COOKIE}={generated}; path=/; max-age=31536000; SameSite=Lax";
+                window.parent.location.reload();
+            </script>
+            """,
+            height=0,
+    )
+    st.stop()
 
 
 def _api_headers():
-        session_id = st.session_state.get("client_session_id")
-        return {"X-Client-Session-Id": session_id} if session_id else {}
+    session_id = st.session_state.get("client_session_id")
+    return {"X-Client-Session-Id": session_id} if _is_valid_session_id(session_id) else {}
 
 
 def _render_chunked_uploader():
-        session_id = st.session_state.get("client_session_id", "")
-        html = f"""
+    raw_session_id = st.session_state.get("client_session_id", "")
+    session_id = raw_session_id.strip() if isinstance(raw_session_id, str) else ""
+    html = f"""
         <div style='font-family:sans-serif;'>
             <input id='rf2_files' type='file' multiple accept='.mat,.csv,.svm' />
             <button id='rf2_upload_btn' style='margin-top:6px;'>Subir en chunks (64 MB)</button>
@@ -126,6 +134,7 @@ def _render_chunked_uploader():
         <script>
             const apiBase = { _json.dumps(BROWSER_API_BASE_URL) };
             const sessionId = { _json.dumps(session_id) };
+            const sessionIdPattern = /^[A-Za-z0-9_-]{{8,128}}$/;
             const chunkSize = {UPLOAD_CHUNK_SIZE};
             const statusEl = document.getElementById('rf2_upload_status');
 
@@ -135,6 +144,9 @@ def _render_chunked_uploader():
             }}
 
             async function uploadOne(file) {{
+                if (!sessionIdPattern.test(sessionId)) {{
+                    throw new Error('session id invalido o ausente; recarga la pagina');
+                }}
                 log(`Inicializando ${{file.name}}...`);
                 const initResp = await fetch(`${{apiBase}}/uploads/init`, {{
                     method: 'POST',
@@ -193,7 +205,7 @@ def _render_chunked_uploader():
             }});
         </script>
         """
-        components.html(html, height=190, scrolling=False)
+    components.html(html, height=190, scrolling=False)
 
 
 def _fetch_backend_sessions():
@@ -245,7 +257,30 @@ def _post_analysis_for_session(session_id, data_form):
                 f"{API_BASE_URL}/analyze_session",
                 data={"session_id": session_id, **data_form},
                 headers=_api_headers(),
-                timeout=0,
+        timeout=ANALYSIS_REQUEST_TIMEOUT,
+        )
+
+
+def _post_analysis_with_local_files(data_form):
+    tele_path = st.session_state.get("telemetry_temp_path")
+    svm_path = st.session_state.get("svm_temp_path")
+    tele_name = st.session_state.get("tele_name") or os.path.basename(tele_path or "telemetry")
+    svm_name = st.session_state.get("svm_name") or os.path.basename(svm_path or "setup.svm")
+
+    if not tele_path or not svm_path or not os.path.exists(tele_path) or not os.path.exists(svm_path):
+        raise FileNotFoundError("Local temporary upload files are missing")
+
+    with open(tele_path, "rb") as telemetry_file, open(svm_path, "rb") as svm_file:
+        files = {
+            "telemetry_file": (tele_name, telemetry_file),
+            "svm_file": (svm_name, svm_file),
+        }
+        return requests.post(
+            f"{API_BASE_URL}/analyze",
+            data=data_form,
+            files=files,
+            headers=_api_headers(),
+            timeout=ANALYSIS_REQUEST_TIMEOUT,
         )
 
 def load_fixed_params():
@@ -1364,6 +1399,9 @@ if tele_path and svm_path:
                     analyze_button = st.button("🚀 Iniciar Análisis con IA")
 
                     if analyze_button:
+                        # Evita mostrar resultados antiguos si el nuevo análisis falla.
+                        st.session_state.pop('ai_analysis_data', None)
+                        st.session_state.pop('ai_model', None)
                         with st.spinner("Analizando con IA…"):
                             data_form = {}
                             data_form["provider"] = sel_provider
@@ -1374,10 +1412,15 @@ if tele_path and svm_path:
                             if 'fixed_params' in st.session_state and st.session_state['fixed_params']:
                                 data_form["fixed_params"] = _json.dumps(list(st.session_state['fixed_params']))
 
-                            response = _post_analysis_for_session(
-                                st.session_state.get("selected_session_id", st.session_state['selected_session_name']),
-                                data_form,
-                            )
+                            try:
+                                # Re-analiza siempre desde archivos locales para permitir cambiar proveedor/modelo
+                                # sin depender de sesiones ya consumidas en el backend.
+                                response = _post_analysis_with_local_files(data_form)
+                            except FileNotFoundError:
+                                response = _post_analysis_for_session(
+                                    st.session_state.get("selected_session_id", st.session_state['selected_session_name']),
+                                    data_form,
+                                )
                             if response.status_code == 200:
                                 data = response.json()
                                 # Guardar datos en session_state para re-análisis
@@ -1390,7 +1433,14 @@ if tele_path and svm_path:
                                 # Parsear setup_data del .svm para re-análisis
                                 st.session_state['ai_setup_data'] = parse_svm_content(svm_path)
                             else:
-                                st.error(f"Error en el análisis ({response.status_code}).")
+                                try:
+                                    error_detail = response.json().get("detail")
+                                except Exception:
+                                    error_detail = None
+                                if error_detail:
+                                    st.error(f"Error en el análisis ({response.status_code}): {error_detail}")
+                                else:
+                                    st.error(f"Error en el análisis ({response.status_code}).")
 
                     # Mostrar resultados (persistentes en session_state)
                     if 'ai_analysis_data' in st.session_state:
@@ -1404,11 +1454,6 @@ if tele_path and svm_path:
                         st.subheader("🏁 Análisis del Ingeniero de Conducción")
                         st.info(data['driving_analysis'])
 
-                        # ── Razonamiento del Ingeniero Jefe ──
-                        if data.get('chief_reasoning'):
-                            st.subheader("🧠 Razonamiento del Ingeniero Jefe")
-                            st.warning(data['chief_reasoning'])
-
                         # ── Setup Completo Recomendado ──
                         if data.get('full_setup') and data['full_setup'].get('sections'):
                             st.subheader("⚙️ Setup Completo Recomendado por los ingenieros")
@@ -1419,7 +1464,9 @@ if tele_path and svm_path:
                                 if not s_items:
                                     continue
                                 changed_items = [it for it in s_items if str(it.get('current', '')) != str(it.get('new', ''))]
-                                with st.expander(f"🔩 {s_name} ({len(changed_items)} cambios)", expanded=bool(changed_items)):
+                                if not changed_items:
+                                    continue
+                                with st.expander(f"🔩 {s_name} ({len(changed_items)} cambios)", expanded=True):
                                     if changed_items:
                                         rows = []
                                         for it in changed_items:
@@ -1434,8 +1481,50 @@ if tele_path and svm_path:
                                             })
                                         df_ai = pd.DataFrame(rows)
                                         st.table(df_ai.set_index("Parámetro"))
-                                    else:
-                                        st.caption("No se recomiendan cambios en esta sección.")
+
+                        # ── Razonamientos y Feedback de los Agentes ──
+                        setup_agent_reports = data.get('setup_agent_reports', [])
+                        agent_reports = setup_agent_reports or data.get('agent_reports', [])
+                        chief_reasoning = data.get('chief_reasoning', '')
+                        if agent_reports or chief_reasoning:
+                            st.divider()
+                            st.subheader("💬 Razonamientos de los Agentes IA")
+                            st.info(
+                                "ℹ️ Esta sección muestra el **razonamiento interno** de cada agente. "
+                                "No es la tabla de cambios del setup — es la explicación técnica "
+                                "detrás de las recomendaciones.",
+                                icon="🧠"
+                            )
+
+                            # Ingeniero Jefe
+                            if chief_reasoning:
+                                with st.expander("🎯 Ingeniero Jefe — Estrategia global", expanded=True):
+                                    st.markdown(f"> {chief_reasoning.replace(chr(10), chr(10) + '> ')}")
+
+                            # Agentes especialistas: only show sections with actual content
+                            meaningful_reports = [
+                                r for r in (agent_reports or [])
+                                if r.get('summary', '').strip() or r.get('items', [])
+                            ]
+                            if meaningful_reports:
+                                for report in meaningful_reports:
+                                    sec_friendly = report.get('friendly_name') or report.get('name', '')
+                                    sec_summary = report.get('summary', '').strip()
+                                    sec_items = report.get('items', [])
+                                    label = f"📝 {sec_friendly}"
+                                    with st.expander(label, expanded=False):
+                                        if sec_summary:
+                                            st.markdown(f"> {sec_summary.replace(chr(10), chr(10) + '> ')}")
+                                        if sec_items:
+                                            st.markdown("---")
+                                            for it in sec_items:
+                                                param = it.get('parameter', '')
+                                                new_val = it.get('new_value', '')
+                                                reason = it.get('reason', '')
+                                                st.markdown(
+                                                    f"**{param}** → `{new_val}`\n\n"
+                                                    f"> _{reason}_\n"
+                                                )
             else:
                 st.warning("No se encontraron vueltas completas.")
         else:
@@ -1444,15 +1533,25 @@ if tele_path and svm_path:
         st.info("La visualización detallada actualmente solo soporta archivos .mat.")
         if st.button("Analizar con IA"):
             with st.spinner("Analizando con IA…"):
-                response = _post_analysis_for_session(
-                    st.session_state.get("selected_session_id", st.session_state['selected_session_name']),
-                    {},
-                )
+                try:
+                    response = _post_analysis_with_local_files({})
+                except FileNotFoundError:
+                    response = _post_analysis_for_session(
+                        st.session_state.get("selected_session_id", st.session_state['selected_session_name']),
+                        {},
+                    )
                 if response.status_code == 200:
                     data = response.json()
                     st.success("Análisis completado")
                     st.write(data['driving_analysis'])
                 else:
-                    st.error(f"Error en el análisis ({response.status_code}).")
+                    try:
+                        error_detail = response.json().get("detail")
+                    except Exception:
+                        error_detail = None
+                    if error_detail:
+                        st.error(f"Error en el análisis ({response.status_code}): {error_detail}")
+                    else:
+                        st.error(f"Error en el análisis ({response.status_code}).")
 else:
     st.info("👋 Sube tus archivos o elige una sesión anterior en la barra lateral para comenzar.")

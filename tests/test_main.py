@@ -41,6 +41,7 @@ def _minimal_ai_result() -> dict:
         "setup_analysis": "Setup OK",
         "full_setup": {"sections": []},
         "agent_reports": [],
+        "setup_agent_reports": [],
         "chief_reasoning": "Razonamiento OK",
         "llm_provider": "ollama",
         "llm_model": "llama3.2:latest",
@@ -137,6 +138,18 @@ class TestCleanup:
 
 
 class TestChunkedUploads:
+    def test_upload_init_accepts_cors_preflight_from_local_frontend(self):
+        preflight = client.options(
+            "/uploads/init",
+            headers={
+                "Origin": "http://localhost:8501",
+                "Access-Control-Request-Method": "POST",
+            },
+        )
+
+        assert preflight.status_code == 200
+        assert preflight.headers["access-control-allow-origin"] == "http://localhost:8501"
+
     def test_chunk_upload_complete_and_list_sessions(self, tmp_path):
         with patch("app.main._client_root", return_value=str(tmp_path)):
             r1 = client.post("/uploads/init", headers=SESSION_HEADERS, json={"filename": "session.csv"})
@@ -219,7 +232,7 @@ class TestAnalyze:
         assert r.status_code == 200
         body = r.json()
         for key in ("circuit_data", "driving_analysis", "setup_analysis",
-                    "full_setup", "session_stats", "laps_data"):
+                "full_setup", "session_stats", "laps_data", "setup_agent_reports"):
             assert key in body, f"Missing response key: {key}"
 
     def test_analyze_csv_real_parse_gps_data(self, mocker):
@@ -348,6 +361,7 @@ class TestAnalyze:
             "setup_analysis": "degraded=true; fallback_reason=chief_none",
             "full_setup": {"sections": []},
             "agent_reports": [],
+            "setup_agent_reports": [],
             "chief_reasoning": "degraded=true; fallback_reason=chief_none",
         }
         mock_analyze = AsyncMock(return_value=fallback_ai_result)
@@ -389,5 +403,46 @@ class TestAnalyze:
         assert r.status_code == 200
         assert not tele_path.exists()
         assert not svm_path.exists()
+
+    def test_analyze_session_preserves_files_when_analysis_fails(self, tmp_path, mocker):
+        tele_path = tmp_path / "session.csv"
+        svm_path = tmp_path / "session.svm"
+        tele_path.write_bytes(self._csv_bytes)
+        svm_path.write_bytes(self._svm_bytes)
+
+        mocker.patch("app.main.ai_engineer.analyze", new=AsyncMock(side_effect=Exception("Jimmy exploded")))
+
+        with patch("app.main._client_root", return_value=str(tmp_path)):
+            r = client.post(
+                "/analyze_session",
+                headers=SESSION_HEADERS,
+                data={"session_id": "session", "provider": "jimmy", "model": "llama3.1-8B"},
+            )
+
+        assert r.status_code == 500
+        assert tele_path.exists()
+        assert svm_path.exists()
+
+    def test_telemetry_summary_is_capped_before_analyze(self, mocker):
+        """The telemetry CSV sent to ai_engineer.analyze() must be <= MAX_AI_TELEMETRY_CHARS."""
+        import app.main as main_module
+
+        captured = {}
+
+        async def capturing_analyze(*args, **kwargs):
+            captured["telemetry_summary"] = args[0] if args else kwargs.get("telemetry_summary", "")
+            return _minimal_ai_result()
+
+        mocker.patch("app.main.ai_engineer.analyze", new=capturing_analyze)
+
+        r = client.post(
+            "/analyze",
+            files={
+                "telemetry_file": ("session.csv", self._csv_bytes, "text/csv"),
+                "svm_file": ("car.svm", self._svm_bytes, "text/plain"),
+            },
+        )
+        assert r.status_code == 200
+        assert len(captured.get("telemetry_summary", "")) <= main_module.MAX_AI_TELEMETRY_CHARS + 2000
 
 

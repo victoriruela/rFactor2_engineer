@@ -1,4 +1,5 @@
 from fastapi import FastAPI, UploadFile, File, HTTPException, Form, Request, Header, Cookie, Depends
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Dict, Any, Optional
 import shutil
@@ -13,6 +14,21 @@ from app.core.telemetry_parser import parse_csv_file, parse_mat_file, parse_svm_
 
 app = FastAPI(title="rFactor2 Engineer API")
 
+ALLOWED_BROWSER_ORIGINS = [
+    "http://localhost:8501",
+    "http://127.0.0.1:8501",
+    "https://car-setup.com",
+    "https://telemetria.bot.nu",
+]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=ALLOWED_BROWSER_ORIGINS,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 # Modelo de datos para la respuesta
 class AnalysisResponse(BaseModel):
     circuit_data: Dict[str, Any] # x, y para el trazado, aspect_ratio
@@ -23,6 +39,7 @@ class AnalysisResponse(BaseModel):
     session_stats: Dict[str, Any] # Nuevas estadísticas de la sesión
     laps_data: List[Dict[str, Any]] # Datos por vuelta: número, tiempo, stats
     agent_reports: List[Dict[str, Any]] = [] # Informes individuales de agentes
+    setup_agent_reports: List[Dict[str, Any]] = [] # Informes consolidados alineados con setup final
     telemetry_summary_sent: str = "" # Resumen enviado a la IA
     chief_reasoning: str = "" # Razonamiento del ingeniero jefe
     llm_provider: str = "" # Provider real usado por el backend
@@ -35,6 +52,11 @@ ai_engineer = AIAngineer()
 DATA_DIR = "data"
 UPLOAD_CHUNK_SIZE = 64 * 1024 * 1024
 SESSION_ID_REGEX = re.compile(r"^[A-Za-z0-9_-]{8,128}$")
+
+# Max size (chars) for the telemetry CSV sent to AI agents.
+# Jimmy (llama3.1-8B) effective context is ~8-16K tokens; a full-session CSV can
+# reach 120KB+ and overwhelms the model, causing non-JSON responses.
+MAX_AI_TELEMETRY_CHARS = 15_000
 
 
 class UploadInitRequest(BaseModel):
@@ -588,6 +610,10 @@ async def analyze_telemetry(
         else:
             telemetry_csv_for_ai = "No hay datos de telemetría disponibles."
 
+        # Truncate to avoid exceeding the LLM context window (especially Jimmy llama3.1-8B).
+        if len(telemetry_csv_for_ai) > MAX_AI_TELEMETRY_CHARS:
+            telemetry_csv_for_ai = telemetry_csv_for_ai[:MAX_AI_TELEMETRY_CHARS] + "\n... [datos de telemetría truncados — se muestran los primeros registros]"
+
         summary = f"CIRCUITO: {circuit_name}\n"
         summary += f"ESTADÍSTICAS SESIÓN: {json.dumps(session_stats)}\n"
         summary += "DATOS POR VUELTA (resumen): " + "\n".join(lap_summaries) + "\n\n"
@@ -629,6 +655,9 @@ async def analyze_telemetry(
             driving_csv = drv_buf.getvalue()
         else:
             driving_csv = "No hay datos de telemetría de conducción disponibles."
+
+        if len(driving_csv) > MAX_AI_TELEMETRY_CHARS:
+            driving_csv = driving_csv[:MAX_AI_TELEMETRY_CHARS] + "\n... [datos de conducción truncados]"
 
         driving_summary = f"CIRCUITO: {circuit_name}\n"
         driving_summary += f"ESTADÍSTICAS SESIÓN: {json.dumps(session_stats)}\n"
@@ -682,6 +711,7 @@ async def analyze_telemetry(
             session_stats=session_stats,
             laps_data=convert_to_native(laps_data),
             agent_reports=convert_to_native(ai_result.get("agent_reports", [])),
+            setup_agent_reports=convert_to_native(ai_result.get("setup_agent_reports", [])),
             telemetry_summary_sent=summary,
             chief_reasoning=ai_result.get("chief_reasoning", ""),
             llm_provider=ai_result.get("llm_provider", provider or "ollama"),
@@ -726,19 +756,23 @@ async def analyze_stored_session(
     svm_handle = open(svm_path, "rb")
     telemetry_upload = UploadFile(filename=pair["telemetry"], file=telemetry_handle)
     svm_upload = UploadFile(filename=pair["svm"], file=svm_handle)
+    analysis_succeeded = False
 
     try:
-        return await analyze_telemetry(
+        result = await analyze_telemetry(
             telemetry_file=telemetry_upload,
             svm_file=svm_upload,
             model=model,
             provider=provider,
             fixed_params=fixed_params,
         )
+        analysis_succeeded = True
+        return result
     finally:
-        for path in (tele_path, svm_path):
-            if os.path.exists(path):
-                os.remove(path)
+        if analysis_succeeded:
+            for path in (tele_path, svm_path):
+                if os.path.exists(path):
+                    os.remove(path)
 
 @app.post("/cleanup")
 async def cleanup_data(client_session_id: str = Depends(_resolve_client_session_id)):

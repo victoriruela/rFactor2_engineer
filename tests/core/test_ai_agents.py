@@ -223,13 +223,10 @@ class TestFormatFullSetup:
         "SUSPENSION": {"SpringSetting": "100//N/mm"},
     }
 
-    def test_no_reco_returns_current_and_no_change_reason(self, ai):
+    def test_no_reco_returns_empty_sections(self, ai):
         result = ai._format_full_setup({}, self.SETUP)
-        sections = {s["section_key"]: s for s in result["sections"]}
-        item = sections["GENERAL"]["items"][0]
-        assert item["current"] == "L"
-        assert item["new"] == "L"
-        assert "Sin cambios" in item["reason"]
+        # With no recommendations, all items have current==new, so sections are skipped
+        assert result["sections"] == []
 
     def test_reco_applied_with_change_pct(self, ai):
         # Recommendations carry clean numeric values (no // comment syntax)
@@ -248,10 +245,12 @@ class TestFormatFullSetup:
 
     def test_skips_gear_settings(self, ai):
         setup_with_gear = {"GENERAL": {"GearXSetting": "1", "FuelSetting": "50//L"}}
-        result = ai._format_full_setup({}, setup_with_gear)
+        reco_map = {"GENERAL": {"FuelSetting": {"new_value": "45", "reason": "Reducir peso."}}}
+        result = ai._format_full_setup(reco_map, setup_with_gear)
         section = result["sections"][0]
         param_keys = [i["param_key"] for i in section["items"]]
         assert "GearXSetting" not in param_keys
+        assert "FuelSetting" in param_keys
 
 
 # ---------------------------------------------------------------------------
@@ -305,6 +304,7 @@ class TestAnalyze:
         assert "setup_analysis" in result
         assert "full_setup" in result
         assert "agent_reports" in result
+        assert "setup_agent_reports" in result
         assert "chief_reasoning" in result
 
     @pytest.mark.asyncio
@@ -442,12 +442,168 @@ class TestAnalyzeJimmyFailureShapes:
         )
 
         assert result["driving_analysis"] == "Conduccion OK"
-        assert result["chief_reasoning"] == ""
+        assert "Consolidacion del Ingeniero Jefe" in result["chief_reasoning"]
         assert len(result["agent_reports"]) == 2
+        assert "summary" in result["agent_reports"][0]
 
         sections = {s["section_key"]: s for s in result["full_setup"]["sections"]}
         suspension_item = next(i for i in sections["SUSPENSION"]["items"] if i["param_key"] == "SpringSetting")
         assert suspension_item["new"].startswith("110")
+
+    @pytest.mark.asyncio
+    async def test_chief_asymmetry_is_harmonized_and_setup_reports_match(self, ai, mocker):
+        mocker.patch.object(ai, "update_mappings", new=AsyncMock())
+        mocker.patch.object(ai, "_call_llm_text", new=AsyncMock(return_value="Conduccion OK"))
+
+        setup = {
+            "FRONTLEFT": {"CamberSetting": "-3.0"},
+            "FRONTRIGHT": {"CamberSetting": "-3.0"},
+        }
+        specialist_empty = {"items": [], "summary": "Sin cambios"}
+        chief_report = {
+            "full_setup": {
+                "sections": [
+                    {
+                        "name": "FRONTLEFT",
+                        "items": [
+                            {
+                                "parameter": "CamberSetting",
+                                "new_value": "-3.2",
+                                "reason": "Ajuste lado izquierdo.",
+                            }
+                        ],
+                    },
+                    {
+                        "name": "FRONTRIGHT",
+                        "items": [
+                            {
+                                "parameter": "CamberSetting",
+                                "new_value": "-3.6",
+                                "reason": "Ajuste lado derecho.",
+                            }
+                        ],
+                    },
+                ]
+            },
+            "chief_reasoning": "Consolidación por simetría.",
+        }
+
+        mocker.patch.object(
+            ai,
+            "_get_json_from_llm",
+            new=AsyncMock(side_effect=[specialist_empty, specialist_empty, chief_report]),
+        )
+
+        result = await ai.analyze(
+            telemetry_summary="telemetry",
+            setup_data=setup,
+            provider="ollama",
+        )
+
+        sections = {s["section_key"]: s for s in result["full_setup"]["sections"]}
+        fl = next(i for i in sections["FRONTLEFT"]["items"] if i["param_key"] == "CamberSetting")
+        fr = next(i for i in sections["FRONTRIGHT"]["items"] if i["param_key"] == "CamberSetting")
+        assert fl["new"].startswith("-3.2")
+        assert fr["new"].startswith("-3.2")
+
+        setup_reports = {r["name"]: r for r in result["setup_agent_reports"]}
+        fl_report = setup_reports["FRONTLEFT"]["items"][0]
+        fr_report = setup_reports["FRONTRIGHT"]["items"][0]
+        assert fl_report["new_value"] == "-3.2"
+        assert fr_report["new_value"] == "-3.2"
+
+    @pytest.mark.asyncio
+    async def test_internal_placeholder_reason_is_sanitized_to_specialist_reason(self, ai, mocker):
+        mocker.patch.object(ai, "update_mappings", new=AsyncMock())
+        mocker.patch.object(ai, "_call_llm_text", new=AsyncMock(return_value="Conduccion OK"))
+
+        specialist_report = {
+            "items": [
+                {
+                    "parameter": "SpringSetting",
+                    "new_value": "110",
+                    "reason": "El muelle actual se comprime demasiado en apoyo y pierde estabilidad de plataforma.",
+                }
+            ],
+            "summary": "Se ajusta muelle para mejorar apoyo.",
+        }
+        chief_report = {
+            "full_setup": {
+                "sections": [
+                    {
+                        "name": "SUSPENSION",
+                        "items": [
+                            {
+                                "parameter": "SpringSetting",
+                                "new_value": "110",
+                                "reason": "COPIA AQUI LA RAZON INTEGRA DEL ESPECIALISTA SI ACEPTAS SIN CAMBIOS...",
+                            }
+                        ],
+                    }
+                ]
+            },
+            "chief_reasoning": "OBLIGATORIO: Valoracion global...",
+        }
+
+        mocker.patch.object(
+            ai,
+            "_get_json_from_llm",
+            new=AsyncMock(side_effect=[specialist_report, specialist_report, chief_report]),
+        )
+
+        result = await ai.analyze(
+            telemetry_summary="telemetry",
+            setup_data=self.SETUP,
+            provider="jimmy",
+        )
+
+        sections = {s["section_key"]: s for s in result["full_setup"]["sections"]}
+        suspension_item = next(i for i in sections["SUSPENSION"]["items"] if i["param_key"] == "SpringSetting")
+        assert "COPIA AQUI" not in suspension_item["reason"]
+        assert "muelle actual" in suspension_item["reason"].lower()
+
+        reports = {r["name"]: r for r in result["setup_agent_reports"]}
+        report_reason = reports["SUSPENSION"]["items"][0]["reason"]
+        assert "COPIA AQUI" not in report_reason
+        assert "muelle actual" in report_reason.lower()
+        assert "OBLIGATORIO:" not in result["chief_reasoning"]
+
+    @pytest.mark.asyncio
+    async def test_partial_chief_output_preserves_specialist_changes(self, ai, mocker):
+        mocker.patch.object(ai, "update_mappings", new=AsyncMock())
+        mocker.patch.object(ai, "_call_llm_text", new=AsyncMock(return_value="Conduccion OK"))
+
+        specialist_report = {
+            "items": [
+                {
+                    "parameter": "SpringSetting",
+                    "new_value": "110",
+                    "reason": "Muelle demasiado blando en apoyo medio.",
+                }
+            ],
+            "summary": "Cambio en muelle.",
+        }
+        chief_report = {
+            "full_setup": {"sections": []},
+            "chief_reasoning": "Analisis global sin nuevos cambios.",
+        }
+
+        mocker.patch.object(
+            ai,
+            "_get_json_from_llm",
+            new=AsyncMock(side_effect=[specialist_report, specialist_report, chief_report]),
+        )
+
+        result = await ai.analyze(
+            telemetry_summary="telemetry",
+            setup_data=self.SETUP,
+            provider="jimmy",
+        )
+
+        sections = {s["section_key"]: s for s in result["full_setup"]["sections"]}
+        suspension_item = next(i for i in sections["SUSPENSION"]["items"] if i["param_key"] == "SpringSetting")
+        assert suspension_item["new"].startswith("110")
+        assert result.get("fallback_reason") == "chief_no_items"
 
     @pytest.mark.asyncio
     async def test_invalid_specialist_reports_are_ignored_without_crashing(self, ai, mocker):
@@ -471,9 +627,47 @@ class TestAnalyzeJimmyFailureShapes:
         )
 
         assert result["driving_analysis"] == "Conduccion OK"
-        assert result["agent_reports"] == [{"name": "SUSPENSION", "items": "no_es_lista"}]
+        assert len(result["agent_reports"]) == 1
+        report = result["agent_reports"][0]
+        assert report["name"] == "SUSPENSION"
+        assert report["items"] == []
+        assert report["summary"] == ""
+        assert "friendly_name" in report  # now always present
         assert "Fallback controlado" in result["chief_reasoning"]
         assert isinstance(result["full_setup"]["sections"], list)
+
+    @pytest.mark.asyncio
+    async def test_specialist_report_normalization_accepts_alt_keys(self, ai, mocker):
+        mocker.patch.object(ai, "update_mappings", new=AsyncMock())
+        mocker.patch.object(ai, "_call_llm_text", new=AsyncMock(return_value="Conduccion OK"))
+
+        specialist_report_alt = {
+            "recomendaciones": [
+                {
+                    "parametro": "SpringSetting",
+                    "nuevo_valor": "112",
+                    "motivo": "Mejor apoyo en salida.",
+                }
+            ],
+            "resumen": "Se propone endurecer un punto el muelle.",
+        }
+        mocker.patch.object(
+            ai,
+            "_get_json_from_llm",
+            new=AsyncMock(side_effect=[specialist_report_alt, specialist_report_alt, None]),
+        )
+
+        result = await ai.analyze(
+            telemetry_summary="telemetry",
+            setup_data=self.SETUP,
+            provider="jimmy",
+        )
+
+        assert len(result["agent_reports"]) == 2
+        first_report = result["agent_reports"][0]
+        assert first_report["summary"]
+        assert first_report["items"][0]["parameter"] == "SpringSetting"
+        assert first_report["items"][0]["new_value"] == "112"
 
     @pytest.mark.asyncio
     async def test_driving_analysis_exception_returns_controlled_message(self, ai, mocker):
@@ -517,9 +711,109 @@ class TestAnalyzeJimmyFailureShapes:
             )
 
         assert result.get("degraded") is True
-        assert result.get("fallback_reason") == "chief_none"
+        # When chief returns None, the secondary fallback fires with reason "chief_no_items"
+        assert result.get("fallback_reason") == "chief_no_items"
         assert "event=analysis_completed" in caplog.text
-        assert 'fallback_reason="chief_none"' in caplog.text
+        assert 'fallback_reason="chief_no_items"' in caplog.text
         assert "specialist_reasons=0" in caplog.text
         assert "chief_present=false" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_jimmy_provider_truncates_telemetry_for_specialists(self, ai, mocker):
+        """Jimmy's 8K context can't handle large telemetry — verify it gets truncated."""
+        mocker.patch.object(ai, "update_mappings", new=AsyncMock())
+        mocker.patch.object(ai, "_call_llm_text", new=AsyncMock(return_value="Conduccion OK"))
+
+        captured_inputs = []
+
+        async def capturing_get_json(prompt, inputs, **kwargs):
+            captured_inputs.append(inputs.copy())
+            return None
+
+        mocker.patch.object(ai, "_get_json_from_llm", new=AsyncMock(side_effect=capturing_get_json))
+
+        big_telemetry = "x" * 10_000
+        await ai.analyze(
+            telemetry_summary=big_telemetry,
+            setup_data=self.SETUP,
+            provider="jimmy",
+        )
+
+        from app.core.ai_agents import JIMMY_MAX_TELEMETRY_CHARS
+        specialist_calls = [c for c in captured_inputs if "section_name" in c]
+        for call in specialist_calls:
+            assert len(call["telemetry_summary"]) <= JIMMY_MAX_TELEMETRY_CHARS + 100
+
+    @pytest.mark.asyncio
+    async def test_fallback_resolves_friendly_param_names_to_internal(self, ai, mocker):
+        """Specialist reports using friendly param names must map to internal names in setup."""
+        mocker.patch.object(ai, "update_mappings", new=AsyncMock())
+        mocker.patch.object(ai, "_call_llm_text", new=AsyncMock(return_value="Conduccion OK"))
+
+        # Set up a friendly→internal mapping
+        ai.mapping["parameters"]["SpringSetting"] = "Muelle (Spring)"
+
+        specialist_report = {
+            "items": [
+                {"parameter": "Muelle (Spring)", "new_value": "115", "reason": "Ajuste."}
+            ],
+            "summary": "Cambio de muelle.",
+        }
+        mocker.patch.object(
+            ai,
+            "_get_json_from_llm",
+            new=AsyncMock(side_effect=[specialist_report, specialist_report, None]),
+        )
+
+        result = await ai.analyze(
+            telemetry_summary="telemetry",
+            setup_data=self.SETUP,
+            provider="jimmy",
+        )
+
+        sections = {s["section_key"]: s for s in result["full_setup"]["sections"]}
+        suspension_items = sections["SUSPENSION"]["items"]
+        spring_item = next(i for i in suspension_items if i["param_key"] == "SpringSetting")
+        assert spring_item["new"].startswith("115")
+
+    @pytest.mark.asyncio
+    async def test_chief_item_alt_keys_are_applied_to_setup(self, ai, mocker):
+        mocker.patch.object(ai, "update_mappings", new=AsyncMock())
+        mocker.patch.object(ai, "_call_llm_text", new=AsyncMock(return_value="Conduccion OK"))
+
+        specialist_report = {"items": [], "summary": "sin cambios especialistas"}
+        chief_report_alt_keys = {
+            "full_setup": {
+                "sections": [
+                    {
+                        "name": "SUSPENSION",
+                        "items": [
+                            {
+                                "parametro": "SpringSetting",
+                                "newValue": "112",
+                                "motivo": "Compensar falta de soporte en apoyo medio.",
+                            }
+                        ],
+                    }
+                ]
+            },
+            "chief_reasoning": "Aplicando ajuste de muelle por balance global.",
+        }
+
+        mocker.patch.object(
+            ai,
+            "_get_json_from_llm",
+            new=AsyncMock(side_effect=[specialist_report, specialist_report, chief_report_alt_keys]),
+        )
+
+        result = await ai.analyze(
+            telemetry_summary="telemetry",
+            setup_data=self.SETUP,
+            provider="jimmy",
+        )
+
+        sections = {s["section_key"]: s for s in result["full_setup"]["sections"]}
+        suspension_item = next(i for i in sections["SUSPENSION"]["items"] if i["param_key"] == "SpringSetting")
+        assert suspension_item["new"].startswith("112")
+        assert "soporte" in suspension_item["reason"].lower()
 
