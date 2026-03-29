@@ -365,6 +365,8 @@ All hardcoded values (ports, paths, thresholds, parameter lists, telemetry chann
 
 **Frontend session load without forced rerun**: after clicking `Cargar sesión`, the UI should keep the newly loaded local temp file paths in `st.session_state` and continue the same render cycle instead of forcing an immediate `st.rerun()`. In production, an eager rerun can race with websocket reconnection and return the app to the initial state even though the backend file downloads succeeded.
 
+**Frontend auto-load latest uploaded session**: the sidebar no longer requires manual `Selecciona sesión subida` + `Cargar sesión`. When complete sessions exist in backend storage for the current client session, the frontend auto-loads the most recent one and renders telemetry directly after upload.
+
 **Prompt benchmark tooling removed from repo**: legacy benchmark/grid-search helper scripts and `docs/benchmark` artifacts were removed to keep the runtime repository lightweight for deployment. Runtime behavior now depends on the committed values inside `app/core/jimmy_runtime_config.v1.json`.
 
 **Frontend session analysis timeout**: `frontend/streamlit_app.py` posts stored sessions to `/analyze_session` with a long-running Requests timeout tuple `(10, 1800)`. Never use `timeout=0` with `requests`; urllib3 rejects non-positive timeouts before the backend call is made.

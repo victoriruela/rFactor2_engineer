@@ -1197,23 +1197,27 @@ with st.sidebar:
 
         available_sessions = _fetch_backend_sessions()
         if available_sessions:
-            labels = [s.get("display_name", s["id"]) for s in available_sessions]
-            selected_label = st.selectbox("Selecciona sesión subida", labels)
-
-            if st.button("Cargar sesión"):
-                selected_entry = next(
-                    (s for s in available_sessions if s.get("display_name", s["id"]) == selected_label),
-                    None,
-                )
-                if selected_entry is not None:
-                    _cleanup_temp_session_files()
-                    st.session_state['selected_session_id'] = selected_entry["id"]
-                    st.session_state['selected_session_name'] = selected_entry.get("display_name", selected_entry["id"])
-                    try:
-                        st.session_state.update(_load_session_locally(selected_entry))
-                        st.success("Sesión cargada correctamente")
-                    except Exception as e:
-                        st.error(f"No se pudo cargar la sesión localmente: {e}")
+            # Cargar automáticamente la sesión más reciente para evitar pasos manuales
+            # y mantener el flujo: subir archivos -> ver telemetría.
+            selected_entry = available_sessions[0]
+            selected_id = selected_entry["id"]
+            tele_path_state = st.session_state.get('telemetry_temp_path')
+            svm_path_state = st.session_state.get('svm_temp_path')
+            local_files_ready = bool(
+                tele_path_state
+                and svm_path_state
+                and os.path.exists(tele_path_state)
+                and os.path.exists(svm_path_state)
+            )
+            if st.session_state.get('selected_session_id') != selected_id or not local_files_ready:
+                _cleanup_temp_session_files()
+                st.session_state['selected_session_id'] = selected_id
+                st.session_state['selected_session_name'] = selected_entry.get("display_name", selected_id)
+                try:
+                    st.session_state.update(_load_session_locally(selected_entry))
+                    st.success("Sesión cargada automáticamente")
+                except Exception as e:
+                    st.error(f"No se pudo cargar la sesión localmente: {e}")
         else:
             st.info("No hay sesiones completas en el backend todavía. Sube .mat/.csv + .svm.")
     else:
