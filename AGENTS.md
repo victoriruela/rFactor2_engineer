@@ -164,6 +164,7 @@ Returns `{"upload_id", "chunk_size", "filename"}`.
 
 #### `PUT /uploads/{upload_id}/chunk?chunk_index=N`
 Uploads one raw-body chunk (max `chunk_size` bytes). Must be sent in order (409 if out of sequence).
+Current default `chunk_size` is **16 MiB** (tuned for Cloudflare/Nginx stability).
 Returns `{"upload_id", "chunk_index", "bytes_received"}`.
 
 #### `POST /uploads/{upload_id}/complete`
