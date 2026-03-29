@@ -11,4 +11,5 @@ python-dotenv
 matplotlib
 plotly
 requests
+requests-toolbelt
 scipy

@@ -1,0 +1,8 @@
+echo "==> [lint] ruff check"
+python -m ruff check app/ frontend/ tests/ e2e/ || exit 1
+
+echo "==> [build] verify app is importable"
+python -c "from app.main import app" || exit 1
+
+echo "==> [test] unit tests (no Ollama required)"
+python -m pytest tests/ --ignore=tests/integration -q || exit 1

@@ -11,9 +11,9 @@ rFactor2 Engineer es una aplicación inteligente diseñada para pilotos de rFact
   - 🟡 **Amarillo**: Pérdida por deficiencia en el setup.
   - 🟠 **Naranja**: Pérdida combinada (conducción y setup).
 - **Agentes de IA con Ollama + Llama 3.2 3B**:
-  - Modelo local `Llama-3.2-3B-Instruct-Q4_0.gguf` ejecutado mediante Ollama.
-  - El sistema arranca Ollama automáticamente si no está corriendo.
-  - El modelo se registra en Ollama desde el archivo `.gguf` local si no existe.
+  - Modelo local `llama3.2:latest` ejecutado mediante Ollama del host.
+  - Requisito: Ollama instalado en el host y accesible en `http://localhost:11434`.
+  - Si falta el modelo: `ollama pull llama3.2:latest`.
   - Ingeniero de Pista (Conducción).
   - Mecánico de Competición (Setup).
 - **Reporte de Setup Completo**: Recomendaciones detalladas para cada parámetro del setup, justificando tanto los cambios como la decisión de mantener ciertos valores.
@@ -41,10 +41,10 @@ rFactor2_engineer/
 ### 1. Requisitos Previos
 
 - Python 3.9 o superior.
-- [Ollama](https://ollama.com/) instalado y corriendo en el sistema.
-- Modelo `llama3.2:3b` descargado en Ollama (**requisito obligatorio** para la app y los tests de integración):
+- [Ollama](https://ollama.com/) instalado en el host (Windows/Linux/macOS).
+- Modelo `llama3.2:latest` descargado en Ollama (**requisito obligatorio** para la app y los tests de integración):
   ```
-  ollama pull llama3.2:3b
+  ollama pull llama3.2:latest
   ```
 
 ### 2. Instalación de Dependencias
@@ -62,6 +62,12 @@ El archivo `.env` en la raíz del proyecto contiene la configuración de Ollama:
 ```text
 OLLAMA_MODEL="llama3.2-3b-instruct"
 OLLAMA_BASE_URL="http://localhost:11434"
+```
+
+En Docker Compose, el backend usa el Ollama del host mediante:
+
+```text
+OLLAMA_BASE_URL=http://host.docker.internal:11434
 ```
 
 ### 4. Lanzar la Aplicación
@@ -86,9 +92,73 @@ La aplicación se abrirá automáticamente en tu navegador (por defecto en `http
 
 **Notas importantes:**
 - El backend inicia rápidamente (el LLM se carga de forma lazy en el primer análisis).
-- En el primer análisis, si Ollama no está corriendo, el sistema lo arrancará automáticamente.
-- Si el modelo no está registrado en Ollama, se registrará automáticamente desde el archivo `.gguf` local.
+- Inicia Ollama en el host antes de analizar (`ollama serve` si no está ya corriendo).
+- Si falta el modelo, descárgalo una vez con `ollama pull llama3.2:latest`.
 - Ver docs API en `http://localhost:8000/docs`.
+
+### Ejecución con Docker (recomendada)
+
+```powershell
+docker compose up --build
+```
+
+Servicios:
+- Frontend: `http://localhost:8501`
+- Backend: `http://localhost:8000`
+- Ollama (host): `http://localhost:11434`
+
+### Tests Docker sin acumulación de contenedores
+
+Para ejecutar tests en Docker y limpiar automáticamente contenedores efímeros de `test` de este proyecto:
+
+```powershell
+powershell -ExecutionPolicy Bypass -NoProfile -File scripts/run_docker_test.ps1
+```
+
+Con argumentos personalizados:
+
+```powershell
+powershell -ExecutionPolicy Bypass -NoProfile -File scripts/run_docker_test.ps1 pytest tests/test_main.py -q
+```
+
+Si hubo ejecuciones interrumpidas y quedaron contenedores `exited`, limpia los de este proyecto y también los temporales de benchmark (`t1-*`, `t2-*`, ...):
+
+```powershell
+powershell -ExecutionPolicy Bypass -NoProfile -File scripts/cleanup_docker_test_artifacts.ps1
+```
+
+Al terminar una tarea/fase de benchmark, esos contenedores temporales deben purgarse. Opcionalmente, para limpiar tambien imagenes temporales tipo `t*-*-test`:
+
+```powershell
+powershell -ExecutionPolicy Bypass -NoProfile -File scripts/cleanup_docker_test_artifacts.ps1 -RemoveTemporaryTestImages
+```
+
+### Deploy HTTPS en host GCP (Nginx reverse proxy)
+
+Despliegue canonico al host configurado (`bitor@34.175.126.128`):
+
+```powershell
+powershell -ExecutionPolicy Bypass -NoProfile -File scripts/deploy_gcp.ps1
+```
+
+Topologia actual:
+- Nginx publico en `:80` y `:443`
+- Frontend Streamlit en `127.0.0.1:18501`
+- Backend FastAPI en `127.0.0.1:18000`
+- Proxy HTTPS: `/` -> frontend, `/api/` -> backend
+- Hosts publicos: `https://telemetria.bot.nu` y `https://car-setup.com`
+- `http://telemetria.bot.nu` y `http://car-setup.com` redirigen a HTTPS
+- **Basic Auth en Nginx para todas las rutas**
+  - Usuario: `racef1`
+  - Password: `100fuchupabien`
+- TLS: certificados Let's Encrypt gestionados con `certbot` en el host para ambos dominios
+- Uploads grandes: Nginx configurado con `client_max_body_size 20000M` y ruta explicita `/_stcore/upload_file/` para evitar `413 Request Entity Too Large`.
+
+Si no necesitas rebuild de imagenes:
+
+```powershell
+powershell -ExecutionPolicy Bypass -NoProfile -File scripts/deploy_gcp.ps1 -SkipDockerBuild
+```
 
 ## 🛠️ Uso
 

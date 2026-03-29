@@ -68,7 +68,15 @@ rFactor2_engineer/
 ├── asana-mcp-plugin.zip           # Asana MCP plugin (install to ~/.claude/asana-mcp/)
 ├── CONSTANTS.md                   # Index of domain constant files
 ├── SPECIFICATION.md               # Original project spec
-└── README.md                      # User-facing docs (Spanish)
+├── README.md                      # User-facing docs (Spanish)
+├── Dockerfile                     # Multi-stage build (backend + frontend targets)
+├── docker-compose.yml             # Container orchestration (backend, frontend, test) using host Ollama
+├── .dockerignore                  # Build context exclusions
+├── GIT.md                         # Git workflow, hooks, commit conventions, linting
+├── pyproject.toml                 # Ruff linter configuration
+├── package.json                   # Node devDeps (husky + commitlint)
+├── commitlint.config.js           # Conventional commits rule config
+└── .husky/                        # Git hooks (pre-commit, commit-msg)
 ```
 
 ## Dependencies
@@ -99,9 +107,10 @@ requests                   # HTTP calls (Ollama API, frontend→backend)
 | Variable | Default | Purpose |
 |----------|---------|---------|
 | `OLLAMA_BASE_URL` | `http://localhost:11434` | Ollama API endpoint |
-| `OLLAMA_MODEL` | `llama3.2:3b` | Model tag passed to ChatOllama |
+| `OLLAMA_MODEL` | `llama3.2:latest` | Model tag passed to ChatOllama |
+| `RF2_API_URL` | `http://localhost:8000` | Backend URL used by Streamlit frontend |
 
-Set in `.env` at project root (loaded by python-dotenv).
+Set in `.env` at project root (loaded by python-dotenv). In Docker, backend points to host Ollama via `OLLAMA_BASE_URL=http://host.docker.internal:11434`.
 
 ## API Endpoints
 
@@ -193,6 +202,55 @@ Auto-extended by the Translation Agent when new parameters are encountered. The 
 
 See [`ASANA.md`](ASANA.md) for full details. Plugin zip at `asana-mcp-plugin.zip`. Manages OAuth2 auth and token injection into Claude Desktop, Claude CLI, VS Code Copilot, and JetBrains Copilot configs.
 
+### Canonical project
+
+The single Asana project for all phases of this repo is **"rFactor2 Engineer"** (GID `1213839935179235`, workspace `1213846793386214`). **Always use this project.** Never create a second project.
+
+### Board layout
+
+The project uses **Board layout** with four fixed sections. These must exist before creating tasks:
+
+| Section | Meaning |
+|---------|---------|
+| `To Do` | Task created, not yet started |
+| `In Progress` | Assigned to a subagent and actively being worked |
+| `In Review` | Subagent committed; supervisor is merging |
+| `Done` | Merged and verified |
+
+When creating tasks, always supply `section_id` pointing to the `To Do` section GID. Retrieve section GIDs with `get_project(project_id, include_sections=True)`.
+
+Task status transitions use `update_tasks` with `add_projects` containing the target section GID, or a dedicated move-to-section call.
+
+### MCP tool failure protocol — MANDATORY
+
+The `mcp_asana-mcp_*` tools authenticate via a token stored in the JetBrains IDE config file. That token **expires every hour**. The IDE **caches it at startup** and does not reload it mid-session.
+
+When any `mcp_asana-mcp_*` call fails with `invalid_token`:
+
+```
+Step 1 — Refresh & re-inject the token (run in terminal):
+    python "$env:USERPROFILE\.claude\asana-mcp\scripts\asana_mcp.py" auth
+    python "$env:USERPROFILE\.claude\asana-mcp\scripts\asana_mcp.py" update-mcp
+
+Step 2 — Retry the MCP tool immediately (the token in the config file is
+    now valid; occasionally the IDE picks it up without a restart).
+
+Step 3 — If the tool still fails:
+    ► STOP. Tell the user:
+      "The Asana MCP token has been refreshed and written to the IDE
+       config, but JetBrains has cached the old token. Please restart
+       the IDE (File → Invalidate Caches / Restart, or close and reopen
+       the project), then ask me to continue."
+    ► Wait for the user to confirm restart before doing anything else.
+
+NEVER create a workaround Python script that calls the Asana API or MCP
+endpoint directly. NEVER silently bypass the MCP tools.
+```
+
+### Creating the board sections (one-time setup)
+
+If `get_project(project_id, include_sections=True)` returns fewer than four sections, create the missing ones using `create_project` with the `sections` array, or via the Asana web UI. The four required section names are exactly: `To Do`, `In Progress`, `In Review`, `Done`.
+
 ## Constants
 
 All hardcoded values (ports, paths, thresholds, parameter lists, telemetry channels, Asana config) are documented in [`CONSTANTS.md`](CONSTANTS.md). Reference that file when working with specific numeric values or configuration.
@@ -213,26 +271,77 @@ All hardcoded values (ports, paths, thresholds, parameter lists, telemetry chann
 
 All user-facing output (driving analysis, setup recommendations, parameter names) is in **Spanish (Castellano)**. Prompts explicitly instruct the LLM to respond in Spanish. The Translation Agent produces Spanish-friendly parameter names.
 
-## Test Infrastructure
+## Development Environment
 
-### Running tests
+**Docker is the canonical development environment for this project.** Do NOT use the host Python installation for running tests or lint — the host may have incompatible package versions (e.g. Python 3.13 + pandas).
+
+### Quick start (first time)
 
 ```bash
-# Install test dependencies (one-time)
-pip install -r requirements-dev.txt
+# Build the test image (one-time, or after requirements changes)
+docker compose --profile test build test
 
-# Unit tests — fast, no Ollama required (~0.5s)
-pytest tests/ --ignore=tests/integration -v
+# Start the full app stack
+docker compose up --build
 
-# Integration tests — real LLM, requires ollama + llama3.2:latest (~3min)
-pytest -m integration -v
-
-# E2E API tests — requires backend running at :8000
-pytest e2e/api/ -v
-
-# E2E Web tests — requires backend + Streamlit + Maestro installed
-maestro test e2e/web/upload_telemetry.yaml
+# Ensure host Ollama has the required model (one-time)
+ollama pull llama3.2:latest
 ```
+
+### Running tests (always use Docker)
+
+```bash
+# Preferred wrapper (auto-cleans exited one-off test containers for this project)
+powershell -ExecutionPolicy Bypass -NoProfile -File scripts/run_docker_test.ps1
+
+# Unit tests — fast, no Ollama required (~3s in container)
+docker compose --profile test run --rm test
+
+# Unit tests with extra args (e.g. -k filter, -x stop-on-first-fail)
+docker compose --profile test run --rm test pytest tests/ --ignore=tests/integration -v -k "my_test"
+
+# Lint
+docker compose --profile test run --rm test ruff check app/ frontend/ tests/
+
+# Integration tests — real LLM, requires host Ollama running with llama3.2:latest (~3min)
+docker compose --profile test run --rm test pytest -m integration -v
+
+# E2E API tests — requires backend container running at :8000
+docker compose --profile test run --rm test pytest e2e/api/ -v
+```
+
+To pass custom arguments through the wrapper, append them after the script path:
+
+```bash
+powershell -ExecutionPolicy Bypass -NoProfile -File scripts/run_docker_test.ps1 pytest tests/test_main.py -q
+```
+
+If stale containers exist from interrupted runs, clean exited test containers for both:
+- this project (`rfactor2_engineer`), and
+- temporary benchmark projects (`t1-*`, `t2-*`, ...):
+
+```bash
+powershell -ExecutionPolicy Bypass -NoProfile -File scripts/cleanup_docker_test_artifacts.ps1
+```
+
+After a benchmark/temporary task is completed, those temporary test containers must be purged. If you also want to remove temporary benchmark test images (e.g. `t1-...-test`), run:
+
+```bash
+powershell -ExecutionPolicy Bypass -NoProfile -File scripts/cleanup_docker_test_artifacts.ps1 -RemoveTemporaryTestImages
+```
+
+The `test` service bind-mounts the full source tree at `/app`, so **code changes are reflected immediately without rebuilding** the image. Only rebuild (`docker compose --profile test build test`) when `requirements.txt` or `requirements-dev.txt` change.
+
+### App services
+
+| Service | URL | Start command |
+|---------|-----|---------------|
+| Backend | http://localhost:8000 | `docker compose up backend` |
+| Frontend | http://localhost:8501 | `docker compose up frontend` |
+| Host Ollama (external dependency) | http://localhost:11434 | `ollama serve` (host) |
+| All | — | `docker compose up --build` |
+
+## Test Infrastructure
 
 ### System requirement
 
@@ -267,61 +376,426 @@ e2e/
 └── web/*.yaml                      # Maestro Web flows (Streamlit UI)
 ```
 
+## Docker
+
+### Quick start
+
+```bash
+docker compose up --build
+```
+
+Services:
+- **Frontend**: http://localhost:8501
+- **Backend**: http://localhost:8000
+- **Host Ollama**: http://localhost:11434 (runs outside Docker)
+
+### First run — pull the model
+
+On the host machine, pull the required model:
+
+```bash
+ollama pull llama3.2:latest
+```
+
+### Architecture
+
+```
+┌─────────────┐    ┌──────────┐    ┌──────────────────────┐
+│  Frontend   │───▶│ Backend  │───▶│ Host Ollama          │
+│  :8501      │    │  :8000   │    │ localhost:11434      │
+└─────────────┘    └──────────┘    └──────────────────────┘
+  RF2_API_URL       OLLAMA_BASE_URL=http://host.docker.internal:11434
+```
+
+### Volumes
+
+| Mount | Purpose |
+|-------|---------|
+| `./data` → `/app/data` | Session uploads (persist across restarts) |
+| `./app/core/param_mapping.json` | Translation cache (generated at runtime) |
+| `./app/core/fixed_params.json` | User-locked parameters |
+
+
+### Files
+
+| File | Purpose |
+|------|---------|
+| `Dockerfile` | Multi-stage build (targets: `backend`, `frontend`) |
+| `docker-compose.yml` | Orchestrates backend/frontend/test containers; uses host Ollama |
+| `.dockerignore` | Excludes data/, tests/, .git/ from build context |
+| `deploy/docker-compose.gcp.yml` | GCP host override: localhost-only port binds + host-gateway mapping |
+| `deploy/nginx-rfactor2_engineer.conf` | HTTP reverse-proxy config (Nginx -> frontend/backend) |
+| `deploy/.htpasswd` | Basic Auth credentials file (hashed) copied to host Nginx |
+| `scripts/deploy_gcp.ps1` | One-command deploy to the configured GCP host |
+
+## GCP Deployment
+
+### Canonical host
+
+- SSH target: `bitor@34.175.126.128`
+- Auth: default SSH keypair already configured for current user.
+- Docker access: use `sudo -n docker ...` (user is not in `docker` group).
+- Nginx binary path: `/usr/sbin/nginx`
+
+### Runtime topology
+
+- `frontend` container bound to `127.0.0.1:18501`
+- `backend` container bound to `127.0.0.1:18000`
+- Public domains: `telemetria.bot.nu`, `car-setup.com`
+- Nginx listens on `:80` and `:443`
+- `http://telemetria.bot.nu` redirects to `https://telemetria.bot.nu`
+- `http://car-setup.com` redirects to `https://car-setup.com`
+- HTTPS proxy routes:
+  - `/` -> `http://127.0.0.1:18501`
+  - `/api/` -> `http://127.0.0.1:18000`
+- Nginx enforces HTTP Basic Auth on **all routes** (`/` and `/api/*`).
+- Nginx upload limit is set to `client_max_body_size 20000M` (aligned with Streamlit `maxUploadSize=20000`) and includes an explicit `/_stcore/upload_file/` route to avoid `413 Request Entity Too Large` on telemetry uploads.
+- TLS is terminated at host Nginx using Let's Encrypt certs from `/etc/letsencrypt/live/telemetria.bot.nu/` and `/etc/letsencrypt/live/car-setup.com/`.
+
+### HTTP Basic Auth (current)
+
+- User: `racef1`
+- Password: `100fuchupabien`
+- Credential file deployed to host: `/etc/nginx/.htpasswd_rfactor2_engineer`
+- Source file in repo: `deploy/.htpasswd` (hashed value)
+
+Quick verify commands on host:
+
+```bash
+curl -I http://127.0.0.1/                          # expected 401
+curl -u racef1:100fuchupabien -I http://127.0.0.1/ # expected 200
+curl -u racef1:100fuchupabien -I http://127.0.0.1/api/models # expected 200
+```
+
+If credentials must rotate:
+1. Update `deploy/.htpasswd` with the new hashed credential.
+2. Redeploy with `scripts/deploy_gcp.ps1`.
+3. Validate with authenticated `curl` checks.
+
+### TLS / Certbot
+
+- Certbot and the Nginx plugin are installed on the host via apt (`certbot`, `python3-certbot-nginx`).
+- Active certificate names: `telemetria.bot.nu`, `car-setup.com`
+- Live cert paths:
+  - `/etc/letsencrypt/live/telemetria.bot.nu/fullchain.pem`
+  - `/etc/letsencrypt/live/car-setup.com/fullchain.pem`
+- Live key paths:
+  - `/etc/letsencrypt/live/telemetria.bot.nu/privkey.pem`
+  - `/etc/letsencrypt/live/car-setup.com/privkey.pem`
+- Automatic renewal is handled by `certbot.timer`.
+
+Quick verify commands on host:
+
+```bash
+curl -I http://telemetria.bot.nu/                                  # expected 301 to https://telemetria.bot.nu/
+curl -u racef1:100fuchupabien -I https://telemetria.bot.nu/        # expected 200
+curl -u racef1:100fuchupabien https://telemetria.bot.nu/api/models # expected JSON response
+curl -I http://car-setup.com/                                      # expected 301 to https://car-setup.com/
+curl -u racef1:100fuchupabien -I https://car-setup.com/            # expected 200
+curl -u racef1:100fuchupabien https://car-setup.com/api/models     # expected JSON response
+```
+
+### Deploy / update procedure
+
+From repository root:
+
+```bash
+powershell -ExecutionPolicy Bypass -NoProfile -File scripts/deploy_gcp.ps1
+```
+
+What the script does:
+1. Creates a tar artifact from `git archive` (tracked files only).
+2. Uploads/extracts to `/home/bitor/apps/rFactor2_engineer`.
+3. Runs `docker compose -f deploy/docker-compose.gcp.yml up -d --build`.
+4. Installs/validates/reloads Nginx config.
+5. Runs health checks for frontend/backend/nginx endpoints.
+
+If only config/code changed and you want to skip image rebuild:
+
+```bash
+powershell -ExecutionPolicy Bypass -NoProfile -File scripts/deploy_gcp.ps1 -SkipDockerBuild
+```
+
+### Operational notes
+
+- Do not expose backend/frontend directly to public interfaces; keep loopback bindings and route through Nginx.
+- Do not replace `deploy/nginx-rfactor2_engineer.conf` with a non-TLS variant; future deploys copy that file directly onto the host.
+- After benchmark/temporary tasks, purge temporary Docker test artifacts (see cleanup scripts in this document).
+
+## Git Workflow
+
+All commit conventions, hooks (husky + commitlint), linting (ruff), and branching rules are documented in [`GIT.md`](GIT.md). **Read that file before any git operation.**
+
+Key points:
+- **Pre-commit hook** runs lint → build → unit tests (blocks commit on failure)
+- **Commit-msg hook** enforces [Conventional Commits](https://www.conventionalcommits.org/) format
+- Hooks must **never** be bypassed (`--no-verify` is forbidden)
+
 ## Development Methodology
 
-Rules for all agentic (multi-subagent) development work on this project.
+Rules and operational playbook for all agentic (multi-subagent) development work on this project.
 
-### 1. Task Planning (Asana)
+---
 
-- All project upgrades must be planned as a group of Asana tasks **before any work begins**
-- Tasks must have explicit dependency edges so the supervisor can determine which are safe to parallelize
-- Only tasks with no unresolved upstream dependencies may be handed to a subagent at a given moment
+### Phase Specification Format
 
-### 2. Git Isolation (Worktrees)
+All work is organized in **phases**. A phase is a coherent unit of work (e.g., "Add .ld file support", "Refactor AI pipeline to streaming") that produces one Release Candidate when merged to `develop`. The supervisor receives a phase spec as input — either from the user or from a higher-level planning step.
 
-- Each subagent works in its own isolated git worktree (`git worktree add`)
-- Worktrees branch off the current `develop` HEAD at task start
-- Subagents must **not** push or merge — they commit only; the supervisor performs all merges
-- **Every subagent prompt must explicitly state: "Commit your work and stop. Do not merge or push."**
+A phase spec must contain:
 
-### 3. Asana Status Lifecycle (Supervisor, Atomic)
+```
+Phase: <short name>
+Goal: <what this phase delivers, in 1-2 sentences>
+Scope: <which areas of the codebase are affected>
+Version bump: patch | minor | major
 
-The supervisor updates Asana task status at exactly three moments, synchronously:
+Tasks:
+  1. <task name>
+     Description: <what the subagent must implement>
+     Files: <expected files to create/modify>
+     Depends on: none | <task numbers>
 
-| Moment | Status transition |
-|---|---|
-| Before handing task to subagent | → In Progress |
-| After subagent delivers its result | → In Review |
-| After supervisor finalizes the merge | → Done |
+  2. <task name>
+     Description: ...
+     Files: ...
+     Depends on: 1
 
-No other agent or process should write task status.
+  3. <task name>
+     Description: ...
+     Files: ...
+     Depends on: none
 
-### 4. Merge Protocol (Supervisor)
+  (tasks 2 and 3 can run in parallel; task 1 must finish first)
+```
 
-- Supervisor waits for the subagent's commit before proceeding
-- All merges are performed by the supervisor, never by the subagent
-- When parallel subagents have touched overlapping files, the supervisor merges both implementations intelligently — preserving all intended behavior from each, consistent with the overall phase specification
-- Conflicts are never resolved by discarding one side; both contributions must be reconciled
+The supervisor uses this spec to:
+- Create Asana tasks with the correct dependency graph
+- Determine which tasks can be parallelized (those with no pending upstream dependencies)
+- Write subagent prompts scoped to each task
+- Resolve merge conflicts in the context of the phase goal
 
-### 5. Semantic Release
+---
 
-- **`develop`**: every merge creates a Release Candidate tag (`vX.Y.Z-rc.N`)
-- **`main`**: every merge creates a full version tag (`vX.Y.Z`) following [SemVer](https://semver.org/):
+### Supervisor Algorithm
+
+The supervisor follows this exact loop when executing a phase:
+
+```
+PHASE_START:
+  1. Parse the phase spec
+  2. Create Asana tasks (see "Asana Task Structure" below)
+     - One task per spec item, in the correct project
+     - Set `add_dependencies` for each task based on "Depends on"
+     - All tasks start as incomplete (not started)
+
+EXECUTION_LOOP:
+  3. Query Asana for incomplete tasks in this phase's project/section
+  4. Identify the READY FRONTIER: tasks whose dependencies are ALL marked Done
+  5. If frontier is empty and tasks remain → error (circular dependency or stuck task)
+  6. If no tasks remain → go to PHASE_COMPLETE
+
+  For each task in the ready frontier (launch in parallel where possible):
+    a. Update Asana task → In Progress (add comment: "Assigned to subagent")
+    b. Create a git worktree:
+         git worktree add .worktrees/<task-slug> develop
+    c. Spawn subagent with the SUBAGENT PROMPT TEMPLATE (see below)
+    d. Wait for subagent to complete (it will commit and stop)
+
+  For each completed subagent (process as they finish):
+    e. Update Asana task → In Review
+    f. Merge the worktree branch into develop (see "Merge Protocol")
+    g. If merge succeeds:
+         - Update Asana task → Done (add comment with merge commit SHA)
+         - Clean up worktree: git worktree remove .worktrees/<task-slug>
+    h. If merge has conflicts:
+         - Read both diffs + phase spec
+         - Produce reconciled version preserving both implementations
+         - Commit the reconciliation
+         - Update Asana task → Done
+         - Clean up worktree
+
+  7. Go to EXECUTION_LOOP (new tasks may now be unblocked)
+
+PHASE_COMPLETE:
+  8. Run full test suite on develop (unit + integration + E2E)
+  9. If tests fail → fix on develop, commit fix
+  10. Tag Release Candidate: vX.Y.Z-rc.N
+  11. Update Asana project status: "Phase complete — RC tagged"
+```
+
+---
+
+### Asana Task Structure
+
+Tasks are created and managed via the **`mcp_asana-mcp_*` tools only** — never via custom scripts or direct HTTP calls.
+
+#### Pre-flight checklist
+
+Before creating any task:
+1. Call `get_project("1213839935179235", include_sections=True)` to retrieve the four section GIDs (`To Do`, `In Progress`, `In Review`, `Done`).
+2. If a section is missing, stop and create it (or ask the user to create it in the Asana web UI).
+3. Confirm the token is valid (if the previous step failed, follow the **MCP tool failure protocol** above).
+
+#### Creating tasks
+
+Use `create_tasks` with `default_project` as a **top-level tool parameter** (NOT inside the task objects) and `section_id` inside each task pointing to `To Do`:
+
+> ⚠️ **CRITICAL**: `default_project` is a separate top-level argument to the `create_tasks` tool, not a field inside each task object. If placed inside the task, the tool silently ignores it and creates the task with no project.
+
+Call signature:
+
+```
+mcp_asana-mcp_create_tasks(
+  default_project = "1213839935179235",   ← TOP-LEVEL, not inside tasks[]
+  tasks = [
+    {
+      "name": "[Phase Name] Task: <task name>",
+      "notes": "<description>\n\nFiles: <files>\nPhase: <phase>",
+      "section_id": "<to_do_section_gid>"   ← inside each task object
+    }
+  ]
+)
+```
+
+**Dependency ordering**: Tasks without dependencies are created first. Then tasks with dependencies pass `add_dependencies` referencing the GIDs returned by the first batch.
+
+#### Moving tasks between sections
+
+Use `update_tasks` with `add_projects` to move a task into a new section:
+
+| Transition | Action |
+|------------|--------|
+| Created → To Do | supply `section_id` in `create_tasks` |
+| → In Progress | `update_tasks` → `add_projects: [{project_id, section_id: in_progress_gid}]` + `add_comment`: "Assigned to subagent" |
+| → In Review | `add_comment`: "Subagent committed. Reviewing and merging." |
+| → Done | `update_tasks` → `completed: true` + `add_comment`: "Merged in \<sha\>" |
+
+#### Querying tasks
+
+Use `get_tasks(project="1213839935179235")` to list all tasks. Check `completed` and `memberships[].section.name` to identify the current state and compute the ready frontier.
+
+---
+
+### Subagent Prompt Template
+
+Every subagent receives this prompt. The supervisor fills in the `{{placeholders}}`.
+
+```
+## Task
+{{task_description}}
+
+## Files
+You are expected to create or modify: {{file_list}}
+
+## Worktree
+You are working in: {{worktree_path}}
+Your branch: {{branch_name}}
+
+## Rules (mandatory)
+1. READ `AGENTS.md` and `GIT.md` before starting.
+2. Follow TDD: write unit tests FIRST (in tests/), verify they fail,
+   then implement. Commit tests before implementation.
+3. Write E2E tests at the end if your task adds/changes an endpoint
+   or UI behavior. E2E tests must pass before you stop.
+4. All commits must use Conventional Commit format (see GIT.md).
+   The pre-commit hook will enforce lint + build + test.
+5. Do NOT merge, push, or modify any branch other than your own.
+6. When done, commit all work and stop. Report back with:
+   - List of commits (SHAs + messages)
+   - Summary of what was implemented
+   - Any concerns or known limitations
+
+## Context
+Phase: {{phase_name}}
+Phase goal: {{phase_goal}}
+Your task depends on: {{dependency_descriptions_or_none}}
+Other parallel tasks in this phase: {{sibling_task_names}}
+(Be aware of potential overlap with sibling tasks — the supervisor
+will handle merge conflicts, but minimize unnecessary changes to
+shared files.)
+```
+
+---
+
+### Merge Protocol (Supervisor)
+
+#### Simple merge (no conflicts)
+
+```bash
+cd /path/to/repo                          # main working directory
+git checkout develop
+git merge .worktrees/<task-slug>          # fast-forward or clean merge
+git worktree remove .worktrees/<task-slug>
+```
+
+#### Conflict merge
+
+When two parallel subagents touched the same files:
+
+1. **Attempt merge**: `git merge <branch>` — git marks conflict markers
+2. **Read the phase spec** to understand the intended behavior of both tasks
+3. **Read both diffs**: `git diff develop...<branch-A>` and `git diff develop...<branch-B>`
+4. **Reconcile**: produce a version that includes both implementations:
+   - If both modified the same function differently → combine both behaviors
+   - If both added code to the same location → include both additions in logical order
+   - If one renamed/moved code the other modified → apply the modification to the new location
+   - **Never discard one side** — both tasks were approved in the phase spec
+5. **Test**: run `python -m pytest tests/ --ignore=tests/integration -q` on the reconciled code
+6. **Commit** the merge resolution with message: `chore: merge <task-A> and <task-B> (conflict reconciled)`
+
+#### Post-merge validation
+
+After every merge into develop:
+- Run `python -m ruff check app/ frontend/ tests/ e2e/` (lint)
+- Run `python -m pytest tests/ --ignore=tests/integration -q` (unit tests)
+- If either fails, fix immediately on develop before proceeding to the next task
+
+---
+
+### Semantic Release
+
+- **`develop`**: every completed phase creates a Release Candidate tag (`vX.Y.Z-rc.N`)
+- **`main`**: every merge from develop creates a full version tag (`vX.Y.Z`) following [SemVer](https://semver.org/):
   - **Patch** (`Z`): bug fixes, no API changes
   - **Minor** (`Y`): new features, backward-compatible
   - **Major** (`X`): breaking changes
+- Tags are created with `git tag` and the corresponding GitHub Release via `gh release create`
+- The version bump type is specified in the phase spec
 
-### 6. Test-Driven Development (TDD)
+---
+
+### Test-Driven Development (TDD)
 
 - Subagents must write unit tests for every function/behavior they implement **before** writing the implementation
 - Tests live in `tests/` mirroring the `app/` structure (e.g., `tests/core/test_ai_agents.py`)
 - Implementation is written only after tests are in place and confirmed to fail (red → green)
 - Subagent commits should be ordered: test commit first, then implementation commit
+- The pre-commit hook enforces that all unit tests pass before any commit is accepted
 
-### 7. End-to-End Testing
+### End-to-End Testing
 
 - E2E tests are written at the **end** of the same task that delivers the feature — not deferred to a separate task
 - Subagents **cannot signal task completion** if any E2E test fails; the worktree must not be handed back until the suite is green
 - Two E2E topologies are supported for this project:
   - **API**: pytest-based HTTP tests against `localhost:8000` (using `httpx` or `requests`); files in `e2e/api/`
   - **Web**: [Maestro](https://maestro.mobile.dev/) flows against the Streamlit frontend at `localhost:8501`; files in `e2e/web/`
+
+---
+
+### Quick Reference: Supervisor Checklist
+
+```
+[ ] Phase spec received and understood
+[ ] Asana tasks created with correct dependencies
+[ ] Ready frontier identified
+[ ] Subagents spawned with full prompt template
+[ ] Asana status updated: In Progress
+[ ] Subagent commits received
+[ ] Asana status updated: In Review
+[ ] Worktree merged into develop (conflicts reconciled if needed)
+[ ] Post-merge lint + tests pass
+[ ] Asana status updated: Done
+[ ] All tasks complete → full test suite green
+[ ] RC tagged on develop
+[ ] Asana project status updated
+```

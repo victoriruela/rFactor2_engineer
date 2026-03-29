@@ -1,0 +1,132 @@
+{
+  "runs": [
+    {
+      "run_id": "batch_a_01",
+      "prompt_variant": "batch_a_prose_json_loose_k1_t0",
+      "systemPrompt": "Eres Jimmy (llama3.1-8B) trabajando como ingeniero de pista para rFactor2. Prioriza recomendaciones claras y practicas, con tono narrativo natural en espanol tecnico. Cuando entregues resultados estructurados, usa JSON valido, pero evita sobre-explicar el formato.",
+      "topK": 1,
+      "temperature": 0.0,
+      "metadata": {
+        "batch": "A",
+        "factor_system_style": "prose",
+        "factor_json_explicitness": "loose",
+        "factor_topk": 1,
+        "factor_temperature": 0.0,
+        "notes": "Control determinista con minima diversidad para medir estabilidad base en Jimmy.",
+        "rationale": "Si mejora validez JSON sin perder cobertura, el problema principal era la aleatoriedad, no el prompt base."
+      }
+    },
+    {
+      "run_id": "batch_a_02",
+      "prompt_variant": "batch_a_prose_json_loose_k1_t03",
+      "systemPrompt": "Eres Jimmy (llama3.1-8B) trabajando como ingeniero de pista para rFactor2. Prioriza recomendaciones claras y practicas, con tono narrativo natural en espanol tecnico. Cuando entregues resultados estructurados, usa JSON valido, pero evita sobre-explicar el formato.",
+      "topK": 1,
+      "temperature": 0.3,
+      "metadata": {
+        "batch": "A",
+        "factor_system_style": "prose",
+        "factor_json_explicitness": "loose",
+        "factor_topk": 1,
+        "factor_temperature": 0.3,
+        "notes": "Mismo estilo narrativo pero con mayor variacion lexical.",
+        "rationale": "Aisla el impacto de temperatura sobre utilidad de recomendaciones con topK cerrado."
+      }
+    },
+    {
+      "run_id": "batch_a_03",
+      "prompt_variant": "batch_a_prose_json_strict_k8_t03",
+      "systemPrompt": "Eres Jimmy (llama3.1-8B) trabajando como ingeniero de pista para rFactor2. Redacta con tono narrativo breve y directo. En cualquier salida estructurada, responde con JSON estricto (doble comilla, sin texto antes/despues, sin comentarios, sin comas finales). Si falta informacion, usa null o arrays vacios.",
+      "topK": 8,
+      "temperature": 0.3,
+      "metadata": {
+        "batch": "A",
+        "factor_system_style": "prose",
+        "factor_json_explicitness": "strict",
+        "factor_topk": 8,
+        "factor_temperature": 0.3,
+        "notes": "Narrativo con guardrails fuertes de parseo JSON.",
+        "rationale": "Prueba si la explicitud JSON compensa variabilidad de muestreo mas abierta."
+      }
+    },
+    {
+      "run_id": "batch_a_04",
+      "prompt_variant": "batch_a_prose_json_strict_k8_t0",
+      "systemPrompt": "Eres Jimmy (llama3.1-8B) trabajando como ingeniero de pista para rFactor2. Redacta con tono narrativo breve y directo. En cualquier salida estructurada, responde con JSON estricto (doble comilla, sin texto antes/despues, sin comentarios, sin comas finales). Si falta informacion, usa null o arrays vacios.",
+      "topK": 8,
+      "temperature": 0.0,
+      "metadata": {
+        "batch": "A",
+        "factor_system_style": "prose",
+        "factor_json_explicitness": "strict",
+        "factor_topk": 8,
+        "factor_temperature": 0.0,
+        "notes": "Version mas determinista del perfil narrativo estricto.",
+        "rationale": "Evalua si topK alto mantiene cobertura cuando temperatura cae a cero."
+      }
+    },
+    {
+      "run_id": "batch_a_05",
+      "prompt_variant": "batch_a_structured_json_loose_k8_t03",
+      "systemPrompt": "Rol: Ingeniero de pista Jimmy (llama3.1-8B). Objetivo: maximizar recomendaciones utiles y consistentes con telemetria. Formato: respuestas compactas por seccion. Regla de salida estructurada: usa JSON valido, permitiendo minimo texto explicativo solo si ayuda a claridad.",
+      "topK": 8,
+      "temperature": 0.3,
+      "metadata": {
+        "batch": "A",
+        "factor_system_style": "structured",
+        "factor_json_explicitness": "loose",
+        "factor_topk": 8,
+        "factor_temperature": 0.3,
+        "notes": "Prompt tipo checklist con JSON flexible.",
+        "rationale": "Contrasta estructura del system prompt contra narrativa con mismo nivel de libertad."
+      }
+    },
+    {
+      "run_id": "batch_a_06",
+      "prompt_variant": "batch_a_structured_json_loose_k8_t0",
+      "systemPrompt": "Rol: Ingeniero de pista Jimmy (llama3.1-8B). Objetivo: maximizar recomendaciones utiles y consistentes con telemetria. Formato: respuestas compactas por seccion. Regla de salida estructurada: usa JSON valido, permitiendo minimo texto explicativo solo si ayuda a claridad.",
+      "topK": 8,
+      "temperature": 0.0,
+      "metadata": {
+        "batch": "A",
+        "factor_system_style": "structured",
+        "factor_json_explicitness": "loose",
+        "factor_topk": 8,
+        "factor_temperature": 0.0,
+        "notes": "Checklist determinista para reducir drift de estilo.",
+        "rationale": "Mide si la estructura por si sola mejora estabilidad sin forzar JSON estricto."
+      }
+    },
+    {
+      "run_id": "batch_a_07",
+      "prompt_variant": "batch_a_structured_json_strict_k1_t0",
+      "systemPrompt": "Rol: Ingeniero de pista Jimmy (llama3.1-8B). Objetivo: respuestas tecnicas accionables. Procedimiento: 1) interpretar telemetria, 2) proponer cambios, 3) justificar causalidad. Restriccion de salida: JSON estricto unicamente (UTF-8, doble comilla, sin markdown, sin texto fuera del objeto JSON).",
+      "topK": 1,
+      "temperature": 0.0,
+      "metadata": {
+        "batch": "A",
+        "factor_system_style": "structured",
+        "factor_json_explicitness": "strict",
+        "factor_topk": 1,
+        "factor_temperature": 0.0,
+        "notes": "Perfil mas conservador para priorizar parseabilidad.",
+        "rationale": "Sirve como candidato de robustez maxima para pipelines sensibles a errores de formato."
+      }
+    },
+    {
+      "run_id": "batch_a_08",
+      "prompt_variant": "batch_a_structured_json_strict_k1_t03",
+      "systemPrompt": "Rol: Ingeniero de pista Jimmy (llama3.1-8B). Objetivo: respuestas tecnicas accionables. Procedimiento: 1) interpretar telemetria, 2) proponer cambios, 3) justificar causalidad. Restriccion de salida: JSON estricto unicamente (UTF-8, doble comilla, sin markdown, sin texto fuera del objeto JSON).",
+      "topK": 1,
+      "temperature": 0.3,
+      "metadata": {
+        "batch": "A",
+        "factor_system_style": "structured",
+        "factor_json_explicitness": "strict",
+        "factor_topk": 1,
+        "factor_temperature": 0.3,
+        "notes": "Misma rigidez de formato con algo de creatividad controlada.",
+        "rationale": "Valida si pequena variacion mejora riqueza causal manteniendo JSON parseable."
+      }
+    }
+  ]
+}

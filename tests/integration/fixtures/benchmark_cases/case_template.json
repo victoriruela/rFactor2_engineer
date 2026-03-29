@@ -1,0 +1,30 @@
+{
+  "case_id": "case_xx_short_name",
+  "description": "Short benchmark case description.",
+  "circuit_name": "Circuit Name",
+  "telemetry_summary": "CIRCUITO: ...\\nESTADISTICAS SESION: {...}\\nDATOS POR VUELTA: ...",
+  "setup_data": {
+    "GENERAL": {
+      "FuelSetting": "30//L"
+    }
+  },
+  "session_stats": {
+    "total_laps": 0,
+    "fuel_total": 0.0,
+    "fuel_avg": 0.0,
+    "wear_total": 0.0,
+    "wear_avg": 0.0,
+    "fastest_lap": "0:00.000",
+    "fastest_lap_num": "0"
+  },
+  "fixed_params": [],
+  "expected_focus_sections": [
+    "GENERAL"
+  ],
+  "rubric_expectations": {
+    "telemetry_specificity_min": 3,
+    "causal_quality_min": 3,
+    "actionability_min": 3,
+    "consistency_min": 3
+  }
+}

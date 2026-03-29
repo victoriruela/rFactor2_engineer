@@ -1,7 +1,6 @@
 """Unit tests for app/core/ai_agents.py"""
 import json
-import os
-import textwrap
+import logging
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -155,6 +154,33 @@ class TestGetFriendlyName:
 
 
 # ---------------------------------------------------------------------------
+# Jimmy provider internals
+# ---------------------------------------------------------------------------
+
+class TestJimmyProvider:
+    def test_call_jimmy_api_removes_stats_block_and_outer_quotes(self, ai, mocker):
+        mock_response = MagicMock()
+        mock_response.text = '"<|stats|>{\"tokens\":42}<|/stats|>Respuesta limpia"'
+        mock_response.raise_for_status = MagicMock()
+        mock_post = mocker.patch("app.core.ai_agents.requests.post", return_value=mock_response)
+
+        out = ai._call_jimmy_api("prompt test")
+
+        assert out == "Respuesta limpia"
+        assert mock_post.called
+
+    @pytest.mark.asyncio
+    async def test_call_llm_text_routes_to_jimmy_when_provider_is_jimmy(self, ai, mocker):
+        ai._provider = "jimmy"
+        mocker.patch.object(ai, "_build_prompt_text", return_value="PROMPT")
+        mocker.patch.object(ai, "_call_jimmy_api", return_value="Jimmy OK")
+
+        out = await ai._call_llm_text("X {y}", {"y": 1})
+
+        assert out == "Jimmy OK"
+
+
+# ---------------------------------------------------------------------------
 # _build_current_setup_summary
 # ---------------------------------------------------------------------------
 
@@ -280,3 +306,220 @@ class TestAnalyze:
         assert "full_setup" in result
         assert "agent_reports" in result
         assert "chief_reasoning" in result
+
+    @pytest.mark.asyncio
+    async def test_accepts_driving_telemetry_summary_kwarg(self, ai, mocker):
+        """analyze() must accept driving_telemetry_summary without raising."""
+        mocker.patch.object(ai, "update_mappings", new=AsyncMock())
+        mocker.patch.object(ai, "_get_json_from_llm", new=AsyncMock(return_value={
+            "items": [], "summary": ".", "full_setup": {"sections": []}, "chief_reasoning": "."
+        }))
+        fake_chain = MagicMock()
+        fake_chain.ainvoke = AsyncMock(return_value="Análisis.")
+        with patch("app.core.ai_agents.PromptTemplate") as mock_pt:
+            mock_pt.from_template.return_value.__or__ = MagicMock(return_value=fake_chain)
+            result = await ai.analyze(
+                telemetry_summary="FULL telemetry",
+                setup_data=self.SETUP,
+                driving_telemetry_summary="DRIVING ONLY telemetry",
+            )
+        assert "driving_analysis" in result
+
+
+# ---------------------------------------------------------------------------
+# TestAnalyzeDrivingTelemetryFilter — driving_telemetry_summary routing
+# ---------------------------------------------------------------------------
+
+class TestAnalyzeDrivingTelemetryFilter:
+    """Verify that driving_telemetry_summary overrides the full summary for the driving agent."""
+
+    SETUP = {"GENERAL": {"FuelSetting": "50//L"}}
+
+    def _make_capturing_chain(self, captured: dict):
+        """Return a fake LangChain chain that captures ainvoke inputs."""
+        async def capture_invoke(inputs):
+            captured.update(inputs)
+            return "Análisis."
+
+        fake_chain = MagicMock()
+        fake_chain.ainvoke = AsyncMock(side_effect=capture_invoke)
+        # prompt | llm | parser: each | step must keep returning fake_chain
+        fake_chain.__or__ = MagicMock(return_value=fake_chain)
+        return fake_chain
+
+    @pytest.mark.asyncio
+    async def test_driving_summary_sent_to_driving_prompt(self, ai, mocker):
+        """When driving_telemetry_summary is provided, it is used in the DRIVING_PROMPT invocation."""
+        captured = {}
+        fake_chain = self._make_capturing_chain(captured)
+
+        mocker.patch.object(ai, "update_mappings", new=AsyncMock())
+        mocker.patch.object(ai, "_get_json_from_llm", new=AsyncMock(return_value={
+            "items": [], "summary": ".", "full_setup": {"sections": []}, "chief_reasoning": "."
+        }))
+
+        with patch("app.core.ai_agents.PromptTemplate") as mock_pt:
+            mock_pt.from_template.return_value.__or__ = MagicMock(return_value=fake_chain)
+            await ai.analyze(
+                telemetry_summary="FULL telemetry",
+                setup_data=self.SETUP,
+                driving_telemetry_summary="DRIVING ONLY telemetry",
+            )
+
+        assert captured.get("telemetry_summary") == "DRIVING ONLY telemetry"
+
+    @pytest.mark.asyncio
+    async def test_full_summary_used_when_driving_summary_is_none(self, ai, mocker):
+        """When driving_telemetry_summary is omitted, the full telemetry_summary is used."""
+        captured = {}
+        fake_chain = self._make_capturing_chain(captured)
+
+        mocker.patch.object(ai, "update_mappings", new=AsyncMock())
+        mocker.patch.object(ai, "_get_json_from_llm", new=AsyncMock(return_value={
+            "items": [], "summary": ".", "full_setup": {"sections": []}, "chief_reasoning": "."
+        }))
+
+        with patch("app.core.ai_agents.PromptTemplate") as mock_pt:
+            mock_pt.from_template.return_value.__or__ = MagicMock(return_value=fake_chain)
+            await ai.analyze(
+                telemetry_summary="FULL telemetry",
+                setup_data=self.SETUP,
+                # driving_telemetry_summary NOT passed → defaults to None
+            )
+
+        assert captured.get("telemetry_summary") == "FULL telemetry"
+
+
+# ---------------------------------------------------------------------------
+# Jimmy/T6 regression coverage: failure handling and fallback policy contract
+# ---------------------------------------------------------------------------
+
+class TestJimmyFallbackPolicyArtifact:
+    def test_runtime_config_declares_retry_and_degraded_signal_contract(self):
+        config_path = Path(__file__).resolve().parents[2] / "app" / "core" / "jimmy_runtime_config.v1.json"
+        config = json.loads(config_path.read_text(encoding="utf-8"))
+
+        fallback = config["fallbackPolicy"]
+        assert fallback["maxRetriesPerStage"] >= 1
+        assert "chief_none" in fallback["retryOnFailureConditions"]
+        assert "specialist_invalid_json_or_missing_items" in fallback["retryOnFailureConditions"]
+        assert "driving_analysis_empty_or_too_short" in fallback["retryOnFailureConditions"]
+        assert fallback["failureSignal"]["degraded"] is True
+        assert fallback["failureSignal"]["reasonField"] == "fallback_reason"
+
+
+class TestAnalyzeJimmyFailureShapes:
+    SETUP = {
+        "GENERAL": {"FuelSetting": "50//L"},
+        "SUSPENSION": {"SpringSetting": "100//N/mm"},
+    }
+
+    @pytest.mark.asyncio
+    async def test_chief_none_falls_back_to_specialists_without_crash(self, ai, mocker):
+        mocker.patch.object(ai, "update_mappings", new=AsyncMock())
+        mocker.patch.object(ai, "_call_llm_text", new=AsyncMock(return_value="Conduccion OK"))
+
+        specialist_report = {
+            "items": [
+                {
+                    "parameter": "SpringSetting",
+                    "new_value": "110",
+                    "reason": "Ajuste de prueba para fallback.",
+                }
+            ],
+            "summary": "Especialista con recomendacion.",
+        }
+        mocker.patch.object(
+            ai,
+            "_get_json_from_llm",
+            new=AsyncMock(side_effect=[specialist_report, specialist_report, None]),
+        )
+
+        result = await ai.analyze(
+            telemetry_summary="telemetry",
+            setup_data=self.SETUP,
+            provider="jimmy",
+        )
+
+        assert result["driving_analysis"] == "Conduccion OK"
+        assert result["chief_reasoning"] == ""
+        assert len(result["agent_reports"]) == 2
+
+        sections = {s["section_key"]: s for s in result["full_setup"]["sections"]}
+        suspension_item = next(i for i in sections["SUSPENSION"]["items"] if i["param_key"] == "SpringSetting")
+        assert suspension_item["new"].startswith("110")
+
+    @pytest.mark.asyncio
+    async def test_invalid_specialist_reports_are_ignored_without_crashing(self, ai, mocker):
+        mocker.patch.object(ai, "update_mappings", new=AsyncMock())
+        mocker.patch.object(ai, "_call_llm_text", new=AsyncMock(return_value="Conduccion OK"))
+
+        chief_report = {
+            "full_setup": {"sections": []},
+            "chief_reasoning": "Fallback controlado por JSON invalido de especialistas.",
+        }
+        mocker.patch.object(
+            ai,
+            "_get_json_from_llm",
+            new=AsyncMock(side_effect=[None, {"items": "no_es_lista"}, chief_report]),
+        )
+
+        result = await ai.analyze(
+            telemetry_summary="telemetry",
+            setup_data=self.SETUP,
+            provider="jimmy",
+        )
+
+        assert result["driving_analysis"] == "Conduccion OK"
+        assert result["agent_reports"] == [{"name": "SUSPENSION", "items": "no_es_lista"}]
+        assert "Fallback controlado" in result["chief_reasoning"]
+        assert isinstance(result["full_setup"]["sections"], list)
+
+    @pytest.mark.asyncio
+    async def test_driving_analysis_exception_returns_controlled_message(self, ai, mocker):
+        mocker.patch.object(ai, "update_mappings", new=AsyncMock())
+        mocker.patch.object(ai, "_call_llm_text", new=AsyncMock(side_effect=RuntimeError("jimmy down")))
+        mocker.patch.object(
+            ai,
+            "_get_json_from_llm",
+            new=AsyncMock(return_value={"full_setup": {"sections": []}, "chief_reasoning": "ok"}),
+        )
+
+        result = await ai.analyze(
+            telemetry_summary="telemetry",
+            setup_data=self.SETUP,
+            provider="jimmy",
+        )
+
+        assert result["driving_analysis"] == "No se pudo obtener el análisis de conducción."
+        assert "full_setup" in result
+
+    @pytest.mark.asyncio
+    async def test_logs_diagnostic_context_for_chief_none_without_specialist_reasoning(self, ai, mocker, caplog):
+        mocker.patch.object(ai, "update_mappings", new=AsyncMock())
+        mocker.patch.object(ai, "_call_llm_text", new=AsyncMock(return_value="Conduccion OK"))
+
+        specialist_without_reason = {
+            "items": [{"parameter": "SpringSetting", "new_value": "110", "reason": ""}],
+            "summary": "sin razonamiento",
+        }
+        mocker.patch.object(
+            ai,
+            "_get_json_from_llm",
+            new=AsyncMock(side_effect=[specialist_without_reason, specialist_without_reason, None]),
+        )
+
+        with caplog.at_level(logging.INFO, logger="app.core.ai_agents"):
+            result = await ai.analyze(
+                telemetry_summary="telemetry",
+                setup_data=self.SETUP,
+                provider="jimmy",
+            )
+
+        assert result.get("degraded") is True
+        assert result.get("fallback_reason") == "chief_none"
+        assert "event=analysis_completed" in caplog.text
+        assert 'fallback_reason="chief_none"' in caplog.text
+        assert "specialist_reasons=0" in caplog.text
+        assert "chief_present=false" in caplog.text
+

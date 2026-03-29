@@ -1,4 +1,4 @@
-from fastapi import FastAPI, UploadFile, File, HTTPException, Form
+from fastapi import FastAPI, UploadFile, File, HTTPException, Form, Request, Header, Cookie, Depends
 from pydantic import BaseModel
 from typing import List, Dict, Any, Optional
 import shutil
@@ -6,6 +6,7 @@ import os
 import uuid
 import json
 import io
+import re
 import numpy as np
 import pandas as pd
 from app.core.telemetry_parser import parse_csv_file, parse_mat_file, parse_svm_file
@@ -24,41 +25,232 @@ class AnalysisResponse(BaseModel):
     agent_reports: List[Dict[str, Any]] = [] # Informes individuales de agentes
     telemetry_summary_sent: str = "" # Resumen enviado a la IA
     chief_reasoning: str = "" # Razonamiento del ingeniero jefe
+    llm_provider: str = "" # Provider real usado por el backend
+    llm_model: str = "" # Modelo real usado por el backend
 
 from app.core.ai_agents import AIAngineer, list_available_models
 
 ai_engineer = AIAngineer()
 
 DATA_DIR = "data"
+UPLOAD_CHUNK_SIZE = 64 * 1024 * 1024
+SESSION_ID_REGEX = re.compile(r"^[A-Za-z0-9_-]{8,128}$")
+
+
+class UploadInitRequest(BaseModel):
+    filename: str
+
+
+async def _write_upload_to_disk(upload_file: UploadFile, destination_path: str, chunk_size: int = UPLOAD_CHUNK_SIZE):
+    with open(destination_path, "wb") as output_file:
+        while True:
+            chunk = await upload_file.read(chunk_size)
+            if not chunk:
+                break
+            output_file.write(chunk)
+
+
+def _normalize_session_id(raw_session_id: Optional[str]) -> str:
+    if not raw_session_id:
+        raise HTTPException(status_code=400, detail="Missing session identifier")
+
+    normalized = raw_session_id.strip()
+    if not SESSION_ID_REGEX.fullmatch(normalized):
+        raise HTTPException(status_code=400, detail="Invalid session identifier")
+
+    return normalized
+
+
+def _resolve_client_session_id(
+    x_client_session_id: Optional[str] = Header(None),
+    rf2_session_id: Optional[str] = Cookie(None)
+) -> str:
+    return _normalize_session_id(x_client_session_id or rf2_session_id)
+
+
+def _client_root(client_session_id: str) -> str:
+    return os.path.join(DATA_DIR, client_session_id)
+
+
+def _chunk_root(client_session_id: str) -> str:
+    return os.path.join(_client_root(client_session_id), "_chunks")
+
+
+def _chunk_meta_path(client_session_id: str, upload_id: str) -> str:
+    return os.path.join(_chunk_root(client_session_id), f"{upload_id}.json")
+
+
+def _chunk_part_path(client_session_id: str, upload_id: str) -> str:
+    return os.path.join(_chunk_root(client_session_id), f"{upload_id}.part")
+
+
+def _safe_filename(filename: str) -> str:
+    safe = os.path.basename((filename or "").strip())
+    if not safe:
+        raise HTTPException(status_code=400, detail="Invalid filename")
+    return safe
+
+
+def _list_client_sessions(client_session_id: str) -> List[Dict[str, str]]:
+    root = _client_root(client_session_id)
+    if not os.path.exists(root):
+        return []
+
+    grouped: Dict[str, Dict[str, str]] = {}
+    for name in os.listdir(root):
+        full_path = os.path.join(root, name)
+        if not os.path.isfile(full_path):
+            continue
+
+        lower = name.lower()
+        if not lower.endswith((".mat", ".csv", ".svm")):
+            continue
+
+        base = name.rsplit('.', 1)[0]
+        grouped.setdefault(base, {})
+        if lower.endswith(".svm"):
+            grouped[base]["svm"] = name
+        else:
+            grouped[base]["telemetry"] = name
+
+    sessions: List[Dict[str, str]] = []
+    for base, files in grouped.items():
+        if "telemetry" in files and "svm" in files:
+            sessions.append({
+                "id": base,
+                "display_name": base,
+                "telemetry": files["telemetry"],
+                "svm": files["svm"],
+            })
+
+    return sorted(sessions, key=lambda x: x["display_name"], reverse=True)
+
+
+def _find_session_pair(client_session_id: str, session_id: str) -> Dict[str, str]:
+    target = session_id.strip()
+    for item in _list_client_sessions(client_session_id):
+        if item["id"] == target:
+            return item
+    raise HTTPException(status_code=404, detail="Session not found")
+
+
+@app.post("/uploads/init")
+def init_upload(
+    payload: UploadInitRequest,
+    client_session_id: str = Depends(_resolve_client_session_id)
+):
+    upload_id = str(uuid.uuid4())
+    chunk_dir = _chunk_root(client_session_id)
+    os.makedirs(chunk_dir, exist_ok=True)
+
+    safe_name = _safe_filename(payload.filename)
+    meta = {
+        "filename": safe_name,
+        "next_chunk": 0,
+        "bytes_received": 0,
+    }
+
+    part_path = _chunk_part_path(client_session_id, upload_id)
+    with open(part_path, "wb") as _:
+        pass
+    with open(_chunk_meta_path(client_session_id, upload_id), "w", encoding="utf-8") as handle:
+        json.dump(meta, handle)
+
+    return {
+        "upload_id": upload_id,
+        "chunk_size": UPLOAD_CHUNK_SIZE,
+        "filename": safe_name,
+    }
+
+
+@app.put("/uploads/{upload_id}/chunk")
+async def upload_chunk(
+    upload_id: str,
+    request: Request,
+    chunk_index: int,
+    client_session_id: str = Depends(_resolve_client_session_id)
+):
+    meta_path = _chunk_meta_path(client_session_id, upload_id)
+    part_path = _chunk_part_path(client_session_id, upload_id)
+    if not os.path.exists(meta_path) or not os.path.exists(part_path):
+        raise HTTPException(status_code=404, detail="Upload not initialized")
+
+    with open(meta_path, "r", encoding="utf-8") as handle:
+        meta = json.load(handle)
+
+    expected_index = int(meta.get("next_chunk", 0))
+    if chunk_index != expected_index:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Invalid chunk index. Expected {expected_index}, received {chunk_index}",
+        )
+
+    body = await request.body()
+    if body is None:
+        raise HTTPException(status_code=400, detail="Missing chunk body")
+
+    with open(part_path, "ab") as part_file:
+        part_file.write(body)
+
+    meta["next_chunk"] = expected_index + 1
+    meta["bytes_received"] = int(meta.get("bytes_received", 0)) + len(body)
+    with open(meta_path, "w", encoding="utf-8") as handle:
+        json.dump(meta, handle)
+
+    return {
+        "upload_id": upload_id,
+        "chunk_index": chunk_index,
+        "bytes_received": meta["bytes_received"],
+    }
+
+
+@app.post("/uploads/{upload_id}/complete")
+def complete_upload(
+    upload_id: str,
+    client_session_id: str = Depends(_resolve_client_session_id)
+):
+    meta_path = _chunk_meta_path(client_session_id, upload_id)
+    part_path = _chunk_part_path(client_session_id, upload_id)
+    if not os.path.exists(meta_path) or not os.path.exists(part_path):
+        raise HTTPException(status_code=404, detail="Upload not initialized")
+
+    with open(meta_path, "r", encoding="utf-8") as handle:
+        meta = json.load(handle)
+
+    client_root = _client_root(client_session_id)
+    os.makedirs(client_root, exist_ok=True)
+    final_name = _safe_filename(meta.get("filename", ""))
+    final_path = os.path.join(client_root, final_name)
+
+    if os.path.exists(final_path):
+        os.remove(final_path)
+    shutil.move(part_path, final_path)
+    os.remove(meta_path)
+
+    return {
+        "filename": final_name,
+        "bytes_received": int(meta.get("bytes_received", 0)),
+    }
 
 @app.get("/sessions")
-def list_sessions():
-    if not os.path.exists(DATA_DIR):
-        return {"sessions": []}
-    
-    sessions = []
-    for sid in os.listdir(DATA_DIR):
-        path = os.path.join(DATA_DIR, sid)
-        if os.path.isdir(path):
-            files = os.listdir(path)
-            # Buscar archivos relevantes
-            tele_file = next((f for f in files if f.lower().endswith(('.mat', '.csv'))), None)
-            svm_file = next((f for f in files if f.lower().endswith('.svm')), None)
-            if tele_file and svm_file:
-                sessions.append({
-                    "id": sid,
-                    "telemetry": tele_file,
-                    "svm": svm_file,
-                    "display_name": tele_file.rsplit('.', 1)[0]
-                })
-    return {"sessions": sessions}
+def list_sessions(client_session_id: str = Depends(_resolve_client_session_id)):
+    return {"sessions": _list_client_sessions(client_session_id)}
 
 @app.get("/sessions/{session_id}/file/{filename}")
-def get_session_file(session_id: str, filename: str):
-    file_path = os.path.join(DATA_DIR, session_id, filename)
+def get_session_file(
+    session_id: str,
+    filename: str,
+    client_session_id: str = Depends(_resolve_client_session_id)
+):
+    pair = _find_session_pair(client_session_id, session_id)
+    expected_files = {pair["telemetry"], pair["svm"]}
+    if filename not in expected_files:
+        raise HTTPException(status_code=404, detail="File not found")
+
+    file_path = os.path.join(_client_root(client_session_id), filename)
     if not os.path.exists(file_path):
         raise HTTPException(status_code=404, detail="File not found")
-    
+
     from fastapi.responses import FileResponse
     return FileResponse(file_path)
 
@@ -72,10 +264,11 @@ async def analyze_telemetry(
     telemetry_file: UploadFile = File(...),
     svm_file: UploadFile = File(...),
     model: Optional[str] = Form(None),
+    provider: Optional[str] = Form("ollama"),
     fixed_params: Optional[str] = Form(None)
 ):
     session_id = str(uuid.uuid4())
-    upload_dir = f"data/{session_id}"
+    upload_dir = os.path.join(DATA_DIR, "_analysis_tmp", session_id)
     os.makedirs(upload_dir, exist_ok=True)
 
     # Parsear lista de parámetros fijados si existe
@@ -89,10 +282,8 @@ async def analyze_telemetry(
     tele_path = os.path.join(upload_dir, telemetry_file.filename)
     svm_path = os.path.join(upload_dir, svm_file.filename)
 
-    with open(tele_path, "wb") as buffer:
-        shutil.copyfileobj(telemetry_file.file, buffer)
-    with open(svm_path, "wb") as buffer:
-        shutil.copyfileobj(svm_file.file, buffer)
+    await _write_upload_to_disk(telemetry_file, tele_path)
+    await _write_upload_to_disk(svm_file, svm_path)
 
     try:
         # 1. Parsear archivos
@@ -101,7 +292,7 @@ async def analyze_telemetry(
                 telemetry_df = parse_mat_file(tele_path)
             else:
                 telemetry_df = parse_csv_file(tele_path)
-            
+
             setup_dict = parse_svm_file(svm_path)
             circuit_name = telemetry_file.filename.split('-')[-2].strip() if '-' in telemetry_file.filename else "Circuito Desconocido"
         except ValueError as ve:
@@ -115,7 +306,7 @@ async def analyze_telemetry(
         if lat_col and lon_col:
             # Eliminar NaNs
             telemetry_df = telemetry_df.dropna(subset=[lat_col, lon_col])
-            
+
             # Intentar usar una única vuelta representativa para el trazado del mapa
             # Preferiblemente una vuelta completa (no la primera ni la última si están incompletas)
             if lap_col:
@@ -126,7 +317,7 @@ async def analyze_telemetry(
                     laps_to_check = [l for l in valid_laps if l > 1]
                     if not laps_to_check:
                         laps_to_check = list(valid_laps)
-                    
+
                     best_lap = max(laps_to_check, key=lambda l: len(telemetry_df[telemetry_df[lap_col] == l]))
                     map_df = telemetry_df[telemetry_df[lap_col] == best_lap].copy()
                 else:
@@ -143,30 +334,21 @@ async def analyze_telemetry(
             # O equivalentemente, en el gráfico (donde 1 unidad X = 1 unidad Y visualmente):
             # aspect_ratio = dy / dx = 1 / cos(lat) para que se vea real
             aspect_ratio = 1.0 / math.cos(math.radians(avg_lat))
-            
+
             x = map_df[lon_col].tolist()
             y = map_df[lat_col].tolist()
-            
+
             # Submuestreo inteligente para no perder detalle pero ser eficiente
             if len(x) > 5000:
-                # Aseguramos que los extremos (min/max de x e y) estén incluidos
-                # Buscamos los índices de los valores extremos
-                idx_min_x = x.index(min(x))
-                idx_max_x = x.index(max(x))
-                idx_min_y = y.index(min(y))
-                idx_max_y = y.index(max(y))
-                
-                extreme_indices = {idx_min_x, idx_max_x, idx_min_y, idx_max_y}
-                
                 step = len(x) // 5000
                 new_x, new_y = [], []
                 for i in range(0, len(x), step):
                     new_x.append(x[i])
                     new_y.append(y[i])
                     # Si el siguiente paso se salta un extremo, lo añadimos (opcionalmente)
-                    # Pero es más sencillo añadir los extremos al final y ordenar si fuera necesario, 
+                    # Pero es más sencillo añadir los extremos al final y ordenar si fuera necesario,
                     # aunque el trazado debe seguir el orden temporal.
-                
+
                 # Para mantener el orden temporal del trazado, simplemente nos aseguramos de que los puntos
                 # en los índices extremos estén en la lista final si no lo están por el step.
                 # Pero en 5000 puntos es casi seguro que están cerca.
@@ -174,7 +356,7 @@ async def analyze_telemetry(
                 if x[0] != x[-1] or y[0] != y[-1]:
                     new_x.append(x[0])
                     new_y.append(y[0])
-                
+
                 x, y = new_x, new_y
         else:
             x = [0.0]
@@ -204,8 +386,8 @@ async def analyze_telemetry(
         brk_col  = _first_col(telemetry_df, 'Brake Pos', 'Brake')
         rpm_col  = _first_col(telemetry_df, 'Engine RPM', 'RPM')
         fuel_col = _first_col(telemetry_df, 'Fuel Level', 'Fuel')
-        gear_col = _first_col(telemetry_df, 'Gear')
-        dist_col = _first_col(telemetry_df, 'Lap Distance', 'Distance')
+        _first_col(telemetry_df, 'Gear')
+        _first_col(telemetry_df, 'Lap Distance', 'Distance')
         wear_cols = [c for c in telemetry_df.columns if 'wear' in c.lower()]
         temp_cols = [c for c in telemetry_df.columns if 'tyre' in c.lower() and 'temp' in c.lower()]
 
@@ -370,7 +552,7 @@ async def analyze_telemetry(
             'downforce', 'drag', 'camber', 'toe', 'susp pos', 'susp force', 'grip',
             'load', 'pitch', 'roll', 'distance'
         ])]
-        
+
         # Combinar manteniendo el orden de prioridad y eliminando duplicados
         key_columns = []
         for c in priority_cols:
@@ -379,11 +561,11 @@ async def analyze_telemetry(
         for c in all_relevant:
             if c not in key_columns:
                 key_columns.append(c)
-        
+
         # Limitar a 100 columnas máximo para mantener tamaño razonable del contexto
         if len(key_columns) > 100:
             key_columns = key_columns[:100]
-        
+
         telemetry_for_ai_parts = []
         for lap_num in lap_numbers:
             if lap_col in telemetry_df.columns:
@@ -397,7 +579,7 @@ async def analyze_telemetry(
             sampled = lap_df_ai[key_columns].iloc[::step_ai].copy()
             sampled.insert(0, 'Vuelta', int(lap_num))
             telemetry_for_ai_parts.append(sampled)
-        
+
         if telemetry_for_ai_parts:
             telemetry_for_ai_df = pd.concat(telemetry_for_ai_parts, ignore_index=True)
             csv_buffer = io.StringIO()
@@ -405,22 +587,69 @@ async def analyze_telemetry(
             telemetry_csv_for_ai = csv_buffer.getvalue()
         else:
             telemetry_csv_for_ai = "No hay datos de telemetría disponibles."
-        
+
         summary = f"CIRCUITO: {circuit_name}\n"
         summary += f"ESTADÍSTICAS SESIÓN: {json.dumps(session_stats)}\n"
-        summary += f"DATOS POR VUELTA (resumen): " + "\n".join(lap_summaries) + "\n\n"
+        summary += "DATOS POR VUELTA (resumen): " + "\n".join(lap_summaries) + "\n\n"
         summary += f"DATOS DETALLADOS DE TELEMETRÍA (submuestreados, ~50 puntos por vuelta, {len(key_columns)} canales):\n"
         summary += telemetry_csv_for_ai
-        
+
+        # Resumen de telemetría exclusivo para el agente de conducción:
+        # solo throttle, freno, dirección, RPM y marcha (técnica de pilotaje)
+        def _is_driving_col(col_name):
+            c = col_name.lower()
+            return (
+                ('lap' in c and ('number' in c or 'dist' in c)) or
+                'throttle' in c or
+                ('brake' in c and 'pos' in c) or
+                'steer' in c or
+                'rpm' in c or
+                c == 'gear' or
+                (c.startswith('gear') and 'setting' not in c)
+            )
+
+        driving_cols = [c for c in telemetry_df.columns if _is_driving_col(c)]
+        driving_for_ai_parts = []
+        for lap_num in lap_numbers:
+            if lap_col in telemetry_df.columns:
+                lap_df_drv = telemetry_df[telemetry_df[lap_col] == lap_num]
+            else:
+                lap_df_drv = telemetry_df
+            if lap_df_drv.empty or not driving_cols:
+                continue
+            step_drv = max(1, len(lap_df_drv) // 50)
+            sampled_drv = lap_df_drv[driving_cols].iloc[::step_drv].copy()
+            sampled_drv.insert(0, 'Vuelta', int(lap_num))
+            driving_for_ai_parts.append(sampled_drv)
+
+        if driving_for_ai_parts:
+            driving_for_ai_df = pd.concat(driving_for_ai_parts, ignore_index=True)
+            drv_buf = io.StringIO()
+            driving_for_ai_df.to_csv(drv_buf, index=False, float_format='%.2f')
+            driving_csv = drv_buf.getvalue()
+        else:
+            driving_csv = "No hay datos de telemetría de conducción disponibles."
+
+        driving_summary = f"CIRCUITO: {circuit_name}\n"
+        driving_summary += f"ESTADÍSTICAS SESIÓN: {json.dumps(session_stats)}\n"
+        driving_summary += "DATOS POR VUELTA (resumen): " + "\n".join(lap_summaries) + "\n\n"
+        driving_summary += (
+            f"TELEMETRÍA DE CONDUCCIÓN (throttle, freno, dirección, RPM, marcha "
+            f"— ~50 puntos por vuelta, {len(driving_cols)} canales):\n"
+        )
+        driving_summary += driving_csv
+
         # Llamada asíncrona al análisis multi-agente
         ai_result = await ai_engineer.analyze(
-            summary, setup_dict, 
-            circuit_name=circuit_name, 
-            session_stats=session_stats, 
+            summary, setup_dict,
+            circuit_name=circuit_name,
+            session_stats=session_stats,
             model_tag=model or None,
-            fixed_params=fixed_params_list
+            provider=provider or "ollama",
+            fixed_params=fixed_params_list,
+            driving_telemetry_summary=driving_summary,
         )
-        
+
         # 4. Generar puntos de interés en el mapa
         issues_on_map = [
             {"x": x[len(x)//4], "y": y[len(y)//4], "status": "driving_issue", "color": "red", "label": "Pérdida por conducción"},
@@ -430,15 +659,19 @@ async def analyze_telemetry(
 
         # Asegurar tipos nativos de Python para JSON
         def convert_to_native(obj):
-            if isinstance(obj, (np.int64, np.int32)): return int(obj)
-            if isinstance(obj, (np.float64, np.float32)): return float(obj)
-            if isinstance(obj, dict): return {k: convert_to_native(v) for k, v in obj.items()}
-            if isinstance(obj, list): return [convert_to_native(i) for i in obj]
+            if isinstance(obj, (np.int64, np.int32)):
+                return int(obj)
+            if isinstance(obj, (np.float64, np.float32)):
+                return float(obj)
+            if isinstance(obj, dict):
+                return {k: convert_to_native(v) for k, v in obj.items()}
+            if isinstance(obj, list):
+                return [convert_to_native(i) for i in obj]
             return obj
 
         return AnalysisResponse(
             circuit_data={
-                "x": [float(i) for i in x], 
+                "x": [float(i) for i in x],
                 "y": [float(i) for i in y],
                 "aspect_ratio": aspect_ratio
             },
@@ -450,42 +683,89 @@ async def analyze_telemetry(
             laps_data=convert_to_native(laps_data),
             agent_reports=convert_to_native(ai_result.get("agent_reports", [])),
             telemetry_summary_sent=summary,
-            chief_reasoning=ai_result.get("chief_reasoning", "")
+            chief_reasoning=ai_result.get("chief_reasoning", ""),
+            llm_provider=ai_result.get("llm_provider", provider or "ollama"),
+            llm_model=ai_result.get("llm_model", model or "")
         )
+    except HTTPException:
+        # Preserve explicit HTTP status codes raised inside the pipeline.
+        raise
     except Exception as e:
         error_msg = str(e)
         if "connection attempts failed" in error_msg.lower() or "connection error" in error_msg.lower():
-            detail = "Error de conexión con el modelo local (Ollama). Asegúrate de que Ollama esté instalado, ejecutándose y con el modelo 'llama3' descargado."
+            if (provider or "ollama").lower() == "jimmy":
+                detail = "Error de conexión con Jimmy API. Verifica tu conexión a Internet e inténtalo de nuevo."
+            else:
+                detail = "Error de conexión con el modelo local (Ollama). Asegúrate de que Ollama esté instalado, ejecutándose y con el modelo 'llama3' descargado."
         else:
             detail = error_msg
         raise HTTPException(status_code=500, detail=detail)
     finally:
-        # Opcional: limpiar archivos después del análisis
-        # shutil.rmtree(upload_dir)
-        pass
+        await telemetry_file.close()
+        await svm_file.close()
+        shutil.rmtree(upload_dir, ignore_errors=True)
+
+
+@app.post("/analyze_session", response_model=AnalysisResponse)
+async def analyze_stored_session(
+    session_id: str = Form(...),
+    model: Optional[str] = Form(None),
+    provider: Optional[str] = Form("ollama"),
+    fixed_params: Optional[str] = Form(None),
+    client_session_id: str = Depends(_resolve_client_session_id),
+):
+    pair = _find_session_pair(client_session_id, session_id)
+    client_root = _client_root(client_session_id)
+    tele_path = os.path.join(client_root, pair["telemetry"])
+    svm_path = os.path.join(client_root, pair["svm"])
+
+    if not os.path.exists(tele_path) or not os.path.exists(svm_path):
+        raise HTTPException(status_code=404, detail="Session files are missing")
+
+    telemetry_handle = open(tele_path, "rb")
+    svm_handle = open(svm_path, "rb")
+    telemetry_upload = UploadFile(filename=pair["telemetry"], file=telemetry_handle)
+    svm_upload = UploadFile(filename=pair["svm"], file=svm_handle)
+
+    try:
+        return await analyze_telemetry(
+            telemetry_file=telemetry_upload,
+            svm_file=svm_upload,
+            model=model,
+            provider=provider,
+            fixed_params=fixed_params,
+        )
+    finally:
+        for path in (tele_path, svm_path):
+            if os.path.exists(path):
+                os.remove(path)
 
 @app.post("/cleanup")
-async def cleanup_data():
-    """Borra todos los archivos .svm y .mat de la carpeta data."""
-    if not os.path.exists(DATA_DIR):
+async def cleanup_data(client_session_id: str = Depends(_resolve_client_session_id)):
+    """Borra archivos de telemetría/setup del cliente actual y chunks temporales."""
+    client_root = _client_root(client_session_id)
+    if not os.path.exists(client_root):
         return {"status": "ok", "message": "No data directory"}
-    
+
     deleted_count = 0
-    for root, dirs, files in os.walk(DATA_DIR):
+    for root, dirs, files in os.walk(client_root):
         for file in files:
-            if file.lower().endswith(('.mat', '.svm')):
+            if file.lower().endswith((".mat", ".csv", ".svm", ".part", ".json")):
                 try:
                     os.remove(os.path.join(root, file))
                     deleted_count += 1
                 except Exception as e:
                     print(f"Error borrando {file}: {e}")
-    
+
     # Opcionalmente borrar carpetas vacías
-    for root, dirs, files in os.walk(DATA_DIR, topdown=False):
+    for root, dirs, files in os.walk(client_root, topdown=False):
         for name in dirs:
             dir_path = os.path.join(root, name)
             if not os.listdir(dir_path):
                 os.rmdir(dir_path)
+
+    if os.path.isdir(client_root) and not os.listdir(client_root):
+        os.rmdir(client_root)
 
     return {"status": "ok", "deleted_files": deleted_count}
 

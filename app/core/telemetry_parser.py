@@ -1,6 +1,4 @@
 import pandas as pd
-import xml.etree.ElementTree as ET
-import os
 import numpy as np
 import csv
 import scipy.io
@@ -110,29 +108,29 @@ def parse_mat_file(file_path):
     try:
         # Cargar archivo .mat con estructura simplificada
         mat = scipy.io.loadmat(file_path, struct_as_record=False, squeeze_me=True)
-        
+
         channels = {}
         for key in mat.keys():
             if key.startswith('__'):
                 continue
-            
+
             # Cada entrada suele ser una mat_struct con campos 'Value', 'Time', 'Units'
             obj = mat[key]
             if hasattr(obj, 'Value'):
                 channels[key] = obj.Value
-        
+
         if not channels:
             raise ValueError("No se encontraron canales válidos en el archivo .mat")
 
         # Alinear canales (usar la longitud de 'Session_Elapsed_Time' si existe, o el máximo)
         base_col = 'Session_Elapsed_Time' if 'Session_Elapsed_Time' in channels else next(iter(channels))
         max_len = len(channels[base_col])
-        
+
         aligned = {}
         for k, v in channels.items():
             if not isinstance(v, (np.ndarray, list)):
                 continue
-            
+
             if len(v) == max_len:
                 aligned[k] = v
             else:
@@ -144,9 +142,9 @@ def parse_mat_file(file_path):
                     padded = np.full(max_len, np.nan)
                     padded[:len(v)] = v
                     aligned[k] = padded
-        
+
         df = pd.DataFrame(aligned)
-        
+
         # Renombrar canales comunes para consistencia si es necesario
         rename_map = {
             'GPS_Latitude': 'GPS Latitude',
@@ -193,7 +191,7 @@ def parse_csv_file(file_path):
             for _ in range(14):
                 next(reader, None)
             headers = next(reader, None)  # línea 15 (0-indexed 14): encabezados
-            units = next(reader, None)    # línea 16 (0-indexed 15): unidades
+            next(reader, None)             # línea 16 (0-indexed 15): unidades (skip)
 
         if not headers:
             raise ValueError("No se encontraron encabezados en el CSV.")

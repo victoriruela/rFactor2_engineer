@@ -1,14 +1,252 @@
 import streamlit as st
+import streamlit.components.v1 as components
 import requests
 import pandas as pd
-import plotly.graph_objects as go
 import numpy as np
 import scipy.io
-import io
 import os
 import json as _json
+import shutil
+import tempfile
+import uuid
 
 FIXED_PARAMS_FILE = "app/core/fixed_params.json"
+API_BASE_URL = os.environ.get("RF2_API_URL", "http://localhost:8000")
+BROWSER_API_BASE_URL = os.environ.get("RF2_BROWSER_API_BASE_URL", "/api")
+UPLOAD_CHUNK_SIZE = 64 * 1024 * 1024
+TEMP_UPLOAD_ROOT = os.path.join(tempfile.gettempdir(), "rfactor2_engineer_uploads")
+CLIENT_SESSION_COOKIE = "rf2_session_id"
+
+
+def _ensure_temp_upload_root():
+    os.makedirs(TEMP_UPLOAD_ROOT, exist_ok=True)
+    return TEMP_UPLOAD_ROOT
+
+
+def _cleanup_temp_session_files():
+    temp_dir = st.session_state.pop('temp_upload_dir', None)
+    for key in ('telemetry_temp_path', 'svm_temp_path', 'tele_name', 'svm_name', 'selected_session_id'):
+        st.session_state.pop(key, None)
+
+    if temp_dir and os.path.isdir(temp_dir):
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+def _write_uploaded_file_in_chunks(uploaded_file, target_path, chunk_size=UPLOAD_CHUNK_SIZE):
+    uploaded_file.seek(0)
+    with open(target_path, 'wb') as temp_file:
+        while True:
+            chunk = uploaded_file.read(chunk_size)
+            if not chunk:
+                break
+            temp_file.write(chunk)
+    uploaded_file.seek(0)
+
+
+def _persist_uploaded_session(telemetry_file, svm_file):
+    temp_root = _ensure_temp_upload_root()
+    session_dir = tempfile.mkdtemp(prefix=f"rf2-session-{uuid.uuid4()}-", dir=temp_root)
+
+    tele_name = os.path.basename(telemetry_file.name)
+    svm_name = os.path.basename(svm_file.name)
+    tele_path = os.path.join(session_dir, tele_name)
+    svm_path = os.path.join(session_dir, svm_name)
+
+    _write_uploaded_file_in_chunks(telemetry_file, tele_path)
+    _write_uploaded_file_in_chunks(svm_file, svm_path)
+
+    return {
+        "temp_upload_dir": session_dir,
+        "telemetry_temp_path": tele_path,
+        "svm_temp_path": svm_path,
+        "tele_name": tele_name,
+        "svm_name": svm_name,
+    }
+
+
+def _is_streamlit_mocked() -> bool:
+        return st.__class__.__module__.startswith("unittest.mock")
+
+
+def _safe_cookie_value(cookie_name):
+        try:
+                ctx = getattr(st, "context", None)
+                cookies = getattr(ctx, "cookies", None) if ctx is not None else None
+                if cookies is None:
+                        return None
+                value = cookies.get(cookie_name)
+                if isinstance(value, str) and value.strip():
+                    return value.strip()
+                return None
+        except Exception:
+                return None
+
+
+def _ensure_client_session_id():
+    existing = st.session_state.get("client_session_id")
+    if isinstance(existing, str) and existing.strip():
+        return existing
+
+        cookie_value = _safe_cookie_value(CLIENT_SESSION_COOKIE)
+        if cookie_value:
+                st.session_state["client_session_id"] = cookie_value
+                return cookie_value
+
+        generated = uuid.uuid4().hex
+        st.session_state["client_session_id"] = generated
+
+        if _is_streamlit_mocked():
+                return generated
+
+        components.html(
+                f"""
+                <script>
+                    document.cookie = "{CLIENT_SESSION_COOKIE}={generated}; path=/; max-age=31536000; SameSite=Lax";
+                    window.parent.location.reload();
+                </script>
+                """,
+                height=0,
+        )
+        st.stop()
+
+
+def _api_headers():
+        session_id = st.session_state.get("client_session_id")
+        return {"X-Client-Session-Id": session_id} if session_id else {}
+
+
+def _render_chunked_uploader():
+        session_id = st.session_state.get("client_session_id", "")
+        html = f"""
+        <div style='font-family:sans-serif;'>
+            <input id='rf2_files' type='file' multiple accept='.mat,.csv,.svm' />
+            <button id='rf2_upload_btn' style='margin-top:6px;'>Subir en chunks (64 MB)</button>
+            <pre id='rf2_upload_status' style='white-space:pre-wrap;font-size:12px;max-height:120px;overflow:auto;'></pre>
+        </div>
+        <script>
+            const apiBase = { _json.dumps(BROWSER_API_BASE_URL) };
+            const sessionId = { _json.dumps(session_id) };
+            const chunkSize = {UPLOAD_CHUNK_SIZE};
+            const statusEl = document.getElementById('rf2_upload_status');
+
+            function log(msg) {{
+                statusEl.textContent += msg + "\\n";
+                statusEl.scrollTop = statusEl.scrollHeight;
+            }}
+
+            async function uploadOne(file) {{
+                log(`Inicializando ${{file.name}}...`);
+                const initResp = await fetch(`${{apiBase}}/uploads/init`, {{
+                    method: 'POST',
+                    headers: {{
+                        'Content-Type': 'application/json',
+                        'X-Client-Session-Id': sessionId,
+                    }},
+                    body: JSON.stringify({{ filename: file.name }}),
+                    credentials: 'omit',
+                }});
+                if (!initResp.ok) throw new Error(`init failed (${{initResp.status}})`);
+                const initData = await initResp.json();
+
+                let chunkIndex = 0;
+                for (let offset = 0; offset < file.size; offset += chunkSize) {{
+                    const chunk = file.slice(offset, Math.min(offset + chunkSize, file.size));
+                    const chunkResp = await fetch(`${{apiBase}}/uploads/${{initData.upload_id}}/chunk?chunk_index=${{chunkIndex}}`, {{
+                        method: 'PUT',
+                        headers: {{
+                            'Content-Type': 'application/octet-stream',
+                            'X-Client-Session-Id': sessionId,
+                        }},
+                        body: chunk,
+                        credentials: 'omit',
+                    }});
+                    if (!chunkResp.ok) throw new Error(`chunk ${{chunkIndex}} failed (${{chunkResp.status}})`);
+                    chunkIndex += 1;
+                      log(`${{file.name}}: chunk ${{chunkIndex}} enviado`);
+                }}
+
+                const completeResp = await fetch(`${{apiBase}}/uploads/${{initData.upload_id}}/complete`, {{
+                    method: 'POST',
+                    headers: {{ 'X-Client-Session-Id': sessionId }},
+                    credentials: 'omit',
+                }});
+                if (!completeResp.ok) throw new Error(`complete failed (${{completeResp.status}})`);
+                log(`${{file.name}}: completado`);
+            }}
+
+            document.getElementById('rf2_upload_btn').addEventListener('click', async () => {{
+                statusEl.textContent = '';
+                const files = Array.from(document.getElementById('rf2_files').files || []);
+                if (!files.length) {{
+                    log('Selecciona archivos primero.');
+                    return;
+                }}
+                try {{
+                    for (const file of files) {{
+                        await uploadOne(file);
+                    }}
+                    log('Subida completada. Recargando para listar sesiones...');
+                    window.parent.location.reload();
+                }} catch (err) {{
+                    log(`Error: ${{err.message}}`);
+                }}
+            }});
+        </script>
+        """
+        components.html(html, height=190, scrolling=False)
+
+
+def _fetch_backend_sessions():
+        try:
+                response = requests.get(f"{API_BASE_URL}/sessions", headers=_api_headers(), timeout=20)
+                if response.status_code == 200:
+                        return response.json().get("sessions", [])
+        except Exception:
+                pass
+        return []
+
+
+def _download_session_file(url, target_path):
+        with requests.get(url, headers=_api_headers(), stream=True, timeout=120) as response:
+                if response.status_code != 200:
+                        raise RuntimeError(f"Download failed ({response.status_code})")
+                with open(target_path, "wb") as output:
+                        for chunk in response.iter_content(chunk_size=UPLOAD_CHUNK_SIZE):
+                                if chunk:
+                                        output.write(chunk)
+
+
+def _load_session_locally(session_entry):
+        temp_root = _ensure_temp_upload_root()
+        session_dir = tempfile.mkdtemp(prefix=f"rf2-session-{uuid.uuid4()}-", dir=temp_root)
+
+        tele_name = session_entry["telemetry"]
+        svm_name = session_entry["svm"]
+        tele_path = os.path.join(session_dir, tele_name)
+        svm_path = os.path.join(session_dir, svm_name)
+
+        session_id = session_entry["id"]
+        _download_session_file(f"{API_BASE_URL}/sessions/{session_id}/file/{tele_name}", tele_path)
+        _download_session_file(f"{API_BASE_URL}/sessions/{session_id}/file/{svm_name}", svm_path)
+
+        return {
+                "temp_upload_dir": session_dir,
+                "telemetry_temp_path": tele_path,
+                "svm_temp_path": svm_path,
+                "tele_name": tele_name,
+                "svm_name": svm_name,
+                "selected_session_id": session_id,
+                "selected_session_name": session_entry.get("display_name", session_id),
+        }
+
+
+def _post_analysis_for_session(session_id, data_form):
+        return requests.post(
+                f"{API_BASE_URL}/analyze_session",
+                data={"session_id": session_id, **data_form},
+                headers=_api_headers(),
+                timeout=0,
+        )
 
 def load_fixed_params():
     """Carga los parámetros fijados desde el archivo JSON."""
@@ -41,11 +279,10 @@ st.subheader("Análisis de Telemetría y Setup mediante IA")
 # ─────────────────────────────────────────────────────────────────────────────
 
 @st.cache_data(show_spinner=False)
-def get_mat_dataframe(file_bytes):
+def get_mat_dataframe(file_path):
     """Carga el .mat y devuelve un DataFrame ordenado por tiempo."""
     try:
-        tele_io = io.BytesIO(file_bytes)
-        mat = scipy.io.loadmat(tele_io, struct_as_record=False, squeeze_me=True)
+        mat = scipy.io.loadmat(file_path, struct_as_record=False, squeeze_me=True)
         channels = {}
         for k in mat.keys():
             if not k.startswith('__') and hasattr(mat[k], 'Value'):
@@ -55,9 +292,9 @@ def get_mat_dataframe(file_bytes):
                 else:
                     # Si es un escalar, convertir a array del mismo tamaño que los demás
                     channels[k] = val
-        
+
         df = pd.DataFrame(channels)
-        
+
         # Asegurar que los escalares se expandan
         if not df.empty:
             max_len = len(df)
@@ -109,7 +346,7 @@ def _filter_incomplete_laps_frontend(df):
         for lap in laps:
             d = df.loc[df[lap_col] == lap, dist_col].dropna()
             lap_distances[lap] = (d.max() - d.min()) if not d.empty else 0
-        
+
         # Usar el percentil 95 de las distancias para evitar que vueltas incompletas influyan mucho
         if lap_distances:
             target_dist = np.percentile(list(lap_distances.values()), 95)
@@ -135,7 +372,7 @@ def _filter_incomplete_laps_frontend(df):
         for lap in complete_laps:
             t = df.loc[df[lap_col] == lap, time_col].dropna()
             lap_durations[lap] = (t.max() - t.min()) if not t.empty else 0
-        
+
         # Filtramos solo si hay una mediana clara (más de 2 vueltas completas)
         if len(complete_laps) > 2:
             middle_laps = complete_laps[1:-1]
@@ -157,7 +394,7 @@ def _lap_xy(lap_df, x_col, y_col):
     """
     if x_col not in lap_df.columns or y_col not in lap_df.columns:
         return [], []
-    
+
     # IMPORTANTE: Los datos ya vienen ordenados por Session_Elapsed_Time desde get_mat_dataframe.
     x_arr = lap_df[x_col].values
     y_arr = lap_df[y_col].values
@@ -185,12 +422,12 @@ def _lap_xy(lap_df, x_col, y_col):
                 if abs(diff) > threshold:
                     xs.append(None)
                     ys.append(None)
-        
+
         xv = float(x_arr[i])
         yv = float(y_arr[i])
         xs.append(xv if not np.isnan(xv) else None)
         ys.append(yv if not np.isnan(yv) else None)
-    
+
     return xs, ys
 
 
@@ -228,9 +465,11 @@ def _build_lap_data(lap_df):
             if col in lap_df.columns:
                 xs, ys = _lap_xy(lap_df, x_col, col)
                 # Normalización de unidades si es necesario
-                if 'Pos' in col: ys = [v * 100 if v is not None else None for v in ys]
-                if 'Height' in col: ys = [v * 1000 if v is not None else None for v in ys]
-                
+                if 'Pos' in col:
+                    ys = [v * 100 if v is not None else None for v in ys]
+                if 'Height' in col:
+                    ys = [v * 1000 if v is not None else None for v in ys]
+
                 data['channels'][chart_id].append({
                     'name': label,
                     'x': xs,
@@ -242,10 +481,53 @@ def _build_lap_data(lap_df):
         m_xs, m_ys = _lap_xy(lap_df, 'GPS_Longitude', 'GPS_Latitude')
         # También necesitamos la distancia asociada a cada punto GPS para sincronizar
         dist_arr = lap_df[x_col].values.tolist()
+
+        # Arrays sin breaks de discontinuidad, alineados con dist_arr (mismo índice)
+        # para usarlos en el coloreado por freno/acelerador del mapa
+        raw_lon = [float(v) if not np.isnan(float(v)) else None
+                   for v in lap_df['GPS_Longitude'].values]
+        raw_lat = [float(v) if not np.isnan(float(v)) else None
+                   for v in lap_df['GPS_Latitude'].values]
+
+        # Freno y acelerador en escala 0-100 (los valores raw de MoTeC son 0-1)
+        def _to_pct(col_name):
+            if col_name not in lap_df.columns:
+                return [0.0] * len(dist_arr)
+            out = []
+            for v in lap_df[col_name].values:
+                try:
+                    fv = float(v)
+                    out.append(0.0 if np.isnan(fv) else min(100.0, max(0.0, fv * 100.0)))
+                except (TypeError, ValueError):
+                    out.append(0.0)
+            return out
+
+        brake = _to_pct('Brake_Pos')
+        throttle = _to_pct('Throttle_Pos')
+
+        # Downsample the per-point arrays to at most MAP_MAX_POINTS so that
+        # the colour-marker trace (one SVG node per active point) doesn't
+        # produce thousands of DOM nodes and cause hover lag.
+        # The smooth outline trace (lon/lat via _lap_xy) is cheap as a
+        # polyline and keeps full resolution.
+        MAP_MAX_POINTS = 1500
+        n_raw = len(dist_arr)
+        if n_raw > MAP_MAX_POINTS:
+            stride = n_raw // MAP_MAX_POINTS
+            raw_lon   = raw_lon[::stride]
+            raw_lat   = raw_lat[::stride]
+            brake     = brake[::stride]
+            throttle  = throttle[::stride]
+            dist_arr  = dist_arr[::stride]
+
         data['map'] = {
             'lon': m_xs,
             'lat': m_ys,
-            'dist': dist_arr
+            'dist': dist_arr,
+            'raw_lon': raw_lon,
+            'raw_lat': raw_lat,
+            'brake': brake,
+            'throttle': throttle,
         }
 
     return data
@@ -265,7 +547,7 @@ def precompute_all_laps(df, laps):
         all_data[lap] = _build_lap_data(lap_df)
         with progress_container.container():
             st.progress((i + 1) / total_laps, text=f"Procesando Vuelta {lap} de {laps[-1]}...")
-    
+
     progress_container.empty()
     return all_data
 
@@ -312,7 +594,7 @@ def plot_all_laps_interactive(all_lap_figs, laps, lap_options, fastest_lap):
         <div class="lap-sidebar" id="lap-sidebar"></div>
         <div class="charts-area">
             <div id="map-container"></div>
-            
+
             <div class="tabs">
                 <div class="tab active" onclick="showTab('general', this)">General</div>
                 <div class="tab" onclick="showTab('motor', this)">Motor</div>
@@ -383,9 +665,15 @@ def plot_all_laps_interactive(all_lap_figs, laps, lap_options, fastest_lap):
 
             // Update map
             if (lapData.map && mapChart) {{
+                const mc = computeMapColors(lapData.map.brake || [], lapData.map.throttle || []);
+                const ai = mc.reduce((a, c, i) => {{ if (c !== null) a.push(i); return a; }}, []);
                 Plotly.react(mapChart, [
-                    {{ x: lapData.map.lon, y: lapData.map.lat, mode: 'lines', line: {{ color: '#666', width: 2 }}, hoverinfo: 'skip' }},
-                    {{ x: [lapData.map.lon[0]], y: [lapData.map.lat[0]], mode: 'markers', marker: {{ color: 'red', size: 12, symbol: 'x' }}, name: 'Coche' }}
+                    {{ x: lapData.map.lon, y: lapData.map.lat, mode: 'lines', line: {{ color: '#444', width: 1.5 }}, hoverinfo: 'skip' }},
+                    {{ x: ai.map(i => lapData.map.raw_lon[i]), y: ai.map(i => lapData.map.raw_lat[i]),
+                       mode: 'markers', marker: {{ color: ai.map(i => mc[i]), size: 4, opacity: 0.9 }}, hoverinfo: 'skip' }},
+                    {{ x: [lapData.map.raw_lon ? lapData.map.raw_lon[0] : lapData.map.lon[0]],
+                       y: [lapData.map.raw_lat ? lapData.map.raw_lat[0] : lapData.map.lat[0]],
+                       mode: 'markers', marker: {{ color: 'white', size: 12, symbol: 'x', line: {{ color: '#ff0', width: 2 }} }}, name: 'Coche' }}
                 ], mapChart.layout, {{ displayModeBar: false, staticPlot: true }});
             }}
 
@@ -467,18 +755,55 @@ def plot_all_laps_interactive(all_lap_figs, laps, lap_options, fastest_lap):
             dragmode: false
         }};
 
+        // ── Coloreado del mapa por freno (rojo) y acelerador (azul) ──────────
+        // Mezcla: brake=100%,throttle=0% → rojo; throttle=100%,brake=0% → azul
+        // Ambos al 100% → morado. Gradiente desde blanco (0%) hasta color puro (100%).
+        // Los tramos inactivos (coast) no se pintan.
+        function computeMapColors(brake, throttle) {{
+            return brake.map(function(b, i) {{
+                var t = (throttle[i] || 0) / 100;
+                var bn = (b || 0) / 100;
+                var combined = Math.max(bn, t);
+                if (combined < 0.05) return null;          // coast: sin color
+                var total = bn + t;
+                var bFrac = total > 0 ? bn / total : 0;
+                var tFrac = 1 - bFrac;
+                // Hue objetivo: mezcla entre rojo (bFrac) y azul (tFrac)
+                var targetR = Math.round(bFrac * 255);
+                var targetB = Math.round(tFrac * 255);
+                // Interpolar desde blanco hasta el hue objetivo con 'combined' como saturación
+                var r  = Math.round(255 + combined * (targetR - 255));
+                var g  = Math.round(255 + combined * (0      - 255));
+                var bl = Math.round(255 + combined * (targetB - 255));
+                return 'rgb(' + r + ',' + g + ',' + bl + ')';
+            }});
+        }}
+
         // Map
         if (lapData.map) {{
+            // Traza 0: línea gris de fondo (contorno del circuito)
             const mapTrace = {{
                 x: lapData.map.lon, y: lapData.map.lat,
-                mode: 'lines', line: {{ color: '#666', width: 2 }}, hoverinfo: 'skip'
+                mode: 'lines', line: {{ color: '#444', width: 1.5 }}, hoverinfo: 'skip'
             }};
+            // Traza 1: marcadores coloreados (freno=rojo, acelerador=azul, mezcla=morado)
+            const mapColors = computeMapColors(lapData.map.brake || [], lapData.map.throttle || []);
+            const activeIdx = mapColors.reduce(function(a, c, i) {{ if (c !== null) a.push(i); return a; }}, []);
+            const colorTrace = {{
+                x: activeIdx.map(function(i) {{ return lapData.map.raw_lon ? lapData.map.raw_lon[i] : lapData.map.lon[i]; }}),
+                y: activeIdx.map(function(i) {{ return lapData.map.raw_lat ? lapData.map.raw_lat[i] : lapData.map.lat[i]; }}),
+                mode: 'markers',
+                marker: {{ color: activeIdx.map(function(i) {{ return mapColors[i]; }}), size: 4, opacity: 0.9 }},
+                hoverinfo: 'skip'
+            }};
+            // Traza 2: posición del coche
             const posTrace = {{
-                x: [lapData.map.lon[0]], y: [lapData.map.lat[0]],
-                mode: 'markers', marker: {{ color: 'red', size: 12, symbol: 'x' }}, name: 'Coche'
+                x: [lapData.map.raw_lon ? lapData.map.raw_lon[0] : lapData.map.lon[0]],
+                y: [lapData.map.raw_lat ? lapData.map.raw_lat[0] : lapData.map.lat[0]],
+                mode: 'markers', marker: {{ color: 'white', size: 12, symbol: 'x', line: {{ color: '#ff0', width: 2 }} }}, name: 'Coche'
             }};
             mapChart = document.getElementById('map-container');
-            Plotly.newPlot(mapChart, [mapTrace, posTrace], {{
+            Plotly.newPlot(mapChart, [mapTrace, colorTrace, posTrace], {{
                 template: "plotly_dark",
                 paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: 'rgba(0,0,0,0)',
                 height: 250,
@@ -637,10 +962,12 @@ def plot_all_laps_interactive(all_lap_figs, laps, lap_options, fastest_lap):
 
             if (mapChart && lapData.map && mapDistSorted) {{
                 const idx = findClosestMapIdx(x);
+                const posLon = lapData.map.raw_lon ? lapData.map.raw_lon[idx] : lapData.map.lon[idx];
+                const posLat = lapData.map.raw_lat ? lapData.map.raw_lat[idx] : lapData.map.lat[idx];
                 Plotly.restyle(mapChart, {{
-                    x: [[lapData.map.lon[idx]]],
-                    y: [[lapData.map.lat[idx]]]
-                }}, [1]);
+                    x: [[posLon]],
+                    y: [[posLat]]
+                }}, [2]);
             }}
         }}
         // Keep lap sidebar visible by tracking parent scroll
@@ -689,11 +1016,14 @@ def plot_all_laps_interactive(all_lap_figs, laps, lap_options, fastest_lap):
     components.html(html_code, height=total_height, scrolling=False)
 
 
-def parse_svm_content(file_bytes):
+def parse_svm_content(file_path):
     setup = {}
     # Intentar decodificar con diferentes codificaciones
     content = None
-    
+
+    with open(file_path, 'rb') as file_handle:
+        file_bytes = file_handle.read()
+
     # Heurística para UTF-16 con BOM
     if file_bytes.startswith((b'\xff\xfe', b'\xfe\xff')):
         try:
@@ -716,13 +1046,14 @@ def parse_svm_content(file_bytes):
     current_section = None
     for line in content.splitlines():
         line = line.strip()
-        if not line: continue
-        
+        if not line:
+            continue
+
         # Detectar sección [SECCION]
         if '[' in line and ']' in line:
             # Ignorar si es un comentario que no parece sección
-            if line.startswith('//') and not ('[' in line[0:5]): # Heurística simple
-                pass 
+            if line.startswith('//') and '[' not in line[0:5]: # Heurística simple
+                pass
             else:
                 try:
                     start = line.index('[') + 1
@@ -740,7 +1071,7 @@ def parse_svm_content(file_bytes):
             clean_line = line
             if clean_line.startswith('//'):
                 clean_line = clean_line[2:].strip()
-            
+
             if '=' in clean_line:
                 k, v = clean_line.split('=', 1)
                 key = k.strip()
@@ -752,8 +1083,8 @@ def parse_svm_content(file_bytes):
 def cleanup_server_data():
     """Llama al endpoint de limpieza del backend."""
     try:
-        requests.post("http://localhost:8000/cleanup", timeout=5)
-    except:
+        requests.post(f"{API_BASE_URL}/cleanup", headers=_api_headers(), timeout=10)
+    except Exception:
         pass
 
 
@@ -762,7 +1093,9 @@ def cleanup_server_data():
 # ─────────────────────────────────────────────────────────────────────────────
 with st.sidebar:
     st.header("Carga de Datos")
-    
+
+    _ensure_client_session_id()
+
     # Estado para controlar si hay una sesión activa y analizada
     is_analyzed = 'ai_analysis_data' in st.session_state
 
@@ -774,76 +1107,65 @@ with st.sidebar:
     if 'selected_session_name' not in st.session_state:
         st.session_state['selected_session_name'] = None
 
-    tele_to_send = None
-    svm_to_send = None
+    tele_path = None
+    svm_path = None
     tele_name = None
     svm_name = None
 
     # Lógica de visualización de la barra lateral
     if not st.session_state['selected_session_name']:
-        # ESTADO 1: No hay archivos cargados
-        uploaded_files = st.file_uploader(
-            "Sube archivos .mat y .svm", type=["mat", "svm", "csv"],
-            accept_multiple_files=True
-        )
-        if uploaded_files:
-            sessions = {}
-            for f in uploaded_files:
-                base_name = f.name.rsplit('.', 1)[0]
-                ext = f.name.rsplit('.', 1)[1].lower()
-                if base_name not in sessions:
-                    sessions[base_name] = {}
-                sessions[base_name][ext] = f
+        # ESTADO 1: Subida chunked directa browser -> API (64 MB por petición)
+        st.caption("Subida robusta para Cloudflare: el navegador envía chunks de 64 MB a la API.")
+        _render_chunked_uploader()
 
-            valid_sessions = [
-                name for name, files in sessions.items()
-                if ("mat" in files or "csv" in files) and "svm" in files
-            ]
-            if valid_sessions:
-                selected_label = st.selectbox("Selecciona sesión subida", valid_sessions)
-                if st.button("Cargar sesión"):
-                    ext_found = "mat" if "mat" in sessions[selected_label] else "csv"
-                    tele_obj = sessions[selected_label][ext_found]
-                    svm_obj = sessions[selected_label]["svm"]
-                    
-                    # Guardar en session_state para persistencia entre reruns
-                    st.session_state['tele_to_send'] = tele_obj.getvalue()
-                    st.session_state['svm_to_send'] = svm_obj.getvalue()
-                    st.session_state['tele_name'] = tele_obj.name
-                    st.session_state['svm_name'] = svm_obj.name
-                    st.session_state['selected_session_name'] = selected_label
+        available_sessions = _fetch_backend_sessions()
+        if available_sessions:
+            labels = [s.get("display_name", s["id"]) for s in available_sessions]
+            selected_label = st.selectbox("Selecciona sesión subida", labels)
+
+            if st.button("Cargar sesión"):
+                selected_entry = next(
+                    (s for s in available_sessions if s.get("display_name", s["id"]) == selected_label),
+                    None,
+                )
+                if selected_entry is not None:
+                    _cleanup_temp_session_files()
+                    st.session_state.update(_load_session_locally(selected_entry))
                     st.rerun()
+        else:
+            st.info("No hay sesiones completas en el backend todavía. Sube .mat/.csv + .svm.")
     else:
         # ESTADO 2 o 3: Sesión cargada (con o sin análisis)
         st.info(f"Sesión activa: **{st.session_state['selected_session_name']}**")
-        
+
         # Botón Nueva sesión (siempre presente si hay algo cargado)
         if st.button("🆕 Nueva sesión", use_container_width=True):
             # 1. Limpiar datos en servidor
             cleanup_server_data()
-            
+
             # 2. Limpiar estado y recargar
+            _cleanup_temp_session_files()
             st.session_state.clear()
             st.rerun()
 
     # Recuperar datos de la sesión si existen
     if st.session_state.get('selected_session_name'):
-        tele_to_send = st.session_state.get('tele_to_send')
-        svm_to_send = st.session_state.get('svm_to_send')
+        tele_path = st.session_state.get('telemetry_temp_path')
+        svm_path = st.session_state.get('svm_temp_path')
         tele_name = st.session_state.get('tele_name')
         svm_name = st.session_state.get('svm_name')
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Contenido principal
 # ─────────────────────────────────────────────────────────────────────────────
-if tele_to_send and svm_to_send:
+if tele_path and svm_path:
     if tele_name.endswith('.mat'):
         # 1. Cargar DataFrame (cacheado)
-        df_local = get_mat_dataframe(tele_to_send)
+        df_local = get_mat_dataframe(tele_path)
 
         if df_local is not None and 'Lap_Number' in df_local.columns:
             laps = sorted([int(l) for l in df_local['Lap_Number'].unique() if l > 0])
-            
+
             if laps:
                 # 2. Pre-generar gráficos (cacheado como recurso)
                 # La clave del cache es el hash del contenido del archivo y la lista de vueltas
@@ -892,7 +1214,7 @@ if tele_to_send and svm_to_send:
 
                 with main_tab_setup:
                     st.header("Configuración del Coche (.svm)")
-                    
+
                     # Inicializar estado temporal de edición si no existe
                     if 'temp_fixed_params' not in st.session_state:
                         st.session_state['temp_fixed_params'] = st.session_state['fixed_params'].copy()
@@ -905,7 +1227,7 @@ if tele_to_send and svm_to_send:
                                 return parts[1].strip()
                         return val_str.strip()
 
-                    setup_data = parse_svm_content(svm_to_send)
+                    setup_data = parse_svm_content(svm_path)
                     # Cargar mapping para nombres amigables
                     _mapping_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "app", "core", "param_mapping.json")
                     _mapping = {"sections": {}, "parameters": {}}
@@ -937,7 +1259,7 @@ if tele_to_send and svm_to_send:
                                     friendly_param = _mapping.get("parameters", {}).get(k, k)
                                     if k in ("VehicleClassSetting", "UpgradeSetting"):
                                         continue
-                                    
+
                                     if friendly_param.startswith("Ajuste de Chasis") or k.startswith("ChassisAdj"):
                                         continue
 
@@ -952,7 +1274,7 @@ if tele_to_send and svm_to_send:
                                         "Valor": clean_v,
                                         "_internal_key": k
                                     })
-                                
+
                                 if rows:
                                     # Guardar filas para referencia al procesar el formulario
                                     st.session_state[f"rows_{section}"] = rows
@@ -978,7 +1300,7 @@ if tele_to_send and svm_to_send:
                         if submitted:
                             # Procesar todos los editores al enviar el formulario
                             new_fixed = st.session_state['fixed_params'].copy()
-                            
+
                             # Recorrer todas las secciones cargadas
                             for section in setup_data.keys():
                                 editor_key = f"editor_{section}"
@@ -987,7 +1309,7 @@ if tele_to_send and svm_to_send:
                                     changes = st.session_state[editor_key]
                                     rows = st.session_state[rows_key]
                                     edited_rows = changes.get("edited_rows", {})
-                                    
+
                                     # Actualizar basándose en los cambios manuales en el editor
                                     for idx_str, change in edited_rows.items():
                                         idx = int(idx_str)
@@ -998,13 +1320,13 @@ if tele_to_send and svm_to_send:
                                                     new_fixed.add(internal_key)
                                                 else:
                                                     new_fixed.discard(internal_key)
-                            
+
                             st.session_state['fixed_params'] = new_fixed
                             st.session_state['temp_fixed_params'] = new_fixed.copy()
                             if save_fixed_params(new_fixed):
                                 st.success("¡Parámetros guardados correctamente!")
                                 st.rerun()
-                        
+
                         # Si no hay filas en ninguna sección, mostrar mensaje
                         has_any_rows = any(len(params) > 0 for section, params in setup_data.items() if section.upper() not in ("LEFTFENDER", "RIGHTFENDER"))
                         if not has_any_rows:
@@ -1013,35 +1335,48 @@ if tele_to_send and svm_to_send:
                 with main_tab_ai:
                     st.header("Análisis de Ingeniero Virtual")
 
-                    try:
-                        models_resp = requests.get("http://localhost:8000/models", timeout=2)
-                        available_models = (
-                            models_resp.json().get("models", [])
-                            if models_resp.status_code == 200 else []
-                        )
-                    except Exception:
-                        available_models = []
+                    provider_options = {
+                        "Ollama (local)": "ollama",
+                        "Jimmy API": "jimmy",
+                    }
+                    provider_label = st.selectbox("Proveedor LLM", list(provider_options.keys()))
+                    sel_provider = provider_options[provider_label]
 
-                    sel_model = st.selectbox("Modelo LLM", available_models) if available_models else None
+                    sel_model = None
+                    if sel_provider == "ollama":
+                        try:
+                            models_resp = requests.get(f"{API_BASE_URL}/models", headers=_api_headers(), timeout=2)
+                            available_models = (
+                                models_resp.json().get("models", [])
+                                if models_resp.status_code == 200 else []
+                            )
+                        except Exception:
+                            available_models = []
+
+                        if available_models:
+                            sel_model = st.selectbox("Modelo LLM", available_models)
+                        else:
+                            st.warning("No se pudieron obtener modelos de Ollama. Se usará el modelo por defecto del backend.")
+                    else:
+                        sel_model = "llama3.1-8B"
+                        st.caption("Modelo Jimmy seleccionado: llama3.1-8B")
+
                     analyze_button = st.button("🚀 Iniciar Análisis con IA")
 
                     if analyze_button:
                         with st.spinner("Analizando con IA…"):
-                            files = {
-                                "telemetry_file": (tele_name, tele_to_send),
-                                "svm_file": (svm_name, svm_to_send),
-                            }
                             data_form = {}
+                            data_form["provider"] = sel_provider
                             if sel_model:
                                 data_form["model"] = sel_model
-                            
+
                             # Enviar lista de parámetros fijados
                             if 'fixed_params' in st.session_state and st.session_state['fixed_params']:
                                 data_form["fixed_params"] = _json.dumps(list(st.session_state['fixed_params']))
-                            
-                            response = requests.post(
-                                "http://localhost:8000/analyze",
-                                files=files, data=data_form
+
+                            response = _post_analysis_for_session(
+                                st.session_state.get("selected_session_id", st.session_state['selected_session_name']),
+                                data_form,
                             )
                             if response.status_code == 200:
                                 data = response.json()
@@ -1049,15 +1384,21 @@ if tele_to_send and svm_to_send:
                                 st.session_state['ai_analysis_data'] = data
                                 st.session_state['ai_telemetry_summary'] = data.get('telemetry_summary_sent', '')
                                 st.session_state['ai_circuit_name'] = tele_name.split('-')[-2].strip() if '-' in tele_name else "Desconocido"
-                                st.session_state['ai_model'] = sel_model
+                                backend_provider = data.get("llm_provider") or sel_provider
+                                backend_model = data.get("llm_model") or sel_model or "default"
+                                st.session_state['ai_model'] = f"{backend_provider} / {backend_model}"
                                 # Parsear setup_data del .svm para re-análisis
-                                st.session_state['ai_setup_data'] = parse_svm_content(svm_to_send)
+                                st.session_state['ai_setup_data'] = parse_svm_content(svm_path)
                             else:
-                                st.error("Error en el análisis.")
+                                st.error(f"Error en el análisis ({response.status_code}).")
 
                     # Mostrar resultados (persistentes en session_state)
                     if 'ai_analysis_data' in st.session_state:
                         data = st.session_state['ai_analysis_data']
+
+                        llm_provider_used = data.get("llm_provider", "desconocido")
+                        llm_model_used = data.get("llm_model", "desconocido")
+                        st.caption(f"Proveedor/modelo usado en backend: {llm_provider_used} / {llm_model_used}")
 
                         # ── Análisis del Ingeniero de Conducción ──
                         st.subheader("🏁 Análisis del Ingeniero de Conducción")
@@ -1103,16 +1444,15 @@ if tele_to_send and svm_to_send:
         st.info("La visualización detallada actualmente solo soporta archivos .mat.")
         if st.button("Analizar con IA"):
             with st.spinner("Analizando con IA…"):
-                files = {
-                    "telemetry_file": (tele_name, tele_to_send),
-                    "svm_file": (svm_name, svm_to_send),
-                }
-                response = requests.post("http://localhost:8000/analyze", files=files)
+                response = _post_analysis_for_session(
+                    st.session_state.get("selected_session_id", st.session_state['selected_session_name']),
+                    {},
+                )
                 if response.status_code == 200:
                     data = response.json()
                     st.success("Análisis completado")
                     st.write(data['driving_analysis'])
                 else:
-                    st.error("Error en el análisis.")
+                    st.error(f"Error en el análisis ({response.status_code}).")
 else:
     st.info("👋 Sube tus archivos o elige una sesión anterior en la barra lateral para comenzar.")
