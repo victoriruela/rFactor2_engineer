@@ -55,14 +55,11 @@ function Split-Version {
 }
 
 function Get-LatestStableTag {
-    $stable = git tag | Where-Object { $_ -match '^v\d+\.\d+\.\d+$' } | Sort-Object {
-        $v = $_.TrimStart('v').Split('.')
-        [int]$v[0] * 1000000 + [int]$v[1] * 1000 + [int]$v[2]
-    }
-    if (-not $stable) {
+    $latest = git tag --list "v[0-9]*.[0-9]*.[0-9]*" --sort=-version:refname | Select-Object -First 1
+    if ([string]::IsNullOrWhiteSpace($latest)) {
         return "v0.0.0"
     }
-    return $stable[-1]
+    return $latest.Trim()
 }
 
 function Get-NextVersion {
@@ -185,6 +182,11 @@ Assert-LastExit -Step "git fetch"
 $latestStableTag = Get-LatestStableTag
 $releaseTag = Get-NextVersion -CurrentTag $latestStableTag -BumpType $VersionBump
 $rcTag = Get-NextRcTag -ReleaseTag $releaseTag
+
+$existingReleaseTag = git tag --list $releaseTag
+if (-not [string]::IsNullOrWhiteSpace($existingReleaseTag)) {
+    throw "Release tag '$releaseTag' already exists. Bump version or remove the conflicting tag."
+}
 
 $currentBranch = git branch --show-current
 Assert-LastExit -Step "git branch --show-current"
