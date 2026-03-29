@@ -403,13 +403,59 @@ async def analyze_telemetry(
         summary += f"DATOS DETALLADOS DE TELEMETRÍA (submuestreados, ~50 puntos por vuelta, {len(key_columns)} canales):\n"
         summary += telemetry_csv_for_ai
 
+        # Resumen de telemetría exclusivo para el agente de conducción:
+        # solo throttle, freno, dirección, RPM y marcha (técnica de pilotaje)
+        def _is_driving_col(col_name):
+            c = col_name.lower()
+            return (
+                ('lap' in c and ('number' in c or 'dist' in c)) or
+                'throttle' in c or
+                ('brake' in c and 'pos' in c) or
+                'steer' in c or
+                'rpm' in c or
+                c == 'gear' or
+                (c.startswith('gear') and 'setting' not in c)
+            )
+
+        driving_cols = [c for c in telemetry_df.columns if _is_driving_col(c)]
+        driving_for_ai_parts = []
+        for lap_num in lap_numbers:
+            if lap_col in telemetry_df.columns:
+                lap_df_drv = telemetry_df[telemetry_df[lap_col] == lap_num]
+            else:
+                lap_df_drv = telemetry_df
+            if lap_df_drv.empty or not driving_cols:
+                continue
+            step_drv = max(1, len(lap_df_drv) // 50)
+            sampled_drv = lap_df_drv[driving_cols].iloc[::step_drv].copy()
+            sampled_drv.insert(0, 'Vuelta', int(lap_num))
+            driving_for_ai_parts.append(sampled_drv)
+
+        if driving_for_ai_parts:
+            driving_for_ai_df = pd.concat(driving_for_ai_parts, ignore_index=True)
+            drv_buf = io.StringIO()
+            driving_for_ai_df.to_csv(drv_buf, index=False, float_format='%.2f')
+            driving_csv = drv_buf.getvalue()
+        else:
+            driving_csv = "No hay datos de telemetría de conducción disponibles."
+
+        driving_summary = f"CIRCUITO: {circuit_name}\n"
+        driving_summary += f"ESTADÍSTICAS SESIÓN: {json.dumps(session_stats)}\n"
+        driving_summary += "DATOS POR VUELTA (resumen): " + "\n".join(lap_summaries) + "\n\n"
+        driving_summary += (
+            f"TELEMETRÍA DE CONDUCCIÓN (throttle, freno, dirección, RPM, marcha "
+            f"— ~50 puntos por vuelta, {len(driving_cols)} canales):\n"
+        )
+        driving_summary += driving_csv
+
         # Llamada asíncrona al análisis multi-agente
         ai_result = await ai_engineer.analyze(
             summary, setup_dict,
             circuit_name=circuit_name,
             session_stats=session_stats,
             model_tag=model or None,
-            fixed_params=fixed_params_list
+            fixed_params=fixed_params_list,
+            driving_telemetry_summary=driving_summary,
         )
 
         # 4. Generar puntos de interés en el mapa

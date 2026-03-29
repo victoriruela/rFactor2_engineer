@@ -277,3 +277,86 @@ class TestAnalyze:
         assert "full_setup" in result
         assert "agent_reports" in result
         assert "chief_reasoning" in result
+
+    @pytest.mark.asyncio
+    async def test_accepts_driving_telemetry_summary_kwarg(self, ai, mocker):
+        """analyze() must accept driving_telemetry_summary without raising."""
+        mocker.patch.object(ai, "update_mappings", new=AsyncMock())
+        mocker.patch.object(ai, "_get_json_from_llm", new=AsyncMock(return_value={
+            "items": [], "summary": ".", "full_setup": {"sections": []}, "chief_reasoning": "."
+        }))
+        fake_chain = MagicMock()
+        fake_chain.ainvoke = AsyncMock(return_value="Análisis.")
+        with patch("app.core.ai_agents.PromptTemplate") as mock_pt:
+            mock_pt.from_template.return_value.__or__ = MagicMock(return_value=fake_chain)
+            result = await ai.analyze(
+                telemetry_summary="FULL telemetry",
+                setup_data=self.SETUP,
+                driving_telemetry_summary="DRIVING ONLY telemetry",
+            )
+        assert "driving_analysis" in result
+
+
+# ---------------------------------------------------------------------------
+# TestAnalyzeDrivingTelemetryFilter — driving_telemetry_summary routing
+# ---------------------------------------------------------------------------
+
+class TestAnalyzeDrivingTelemetryFilter:
+    """Verify that driving_telemetry_summary overrides the full summary for the driving agent."""
+
+    SETUP = {"GENERAL": {"FuelSetting": "50//L"}}
+
+    def _make_capturing_chain(self, captured: dict):
+        """Return a fake LangChain chain that captures ainvoke inputs."""
+        async def capture_invoke(inputs):
+            captured.update(inputs)
+            return "Análisis."
+
+        fake_chain = MagicMock()
+        fake_chain.ainvoke = AsyncMock(side_effect=capture_invoke)
+        # prompt | llm | parser: each | step must keep returning fake_chain
+        fake_chain.__or__ = MagicMock(return_value=fake_chain)
+        return fake_chain
+
+    @pytest.mark.asyncio
+    async def test_driving_summary_sent_to_driving_prompt(self, ai, mocker):
+        """When driving_telemetry_summary is provided, it is used in the DRIVING_PROMPT invocation."""
+        captured = {}
+        fake_chain = self._make_capturing_chain(captured)
+
+        mocker.patch.object(ai, "update_mappings", new=AsyncMock())
+        mocker.patch.object(ai, "_get_json_from_llm", new=AsyncMock(return_value={
+            "items": [], "summary": ".", "full_setup": {"sections": []}, "chief_reasoning": "."
+        }))
+
+        with patch("app.core.ai_agents.PromptTemplate") as mock_pt:
+            mock_pt.from_template.return_value.__or__ = MagicMock(return_value=fake_chain)
+            await ai.analyze(
+                telemetry_summary="FULL telemetry",
+                setup_data=self.SETUP,
+                driving_telemetry_summary="DRIVING ONLY telemetry",
+            )
+
+        assert captured.get("telemetry_summary") == "DRIVING ONLY telemetry"
+
+    @pytest.mark.asyncio
+    async def test_full_summary_used_when_driving_summary_is_none(self, ai, mocker):
+        """When driving_telemetry_summary is omitted, the full telemetry_summary is used."""
+        captured = {}
+        fake_chain = self._make_capturing_chain(captured)
+
+        mocker.patch.object(ai, "update_mappings", new=AsyncMock())
+        mocker.patch.object(ai, "_get_json_from_llm", new=AsyncMock(return_value={
+            "items": [], "summary": ".", "full_setup": {"sections": []}, "chief_reasoning": "."
+        }))
+
+        with patch("app.core.ai_agents.PromptTemplate") as mock_pt:
+            mock_pt.from_template.return_value.__or__ = MagicMock(return_value=fake_chain)
+            await ai.analyze(
+                telemetry_summary="FULL telemetry",
+                setup_data=self.SETUP,
+                # driving_telemetry_summary NOT passed → defaults to None
+            )
+
+        assert captured.get("telemetry_summary") == "FULL telemetry"
+

@@ -244,10 +244,35 @@ def _build_lap_data(lap_df):
         m_xs, m_ys = _lap_xy(lap_df, 'GPS_Longitude', 'GPS_Latitude')
         # También necesitamos la distancia asociada a cada punto GPS para sincronizar
         dist_arr = lap_df[x_col].values.tolist()
+
+        # Arrays sin breaks de discontinuidad, alineados con dist_arr (mismo índice)
+        # para usarlos en el coloreado por freno/acelerador del mapa
+        raw_lon = [float(v) if not np.isnan(float(v)) else None
+                   for v in lap_df['GPS_Longitude'].values]
+        raw_lat = [float(v) if not np.isnan(float(v)) else None
+                   for v in lap_df['GPS_Latitude'].values]
+
+        # Freno y acelerador en escala 0-100 (los valores raw de MoTeC son 0-1)
+        def _to_pct(col_name):
+            if col_name not in lap_df.columns:
+                return [0.0] * len(dist_arr)
+            out = []
+            for v in lap_df[col_name].values:
+                try:
+                    fv = float(v)
+                    out.append(0.0 if np.isnan(fv) else min(100.0, max(0.0, fv * 100.0)))
+                except (TypeError, ValueError):
+                    out.append(0.0)
+            return out
+
         data['map'] = {
             'lon': m_xs,
             'lat': m_ys,
-            'dist': dist_arr
+            'dist': dist_arr,
+            'raw_lon': raw_lon,
+            'raw_lat': raw_lat,
+            'brake': _to_pct('Brake_Pos'),
+            'throttle': _to_pct('Throttle_Pos'),
         }
 
     return data
@@ -385,9 +410,15 @@ def plot_all_laps_interactive(all_lap_figs, laps, lap_options, fastest_lap):
 
             // Update map
             if (lapData.map && mapChart) {{
+                const mc = computeMapColors(lapData.map.brake || [], lapData.map.throttle || []);
+                const ai = mc.reduce((a, c, i) => {{ if (c !== null) a.push(i); return a; }}, []);
                 Plotly.react(mapChart, [
-                    {{ x: lapData.map.lon, y: lapData.map.lat, mode: 'lines', line: {{ color: '#666', width: 2 }}, hoverinfo: 'skip' }},
-                    {{ x: [lapData.map.lon[0]], y: [lapData.map.lat[0]], mode: 'markers', marker: {{ color: 'red', size: 12, symbol: 'x' }}, name: 'Coche' }}
+                    {{ x: lapData.map.lon, y: lapData.map.lat, mode: 'lines', line: {{ color: '#444', width: 1.5 }}, hoverinfo: 'skip' }},
+                    {{ x: ai.map(i => lapData.map.raw_lon[i]), y: ai.map(i => lapData.map.raw_lat[i]),
+                       mode: 'markers', marker: {{ color: ai.map(i => mc[i]), size: 4, opacity: 0.9 }}, hoverinfo: 'skip' }},
+                    {{ x: [lapData.map.raw_lon ? lapData.map.raw_lon[0] : lapData.map.lon[0]],
+                       y: [lapData.map.raw_lat ? lapData.map.raw_lat[0] : lapData.map.lat[0]],
+                       mode: 'markers', marker: {{ color: 'white', size: 12, symbol: 'x', line: {{ color: '#ff0', width: 2 }} }}, name: 'Coche' }}
                 ], mapChart.layout, {{ displayModeBar: false, staticPlot: true }});
             }}
 
@@ -469,18 +500,55 @@ def plot_all_laps_interactive(all_lap_figs, laps, lap_options, fastest_lap):
             dragmode: false
         }};
 
+        // ── Coloreado del mapa por freno (rojo) y acelerador (azul) ──────────
+        // Mezcla: brake=100%,throttle=0% → rojo; throttle=100%,brake=0% → azul
+        // Ambos al 100% → morado. Gradiente desde blanco (0%) hasta color puro (100%).
+        // Los tramos inactivos (coast) no se pintan.
+        function computeMapColors(brake, throttle) {{
+            return brake.map(function(b, i) {{
+                var t = (throttle[i] || 0) / 100;
+                var bn = (b || 0) / 100;
+                var combined = Math.max(bn, t);
+                if (combined < 0.05) return null;          // coast: sin color
+                var total = bn + t;
+                var bFrac = total > 0 ? bn / total : 0;
+                var tFrac = 1 - bFrac;
+                // Hue objetivo: mezcla entre rojo (bFrac) y azul (tFrac)
+                var targetR = Math.round(bFrac * 255);
+                var targetB = Math.round(tFrac * 255);
+                // Interpolar desde blanco hasta el hue objetivo con 'combined' como saturación
+                var r  = Math.round(255 + combined * (targetR - 255));
+                var g  = Math.round(255 + combined * (0      - 255));
+                var bl = Math.round(255 + combined * (targetB - 255));
+                return 'rgb(' + r + ',' + g + ',' + bl + ')';
+            }});
+        }}
+
         // Map
         if (lapData.map) {{
+            // Traza 0: línea gris de fondo (contorno del circuito)
             const mapTrace = {{
                 x: lapData.map.lon, y: lapData.map.lat,
-                mode: 'lines', line: {{ color: '#666', width: 2 }}, hoverinfo: 'skip'
+                mode: 'lines', line: {{ color: '#444', width: 1.5 }}, hoverinfo: 'skip'
             }};
+            // Traza 1: marcadores coloreados (freno=rojo, acelerador=azul, mezcla=morado)
+            const mapColors = computeMapColors(lapData.map.brake || [], lapData.map.throttle || []);
+            const activeIdx = mapColors.reduce(function(a, c, i) {{ if (c !== null) a.push(i); return a; }}, []);
+            const colorTrace = {{
+                x: activeIdx.map(function(i) {{ return lapData.map.raw_lon ? lapData.map.raw_lon[i] : lapData.map.lon[i]; }}),
+                y: activeIdx.map(function(i) {{ return lapData.map.raw_lat ? lapData.map.raw_lat[i] : lapData.map.lat[i]; }}),
+                mode: 'markers',
+                marker: {{ color: activeIdx.map(function(i) {{ return mapColors[i]; }}), size: 4, opacity: 0.9 }},
+                hoverinfo: 'skip'
+            }};
+            // Traza 2: posición del coche
             const posTrace = {{
-                x: [lapData.map.lon[0]], y: [lapData.map.lat[0]],
-                mode: 'markers', marker: {{ color: 'red', size: 12, symbol: 'x' }}, name: 'Coche'
+                x: [lapData.map.raw_lon ? lapData.map.raw_lon[0] : lapData.map.lon[0]],
+                y: [lapData.map.raw_lat ? lapData.map.raw_lat[0] : lapData.map.lat[0]],
+                mode: 'markers', marker: {{ color: 'white', size: 12, symbol: 'x', line: {{ color: '#ff0', width: 2 }} }}, name: 'Coche'
             }};
             mapChart = document.getElementById('map-container');
-            Plotly.newPlot(mapChart, [mapTrace, posTrace], {{
+            Plotly.newPlot(mapChart, [mapTrace, colorTrace, posTrace], {{
                 template: "plotly_dark",
                 paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: 'rgba(0,0,0,0)',
                 height: 250,
@@ -639,10 +707,12 @@ def plot_all_laps_interactive(all_lap_figs, laps, lap_options, fastest_lap):
 
             if (mapChart && lapData.map && mapDistSorted) {{
                 const idx = findClosestMapIdx(x);
+                const posLon = lapData.map.raw_lon ? lapData.map.raw_lon[idx] : lapData.map.lon[idx];
+                const posLat = lapData.map.raw_lat ? lapData.map.raw_lat[idx] : lapData.map.lat[idx];
                 Plotly.restyle(mapChart, {{
-                    x: [[lapData.map.lon[idx]]],
-                    y: [[lapData.map.lat[idx]]]
-                }}, [1]);
+                    x: [[posLon]],
+                    y: [[posLat]]
+                }}, [2]);
             }}
         }}
         // Keep lap sidebar visible by tracking parent scroll

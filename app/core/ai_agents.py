@@ -427,7 +427,7 @@ class AIAngineer:
 
         return full_setup_recommendations
 
-    async def analyze(self, telemetry_summary, setup_data, circuit_name="Desconocido", session_stats=None, model_tag=None, fixed_params=None):
+    async def analyze(self, telemetry_summary, setup_data, circuit_name="Desconocido", session_stats=None, model_tag=None, fixed_params=None, driving_telemetry_summary=None):
         if self.llm is None or (model_tag and getattr(self, '_current_model', None) != model_tag):
             print("Inicializando LLM...")
             self._init_llm(model_tag)
@@ -449,11 +449,13 @@ class AIAngineer:
         await self.update_mappings(setup_data)
 
         # 2. Análisis de Conducción
+        # Usar resumen filtrado (solo canales de técnica de pilotaje) si está disponible
+        driving_input = driving_telemetry_summary if driving_telemetry_summary is not None else telemetry_summary
         driving_prompt = PromptTemplate.from_template(DRIVING_PROMPT)
         driving_chain = driving_prompt | self.llm | self.output_parser
         try:
             driving_analysis = await driving_chain.ainvoke({
-                "telemetry_summary": telemetry_summary,
+                "telemetry_summary": driving_input,
                 "session_stats": json.dumps(session_stats or {}, indent=2)
             })
             print(f"[DEBUG driving_analysis] {repr(driving_analysis[:300])}")

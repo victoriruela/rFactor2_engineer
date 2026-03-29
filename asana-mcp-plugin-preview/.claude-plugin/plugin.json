@@ -1,0 +1,5 @@
+{
+  "name": "asana-mcp",
+  "version": "1.0.0",
+  "description": "Asana MCP integration with OAuth2 authentication, token management, and mcp.json configuration"
+}

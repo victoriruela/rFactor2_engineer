@@ -208,3 +208,26 @@ class TestAnalyze:
             },
         )
         assert r.status_code in (400, 500)
+
+    def test_analyze_passes_driving_telemetry_summary(self, mocker):
+        """Endpoint builds a filtered driving_telemetry_summary and passes it to analyze()."""
+        mock_analyze = AsyncMock(return_value=_minimal_ai_result())
+        mocker.patch("app.main.ai_engineer.analyze", new=mock_analyze)
+        r = client.post(
+            "/analyze",
+            files={
+                "telemetry_file": ("session.csv", self._csv_bytes, "text/csv"),
+                "svm_file": ("car.svm", self._svm_bytes, "text/plain"),
+            },
+        )
+        assert r.status_code == 200
+        call_kwargs = mock_analyze.call_args.kwargs
+        assert "driving_telemetry_summary" in call_kwargs, (
+            "analyze() must be called with driving_telemetry_summary kwarg"
+        )
+        driving_summary = call_kwargs["driving_telemetry_summary"]
+        assert driving_summary is not None
+        assert isinstance(driving_summary, str)
+        assert len(driving_summary) > 0
+
+
