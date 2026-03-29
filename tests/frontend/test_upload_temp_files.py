@@ -4,6 +4,8 @@ from pathlib import Path
 from unittest.mock import MagicMock
 from unittest.mock import sentinel
 
+import pytest
+
 
 _st_mock = MagicMock()
 _st_mock.session_state = {}
@@ -111,3 +113,47 @@ def test_post_analysis_for_session_uses_long_running_timeout(mocker):
         headers={"X-Client-Session-Id": "abc12345XYZ"},
         timeout=streamlit_app.ANALYSIS_REQUEST_TIMEOUT,
     )
+
+
+def test_post_analysis_with_local_files_uses_analyze_endpoint(tmp_path, mocker):
+    tele_path = tmp_path / "sample.mat"
+    svm_path = tmp_path / "sample.svm"
+    tele_path.write_bytes(b"tele")
+    svm_path.write_bytes(b"svm")
+
+    streamlit_app.st.session_state.clear()
+    streamlit_app.st.session_state.update(
+        {
+            "client_session_id": "abc12345XYZ",
+            "telemetry_temp_path": str(tele_path),
+            "svm_temp_path": str(svm_path),
+            "tele_name": "sample.mat",
+            "svm_name": "sample.svm",
+        }
+    )
+    mock_post = mocker.patch("frontend.streamlit_app.requests.post", return_value=sentinel.response)
+
+    response = streamlit_app._post_analysis_with_local_files({"provider": "jimmy"})
+
+    assert response is sentinel.response
+    mock_post.assert_called_once()
+    _, kwargs = mock_post.call_args
+    assert kwargs["timeout"] == streamlit_app.ANALYSIS_REQUEST_TIMEOUT
+    assert kwargs["headers"] == {"X-Client-Session-Id": "abc12345XYZ"}
+    assert kwargs["data"] == {"provider": "jimmy"}
+    assert "telemetry_file" in kwargs["files"]
+    assert "svm_file" in kwargs["files"]
+
+
+def test_post_analysis_with_local_files_raises_if_missing_files(mocker):
+    streamlit_app.st.session_state.clear()
+    streamlit_app.st.session_state.update(
+        {
+            "telemetry_temp_path": "C:/missing/sample.mat",
+            "svm_temp_path": "C:/missing/sample.svm",
+        }
+    )
+    mocker.patch("frontend.streamlit_app.requests.post", return_value=sentinel.response)
+
+    with pytest.raises(FileNotFoundError):
+        streamlit_app._post_analysis_with_local_files({})

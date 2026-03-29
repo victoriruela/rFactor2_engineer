@@ -41,6 +41,7 @@ def _minimal_ai_result() -> dict:
         "setup_analysis": "Setup OK",
         "full_setup": {"sections": []},
         "agent_reports": [],
+        "setup_agent_reports": [],
         "chief_reasoning": "Razonamiento OK",
         "llm_provider": "ollama",
         "llm_model": "llama3.2:latest",
@@ -231,7 +232,7 @@ class TestAnalyze:
         assert r.status_code == 200
         body = r.json()
         for key in ("circuit_data", "driving_analysis", "setup_analysis",
-                    "full_setup", "session_stats", "laps_data"):
+                "full_setup", "session_stats", "laps_data", "setup_agent_reports"):
             assert key in body, f"Missing response key: {key}"
 
     def test_analyze_csv_real_parse_gps_data(self, mocker):
@@ -360,6 +361,7 @@ class TestAnalyze:
             "setup_analysis": "degraded=true; fallback_reason=chief_none",
             "full_setup": {"sections": []},
             "agent_reports": [],
+            "setup_agent_reports": [],
             "chief_reasoning": "degraded=true; fallback_reason=chief_none",
         }
         mock_analyze = AsyncMock(return_value=fallback_ai_result)

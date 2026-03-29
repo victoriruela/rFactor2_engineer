@@ -1464,7 +1464,9 @@ if tele_path and svm_path:
                                 if not s_items:
                                     continue
                                 changed_items = [it for it in s_items if str(it.get('current', '')) != str(it.get('new', ''))]
-                                with st.expander(f"🔩 {s_name} ({len(changed_items)} cambios)", expanded=bool(changed_items)):
+                                if not changed_items:
+                                    continue
+                                with st.expander(f"🔩 {s_name} ({len(changed_items)} cambios)", expanded=True):
                                     if changed_items:
                                         rows = []
                                         for it in changed_items:
@@ -1479,11 +1481,10 @@ if tele_path and svm_path:
                                             })
                                         df_ai = pd.DataFrame(rows)
                                         st.table(df_ai.set_index("Parámetro"))
-                                    else:
-                                        st.caption("No se recomiendan cambios en esta sección.")
 
                         # ── Razonamientos y Feedback de los Agentes ──
-                        agent_reports = data.get('agent_reports', [])
+                        setup_agent_reports = data.get('setup_agent_reports', [])
+                        agent_reports = setup_agent_reports or data.get('agent_reports', [])
                         chief_reasoning = data.get('chief_reasoning', '')
                         if agent_reports or chief_reasoning:
                             st.divider()

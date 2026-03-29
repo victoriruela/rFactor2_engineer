@@ -39,6 +39,7 @@ class AnalysisResponse(BaseModel):
     session_stats: Dict[str, Any] # Nuevas estadísticas de la sesión
     laps_data: List[Dict[str, Any]] # Datos por vuelta: número, tiempo, stats
     agent_reports: List[Dict[str, Any]] = [] # Informes individuales de agentes
+    setup_agent_reports: List[Dict[str, Any]] = [] # Informes consolidados alineados con setup final
     telemetry_summary_sent: str = "" # Resumen enviado a la IA
     chief_reasoning: str = "" # Razonamiento del ingeniero jefe
     llm_provider: str = "" # Provider real usado por el backend
@@ -710,6 +711,7 @@ async def analyze_telemetry(
             session_stats=session_stats,
             laps_data=convert_to_native(laps_data),
             agent_reports=convert_to_native(ai_result.get("agent_reports", [])),
+            setup_agent_reports=convert_to_native(ai_result.get("setup_agent_reports", [])),
             telemetry_summary_sent=summary,
             chief_reasoning=ai_result.get("chief_reasoning", ""),
             llm_provider=ai_result.get("llm_provider", provider or "ollama"),
