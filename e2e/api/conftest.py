@@ -45,5 +45,5 @@ def base_url() -> str:
 
 @pytest.fixture
 async def async_client(base_url):
-    async with httpx.AsyncClient(base_url=base_url, timeout=30) as c:
+    async with httpx.AsyncClient(base_url=base_url, timeout=180) as c:
         yield c

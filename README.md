@@ -107,6 +107,59 @@ Servicios:
 - Backend: `http://localhost:8000`
 - Ollama (host): `http://localhost:11434`
 
+### Tests Docker sin acumulación de contenedores
+
+Para ejecutar tests en Docker y limpiar automáticamente contenedores efímeros de `test` de este proyecto:
+
+```powershell
+powershell -ExecutionPolicy Bypass -NoProfile -File scripts/run_docker_test.ps1
+```
+
+Con argumentos personalizados:
+
+```powershell
+powershell -ExecutionPolicy Bypass -NoProfile -File scripts/run_docker_test.ps1 pytest tests/test_main.py -q
+```
+
+Si hubo ejecuciones interrumpidas y quedaron contenedores `exited`, limpia los de este proyecto y también los temporales de benchmark (`t1-*`, `t2-*`, ...):
+
+```powershell
+powershell -ExecutionPolicy Bypass -NoProfile -File scripts/cleanup_docker_test_artifacts.ps1
+```
+
+Al terminar una tarea/fase de benchmark, esos contenedores temporales deben purgarse. Opcionalmente, para limpiar tambien imagenes temporales tipo `t*-*-test`:
+
+```powershell
+powershell -ExecutionPolicy Bypass -NoProfile -File scripts/cleanup_docker_test_artifacts.ps1 -RemoveTemporaryTestImages
+```
+
+### Deploy HTTPS en host GCP (Nginx reverse proxy)
+
+Despliegue canonico al host configurado (`bitor@34.175.126.128`):
+
+```powershell
+powershell -ExecutionPolicy Bypass -NoProfile -File scripts/deploy_gcp.ps1
+```
+
+Topologia actual:
+- Nginx publico en `:80` y `:443`
+- Frontend Streamlit en `127.0.0.1:18501`
+- Backend FastAPI en `127.0.0.1:18000`
+- Proxy HTTPS: `/` -> frontend, `/api/` -> backend
+- Hosts publicos: `https://telemetria.bot.nu` y `https://car-setup.com`
+- `http://telemetria.bot.nu` y `http://car-setup.com` redirigen a HTTPS
+- **Basic Auth en Nginx para todas las rutas**
+  - Usuario: `racef1`
+  - Password: `100fuchupabien`
+- TLS: certificados Let's Encrypt gestionados con `certbot` en el host para ambos dominios
+- Uploads grandes: Nginx configurado con `client_max_body_size 20000M` y ruta explicita `/_stcore/upload_file/` para evitar `413 Request Entity Too Large`.
+
+Si no necesitas rebuild de imagenes:
+
+```powershell
+powershell -ExecutionPolicy Bypass -NoProfile -File scripts/deploy_gcp.ps1 -SkipDockerBuild
+```
+
 ## 🛠️ Uso
 
 1. Abre la interfaz de Streamlit.
