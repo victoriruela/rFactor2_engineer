@@ -74,3 +74,23 @@ def test_cleanup_temp_session_files_removes_directory_and_state(tmp_path):
     assert "temp_upload_dir" not in streamlit_app.st.session_state
     assert "telemetry_temp_path" not in streamlit_app.st.session_state
     assert "svm_temp_path" not in streamlit_app.st.session_state
+
+
+def test_ensure_client_session_id_generates_when_missing():
+    streamlit_app.st.session_state.clear()
+
+    generated = streamlit_app._ensure_client_session_id()
+
+    assert isinstance(generated, str)
+    assert len(generated) >= 8
+    assert streamlit_app.st.session_state["client_session_id"] == generated
+    assert streamlit_app._is_valid_session_id(generated)
+
+
+def test_api_headers_uses_only_valid_session_id():
+    streamlit_app.st.session_state.clear()
+    streamlit_app.st.session_state["client_session_id"] = "***invalid***"
+    assert streamlit_app._api_headers() == {}
+
+    streamlit_app.st.session_state["client_session_id"] = "abc12345XYZ"
+    assert streamlit_app._api_headers() == {"X-Client-Session-Id": "abc12345XYZ"}
