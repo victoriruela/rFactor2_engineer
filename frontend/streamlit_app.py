@@ -217,7 +217,10 @@ def _render_chunked_uploader():
                         await uploadOne(file);
                     }}
                     log('Subida completada. Recargando para listar sesiones...');
-                    window.parent.location.reload();
+                    // Preserve session ID in the URL so it survives the full page reload
+                    const url = new URL(window.parent.location.href);
+                    url.searchParams.set('{CLIENT_SESSION_QUERY_PARAM}', sessionId);
+                    window.parent.location.href = url.toString();
                 }} catch (err) {{
                     log(`Error: ${{err.message}}`);
                 }}
