@@ -210,6 +210,9 @@ __marimo__/
 .asana-mcp.json
 asana_token.json
 
+# Runtime uploaded session data
+data/
+
 # Generated files
 * - * - * - *.mat
 * - * - * - *.svm
