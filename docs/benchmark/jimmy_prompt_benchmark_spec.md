@@ -140,3 +140,36 @@ Use the following anchors to reduce reviewer variance:
 - No CI gate wiring.
 
 Those are intentionally deferred to follow-up tasks.
+
+## Batch A Matrix Design (T3)
+
+Batch A defines the first prompt/sampling sweep specifically for Jimmy (`llama3.1-8B`) behavior characterization.
+
+Intent:
+
+- Identify which controls most affect parseability (`JSON validity`) vs recommendation quality (`coverage` and rubric readiness).
+- Keep only matrix design in this task; full benchmark execution and ranking are done in later tasks.
+
+Dimensions covered in Batch A:
+
+- System prompt style: `prose` vs `structured`
+- JSON explicitness level: `loose` vs `strict`
+- `topK`: `1` and `8`
+- `temperature`: `0.0` and `0.3`
+
+Design note:
+
+- Batch A uses 8 runs as a balanced fractional layout (each factor level appears 4 times) to control total runtime while still isolating first-order effects.
+
+Run IDs in `docs/benchmark/prompt_matrix.json`:
+
+- `batch_a_01`
+- `batch_a_02`
+- `batch_a_03`
+- `batch_a_04`
+- `batch_a_05`
+- `batch_a_06`
+- `batch_a_07`
+- `batch_a_08`
+
+Per-run rationale is stored in each run `metadata.rationale` and is required for post-run attribution of gains/failures.
