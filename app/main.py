@@ -24,6 +24,8 @@ class AnalysisResponse(BaseModel):
     agent_reports: List[Dict[str, Any]] = [] # Informes individuales de agentes
     telemetry_summary_sent: str = "" # Resumen enviado a la IA
     chief_reasoning: str = "" # Razonamiento del ingeniero jefe
+    llm_provider: str = "" # Provider real usado por el backend
+    llm_model: str = "" # Modelo real usado por el backend
 
 from app.core.ai_agents import AIAngineer, list_available_models
 
@@ -493,7 +495,9 @@ async def analyze_telemetry(
             laps_data=convert_to_native(laps_data),
             agent_reports=convert_to_native(ai_result.get("agent_reports", [])),
             telemetry_summary_sent=summary,
-            chief_reasoning=ai_result.get("chief_reasoning", "")
+            chief_reasoning=ai_result.get("chief_reasoning", ""),
+            llm_provider=ai_result.get("llm_provider", provider or "ollama"),
+            llm_model=ai_result.get("llm_model", model or "")
         )
     except Exception as e:
         error_msg = str(e)
