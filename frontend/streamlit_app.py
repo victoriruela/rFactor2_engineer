@@ -143,7 +143,7 @@ def _render_chunked_uploader():
                         'X-Client-Session-Id': sessionId,
                     }},
                     body: JSON.stringify({{ filename: file.name }}),
-                    credentials: 'omit',
+                    credentials: 'include',
                 }});
                 if (!initResp.ok) throw new Error(`init failed (${{initResp.status}})`);
                 const initData = await initResp.json();
@@ -158,7 +158,7 @@ def _render_chunked_uploader():
                             'X-Client-Session-Id': sessionId,
                         }},
                         body: chunk,
-                        credentials: 'omit',
+                        credentials: 'include',
                     }});
                     if (!chunkResp.ok) throw new Error(`chunk ${{chunkIndex}} failed (${{chunkResp.status}})`);
                     chunkIndex += 1;
@@ -168,7 +168,7 @@ def _render_chunked_uploader():
                 const completeResp = await fetch(`${{apiBase}}/uploads/${{initData.upload_id}}/complete`, {{
                     method: 'POST',
                     headers: {{ 'X-Client-Session-Id': sessionId }},
-                    credentials: 'omit',
+                    credentials: 'include',
                 }});
                 if (!completeResp.ok) throw new Error(`complete failed (${{completeResp.status}})`);
                 log(`${{file.name}}: completado`);
