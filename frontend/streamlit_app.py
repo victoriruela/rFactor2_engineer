@@ -1165,8 +1165,13 @@ with st.sidebar:
                 )
                 if selected_entry is not None:
                     _cleanup_temp_session_files()
-                    st.session_state.update(_load_session_locally(selected_entry))
-                    st.rerun()
+                    st.session_state['selected_session_id'] = selected_entry["id"]
+                    st.session_state['selected_session_name'] = selected_entry.get("display_name", selected_entry["id"])
+                    try:
+                        st.session_state.update(_load_session_locally(selected_entry))
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"No se pudo cargar la sesión localmente: {e}")
         else:
             st.info("No hay sesiones completas en el backend todavía. Sube .mat/.csv + .svm.")
     else:
@@ -1189,6 +1194,25 @@ with st.sidebar:
         svm_path = st.session_state.get('svm_temp_path')
         tele_name = st.session_state.get('tele_name')
         svm_name = st.session_state.get('svm_name')
+
+        # Recuperación defensiva: en entornos productivos el directorio temporal
+        # puede faltar tras un rerun. Reintentar descarga local desde la sesión backend.
+        if (
+            (not tele_path or not os.path.exists(tele_path))
+            or (not svm_path or not os.path.exists(svm_path))
+        ):
+            selected_id = st.session_state.get('selected_session_id')
+            if selected_id:
+                try:
+                    match = next((s for s in _fetch_backend_sessions() if s.get("id") == selected_id), None)
+                    if match:
+                        st.session_state.update(_load_session_locally(match))
+                        tele_path = st.session_state.get('telemetry_temp_path')
+                        svm_path = st.session_state.get('svm_temp_path')
+                        tele_name = st.session_state.get('tele_name')
+                        svm_name = st.session_state.get('svm_name')
+                except Exception as e:
+                    st.warning(f"No se pudo recuperar la sesión desde el backend: {e}")
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Contenido principal
