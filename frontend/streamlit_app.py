@@ -20,6 +20,7 @@ TEMP_UPLOAD_ROOT = os.path.join(tempfile.gettempdir(), "rfactor2_engineer_upload
 CLIENT_SESSION_COOKIE = "rf2_session_id"
 CLIENT_SESSION_QUERY_PARAM = "rf2sid"
 SESSION_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{8,128}$")
+MAT_PREVIEW_MAX_MB = int(os.environ.get("RF2_FRONTEND_MAX_PREVIEW_MAT_MB", "120"))
 
 
 def _ensure_temp_upload_root():
@@ -1259,7 +1260,21 @@ with st.sidebar:
 # Contenido principal
 # ─────────────────────────────────────────────────────────────────────────────
 if tele_path and svm_path:
-    if tele_name.endswith('.mat'):
+    file_size_mb = 0.0
+    try:
+        file_size_mb = os.path.getsize(tele_path) / (1024 * 1024)
+    except Exception:
+        file_size_mb = 0.0
+
+    skip_mat_preview = tele_name.endswith('.mat') and file_size_mb > MAT_PREVIEW_MAX_MB
+    if skip_mat_preview:
+        st.warning(
+            f"Archivo .mat grande ({file_size_mb:.1f} MB). "
+            "Se omite la vista de telemetría para evitar reinicios del servidor. "
+            "Puedes ejecutar el análisis IA igualmente."
+        )
+
+    if tele_name.endswith('.mat') and not skip_mat_preview:
         # 1. Cargar DataFrame (cacheado)
         df_local = get_mat_dataframe(tele_path)
 
@@ -1595,7 +1610,10 @@ if tele_path and svm_path:
         else:
             st.error("No se encontró canal 'Lap_Number' en el .mat")
     else:
-        st.info("La visualización detallada actualmente solo soporta archivos .mat.")
+        if skip_mat_preview:
+            st.info("Vista detallada desactivada por tamaño del .mat en este servidor. Usa el análisis IA.")
+        else:
+            st.info("La visualización detallada actualmente solo soporta archivos .mat.")
         if st.button("Analizar con IA"):
             with st.spinner("Analizando con IA…"):
                 try:

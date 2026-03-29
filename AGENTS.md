@@ -369,6 +369,8 @@ All hardcoded values (ports, paths, thresholds, parameter lists, telemetry chann
 
 **Frontend session analysis timeout**: `frontend/streamlit_app.py` posts stored sessions to `/analyze_session` with a long-running Requests timeout tuple `(10, 1800)`. Never use `timeout=0` with `requests`; urllib3 rejects non-positive timeouts before the backend call is made.
 
+**Frontend large-.mat safeguard**: when a local `.mat` file exceeds `RF2_FRONTEND_MAX_PREVIEW_MAT_MB` (default `120` MB), the frontend skips detailed telemetry preview parsing to avoid Streamlit OOM/restarts on low-memory hosts. AI analysis remains available through backend endpoints.
+
 ## Language
 
 All user-facing output (driving analysis, setup recommendations, parameter names) is in **Spanish (Castellano)**. Prompts explicitly instruct the LLM to respond in Spanish. The Translation Agent produces Spanish-friendly parameter names.
