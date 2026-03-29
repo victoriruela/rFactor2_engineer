@@ -191,3 +191,62 @@ All hardcoded values (ports, paths, thresholds, parameter lists, telemetry chann
 ## Language
 
 All user-facing output (driving analysis, setup recommendations, parameter names) is in **Spanish (Castellano)**. Prompts explicitly instruct the LLM to respond in Spanish. The Translation Agent produces Spanish-friendly parameter names.
+
+## Development Methodology
+
+Rules for all agentic (multi-subagent) development work on this project.
+
+### 1. Task Planning (Asana)
+
+- All project upgrades must be planned as a group of Asana tasks **before any work begins**
+- Tasks must have explicit dependency edges so the supervisor can determine which are safe to parallelize
+- Only tasks with no unresolved upstream dependencies may be handed to a subagent at a given moment
+
+### 2. Git Isolation (Worktrees)
+
+- Each subagent works in its own isolated git worktree (`git worktree add`)
+- Worktrees branch off the current `develop` HEAD at task start
+- Subagents must **not** push or merge — they commit only; the supervisor performs all merges
+- **Every subagent prompt must explicitly state: "Commit your work and stop. Do not merge or push."**
+
+### 3. Asana Status Lifecycle (Supervisor, Atomic)
+
+The supervisor updates Asana task status at exactly three moments, synchronously:
+
+| Moment | Status transition |
+|---|---|
+| Before handing task to subagent | → In Progress |
+| After subagent delivers its result | → In Review |
+| After supervisor finalizes the merge | → Done |
+
+No other agent or process should write task status.
+
+### 4. Merge Protocol (Supervisor)
+
+- Supervisor waits for the subagent's commit before proceeding
+- All merges are performed by the supervisor, never by the subagent
+- When parallel subagents have touched overlapping files, the supervisor merges both implementations intelligently — preserving all intended behavior from each, consistent with the overall phase specification
+- Conflicts are never resolved by discarding one side; both contributions must be reconciled
+
+### 5. Semantic Release
+
+- **`develop`**: every merge creates a Release Candidate tag (`vX.Y.Z-rc.N`)
+- **`main`**: every merge creates a full version tag (`vX.Y.Z`) following [SemVer](https://semver.org/):
+  - **Patch** (`Z`): bug fixes, no API changes
+  - **Minor** (`Y`): new features, backward-compatible
+  - **Major** (`X`): breaking changes
+
+### 6. Test-Driven Development (TDD)
+
+- Subagents must write unit tests for every function/behavior they implement **before** writing the implementation
+- Tests live in `tests/` mirroring the `app/` structure (e.g., `tests/core/test_ai_agents.py`)
+- Implementation is written only after tests are in place and confirmed to fail (red → green)
+- Subagent commits should be ordered: test commit first, then implementation commit
+
+### 7. End-to-End Testing
+
+- E2E tests are written at the **end** of the same task that delivers the feature — not deferred to a separate task
+- Subagents **cannot signal task completion** if any E2E test fails; the worktree must not be handed back until the suite is green
+- Two E2E topologies are supported for this project:
+  - **API**: pytest-based HTTP tests against `localhost:8000` (using `httpx` or `requests`); files in `e2e/api/`
+  - **Web**: [Maestro](https://maestro.mobile.dev/) flows against the Streamlit frontend at `localhost:8501`; files in `e2e/web/`
