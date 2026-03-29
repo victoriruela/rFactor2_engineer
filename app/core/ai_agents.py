@@ -11,6 +11,9 @@ from langchain_core.prompts import PromptTemplate
 # --- CONFIGURACIÓN OLLAMA ---
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 OLLAMA_MODEL_TAG = os.getenv("OLLAMA_MODEL", "llama3.2:latest")
+JIMMY_API_URL = os.getenv("JIMMY_API_URL", "https://chatjimmy.ai/api/chat")
+JIMMY_MODEL_TAG = "llama3.1-8B"
+JIMMY_STATS_RE = re.compile(r"<\|stats\|>.*?<\|/stats\|>", re.DOTALL)
 
 
 def list_available_models():
@@ -253,7 +256,18 @@ class AIAngineer:
         self._telemetry_cache = ""
         self._agent_reports_cache = []
 
-    def _init_llm(self, model_tag=None):
+    def _init_llm(self, model_tag=None, provider="ollama"):
+        provider_key = (provider or "ollama").lower()
+        if provider_key == "jimmy":
+            self.llm = None
+            self._provider = "jimmy"
+            self._current_model = JIMMY_MODEL_TAG
+            print(f"LLM listo: jimmy/{JIMMY_MODEL_TAG}")
+            return
+
+        if provider_key != "ollama":
+            raise ValueError(f"Proveedor LLM no soportado: {provider}")
+
         _ensure_ollama_running()
         tag = model_tag or OLLAMA_MODEL_TAG
         self.llm = ChatOllama(
@@ -262,8 +276,49 @@ class AIAngineer:
             num_predict=4096,
             temperature=0.3,
         )
+        self._provider = "ollama"
         self._current_model = tag
         print(f"LLM listo: ollama/{tag}")
+
+    def _build_prompt_text(self, prompt, inputs):
+        prompt_tmpl = PromptTemplate.from_template(prompt)
+        return prompt_tmpl.format(**inputs)
+
+    def _call_jimmy_api(self, prompt_text):
+        response = requests.post(
+            JIMMY_API_URL,
+            headers={
+                "Content-Type": "application/json",
+                "Accept": "*/*",
+                "Referer": "https://chatjimmy.ai/",
+                "Origin": "https://chatjimmy.ai",
+            },
+            json={
+                "messages": [{"role": "user", "content": prompt_text}],
+                "chatOptions": {
+                    "selectedModel": JIMMY_MODEL_TAG,
+                    "systemPrompt": "",
+                    "topK": 8,
+                },
+                "attachment": None,
+            },
+            timeout=90,
+        )
+        response.raise_for_status()
+        text = JIMMY_STATS_RE.sub("", response.text).strip()
+        if len(text) >= 2 and text.startswith('"') and text.endswith('"'):
+            text = text[1:-1].strip()
+        return text
+
+    async def _call_llm_text(self, prompt, inputs):
+        provider = getattr(self, "_provider", "ollama")
+        if provider == "jimmy":
+            prompt_text = self._build_prompt_text(prompt, inputs)
+            return self._call_jimmy_api(prompt_text)
+
+        prompt_tmpl = PromptTemplate.from_template(prompt)
+        chain = prompt_tmpl | self.llm | self.output_parser
+        return await chain.ainvoke(inputs)
 
     def _load_mapping(self):
         if os.path.exists(self.mapping_path):
@@ -290,10 +345,8 @@ class AIAngineer:
         return self.mapping.get(item_type + "s", {}).get(key, key)
 
     async def _get_json_from_llm(self, prompt, inputs):
-        prompt_tmpl = PromptTemplate.from_template(prompt)
-        chain = prompt_tmpl | self.llm | self.output_parser
         try:
-            response = await chain.ainvoke(inputs)
+            response = await self._call_llm_text(prompt, inputs)
         except Exception as e:
             print(f"Error en LLM: {e}")
             return None
@@ -427,10 +480,20 @@ class AIAngineer:
 
         return full_setup_recommendations
 
-    async def analyze(self, telemetry_summary, setup_data, circuit_name="Desconocido", session_stats=None, model_tag=None, fixed_params=None, driving_telemetry_summary=None):
-        if self.llm is None or (model_tag and getattr(self, '_current_model', None) != model_tag):
+    async def analyze(self, telemetry_summary, setup_data, circuit_name="Desconocido", session_stats=None, model_tag=None, fixed_params=None, driving_telemetry_summary=None, provider="ollama"):
+        provider_key = (provider or "ollama").lower()
+        current_provider = getattr(self, "_provider", None)
+        needs_init = current_provider != provider_key
+
+        if provider_key == "ollama":
+            if self.llm is None:
+                needs_init = True
+            if model_tag and getattr(self, "_current_model", None) != model_tag:
+                needs_init = True
+
+        if needs_init:
             print("Inicializando LLM...")
-            self._init_llm(model_tag)
+            self._init_llm(model_tag, provider=provider_key)
 
         # Preparar prompt de parámetros fijos
         fixed_list = fixed_params or []
@@ -451,10 +514,8 @@ class AIAngineer:
         # 2. Análisis de Conducción
         # Usar resumen filtrado (solo canales de técnica de pilotaje) si está disponible
         driving_input = driving_telemetry_summary if driving_telemetry_summary is not None else telemetry_summary
-        driving_prompt = PromptTemplate.from_template(DRIVING_PROMPT)
-        driving_chain = driving_prompt | self.llm | self.output_parser
         try:
-            driving_analysis = await driving_chain.ainvoke({
+            driving_analysis = await self._call_llm_text(DRIVING_PROMPT, {
                 "telemetry_summary": driving_input,
                 "session_stats": json.dumps(session_stats or {}, indent=2)
             })

@@ -70,7 +70,7 @@ rFactor2_engineer/
 ├── SPECIFICATION.md               # Original project spec
 ├── README.md                      # User-facing docs (Spanish)
 ├── Dockerfile                     # Multi-stage build (backend + frontend targets)
-├── docker-compose.yml             # 3-service orchestration (ollama, backend, frontend)
+├── docker-compose.yml             # Container orchestration (backend, frontend, test) using host Ollama
 ├── .dockerignore                  # Build context exclusions
 ├── GIT.md                         # Git workflow, hooks, commit conventions, linting
 ├── pyproject.toml                 # Ruff linter configuration
@@ -110,7 +110,7 @@ requests                   # HTTP calls (Ollama API, frontend→backend)
 | `OLLAMA_MODEL` | `llama3.2:latest` | Model tag passed to ChatOllama |
 | `RF2_API_URL` | `http://localhost:8000` | Backend URL used by Streamlit frontend |
 
-Set in `.env` at project root (loaded by python-dotenv). In Docker, these are set via `docker-compose.yml`.
+Set in `.env` at project root (loaded by python-dotenv). In Docker, backend points to host Ollama via `OLLAMA_BASE_URL=http://host.docker.internal:11434`.
 
 ## API Endpoints
 
@@ -284,8 +284,8 @@ docker compose --profile test build test
 # Start the full app stack
 docker compose up --build
 
-# Pull the LLM model into the Ollama container (one-time)
-docker compose exec ollama ollama pull llama3.2:latest
+# Ensure host Ollama has the required model (one-time)
+ollama pull llama3.2:latest
 ```
 
 ### Running tests (always use Docker)
@@ -300,7 +300,7 @@ docker compose --profile test run --rm test pytest tests/ --ignore=tests/integra
 # Lint
 docker compose --profile test run --rm test ruff check app/ frontend/ tests/
 
-# Integration tests — real LLM, requires ollama container running with llama3.2:latest (~3min)
+# Integration tests — real LLM, requires host Ollama running with llama3.2:latest (~3min)
 docker compose --profile test run --rm test pytest -m integration -v
 
 # E2E API tests — requires backend container running at :8000
@@ -315,7 +315,7 @@ The `test` service bind-mounts the full source tree at `/app`, so **code changes
 |---------|-----|---------------|
 | Backend | http://localhost:8000 | `docker compose up backend` |
 | Frontend | http://localhost:8501 | `docker compose up frontend` |
-| Ollama | http://localhost:11434 | `docker compose up ollama` |
+| Host Ollama (external dependency) | http://localhost:11434 | `ollama serve` (host) |
 | All | — | `docker compose up --build` |
 
 ## Test Infrastructure
@@ -364,24 +364,24 @@ docker compose up --build
 Services:
 - **Frontend**: http://localhost:8501
 - **Backend**: http://localhost:8000
-- **Ollama**: http://localhost:11434
+- **Host Ollama**: http://localhost:11434 (runs outside Docker)
 
 ### First run — pull the model
 
-After the Ollama container is up, pull the required model:
+On the host machine, pull the required model:
 
 ```bash
-docker compose exec ollama ollama pull llama3.2:latest
+ollama pull llama3.2:latest
 ```
 
 ### Architecture
 
 ```
-┌─────────────┐    ┌──────────┐    ┌────────┐
-│  Frontend   │───▶│ Backend  │───▶│ Ollama │
-│  :8501      │    │  :8000   │    │ :11434 │
-└─────────────┘    └──────────┘    └────────┘
-  RF2_API_URL       OLLAMA_BASE_URL
+┌─────────────┐    ┌──────────┐    ┌──────────────────────┐
+│  Frontend   │───▶│ Backend  │───▶│ Host Ollama          │
+│  :8501      │    │  :8000   │    │ localhost:11434      │
+└─────────────┘    └──────────┘    └──────────────────────┘
+  RF2_API_URL       OLLAMA_BASE_URL=http://host.docker.internal:11434
 ```
 
 ### Volumes
@@ -391,14 +391,14 @@ docker compose exec ollama ollama pull llama3.2:latest
 | `./data` → `/app/data` | Session uploads (persist across restarts) |
 | `./app/core/param_mapping.json` | Translation cache (generated at runtime) |
 | `./app/core/fixed_params.json` | User-locked parameters |
-| `ollama_data` (named) | Downloaded model weights |
+
 
 ### Files
 
 | File | Purpose |
 |------|---------|
 | `Dockerfile` | Multi-stage build (targets: `backend`, `frontend`) |
-| `docker-compose.yml` | Orchestrates all 3 services |
+| `docker-compose.yml` | Orchestrates backend/frontend/test containers; uses host Ollama |
 | `.dockerignore` | Excludes data/, tests/, .git/ from build context |
 
 ## Git Workflow

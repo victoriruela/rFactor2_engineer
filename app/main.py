@@ -72,6 +72,7 @@ async def analyze_telemetry(
     telemetry_file: UploadFile = File(...),
     svm_file: UploadFile = File(...),
     model: Optional[str] = Form(None),
+    provider: Optional[str] = Form("ollama"),
     fixed_params: Optional[str] = Form(None)
 ):
     session_id = str(uuid.uuid4())
@@ -454,6 +455,7 @@ async def analyze_telemetry(
             circuit_name=circuit_name,
             session_stats=session_stats,
             model_tag=model or None,
+            provider=provider or "ollama",
             fixed_params=fixed_params_list,
             driving_telemetry_summary=driving_summary,
         )
@@ -496,7 +498,10 @@ async def analyze_telemetry(
     except Exception as e:
         error_msg = str(e)
         if "connection attempts failed" in error_msg.lower() or "connection error" in error_msg.lower():
-            detail = "Error de conexión con el modelo local (Ollama). Asegúrate de que Ollama esté instalado, ejecutándose y con el modelo 'llama3' descargado."
+            if (provider or "ollama").lower() == "jimmy":
+                detail = "Error de conexión con Jimmy API. Verifica tu conexión a Internet e inténtalo de nuevo."
+            else:
+                detail = "Error de conexión con el modelo local (Ollama). Asegúrate de que Ollama esté instalado, ejecutándose y con el modelo 'llama3' descargado."
         else:
             detail = error_msg
         raise HTTPException(status_code=500, detail=detail)

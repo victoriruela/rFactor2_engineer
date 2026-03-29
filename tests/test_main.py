@@ -230,4 +230,25 @@ class TestAnalyze:
         assert isinstance(driving_summary, str)
         assert len(driving_summary) > 0
 
+    def test_analyze_passes_provider_and_model(self, mocker):
+        """Endpoint forwards provider/model form fields to ai_engineer.analyze()."""
+        mock_analyze = AsyncMock(return_value=_minimal_ai_result())
+        mocker.patch("app.main.ai_engineer.analyze", new=mock_analyze)
+        r = client.post(
+            "/analyze",
+            files={
+                "telemetry_file": ("session.csv", self._csv_bytes, "text/csv"),
+                "svm_file": ("car.svm", self._svm_bytes, "text/plain"),
+            },
+            data={
+                "provider": "jimmy",
+                "model": "llama3.1-8B",
+            },
+        )
+
+        assert r.status_code == 200
+        call_kwargs = mock_analyze.call_args.kwargs
+        assert call_kwargs.get("provider") == "jimmy"
+        assert call_kwargs.get("model_tag") == "llama3.1-8B"
+
 

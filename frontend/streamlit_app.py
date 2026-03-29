@@ -1104,16 +1104,32 @@ if tele_to_send and svm_to_send:
                 with main_tab_ai:
                     st.header("Análisis de Ingeniero Virtual")
 
-                    try:
-                        models_resp = requests.get(f"{API_BASE_URL}/models", timeout=2)
-                        available_models = (
-                            models_resp.json().get("models", [])
-                            if models_resp.status_code == 200 else []
-                        )
-                    except Exception:
-                        available_models = []
+                    provider_options = {
+                        "Ollama (local)": "ollama",
+                        "Jimmy API": "jimmy",
+                    }
+                    provider_label = st.selectbox("Proveedor LLM", list(provider_options.keys()))
+                    sel_provider = provider_options[provider_label]
 
-                    sel_model = st.selectbox("Modelo LLM", available_models) if available_models else None
+                    sel_model = None
+                    if sel_provider == "ollama":
+                        try:
+                            models_resp = requests.get(f"{API_BASE_URL}/models", timeout=2)
+                            available_models = (
+                                models_resp.json().get("models", [])
+                                if models_resp.status_code == 200 else []
+                            )
+                        except Exception:
+                            available_models = []
+
+                        if available_models:
+                            sel_model = st.selectbox("Modelo LLM", available_models)
+                        else:
+                            st.warning("No se pudieron obtener modelos de Ollama. Se usará el modelo por defecto del backend.")
+                    else:
+                        sel_model = "llama3.1-8B"
+                        st.caption("Modelo Jimmy seleccionado: llama3.1-8B")
+
                     analyze_button = st.button("🚀 Iniciar Análisis con IA")
 
                     if analyze_button:
@@ -1123,6 +1139,7 @@ if tele_to_send and svm_to_send:
                                 "svm_file": (svm_name, svm_to_send),
                             }
                             data_form = {}
+                            data_form["provider"] = sel_provider
                             if sel_model:
                                 data_form["model"] = sel_model
 
@@ -1140,7 +1157,7 @@ if tele_to_send and svm_to_send:
                                 st.session_state['ai_analysis_data'] = data
                                 st.session_state['ai_telemetry_summary'] = data.get('telemetry_summary_sent', '')
                                 st.session_state['ai_circuit_name'] = tele_name.split('-')[-2].strip() if '-' in tele_name else "Desconocido"
-                                st.session_state['ai_model'] = sel_model
+                                st.session_state['ai_model'] = f"{provider_label} / {sel_model or 'default'}"
                                 # Parsear setup_data del .svm para re-análisis
                                 st.session_state['ai_setup_data'] = parse_svm_content(svm_to_send)
                             else:

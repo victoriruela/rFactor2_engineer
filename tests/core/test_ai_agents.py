@@ -152,6 +152,33 @@ class TestGetFriendlyName:
 
 
 # ---------------------------------------------------------------------------
+# Jimmy provider internals
+# ---------------------------------------------------------------------------
+
+class TestJimmyProvider:
+    def test_call_jimmy_api_removes_stats_block_and_outer_quotes(self, ai, mocker):
+        mock_response = MagicMock()
+        mock_response.text = '"<|stats|>{\"tokens\":42}<|/stats|>Respuesta limpia"'
+        mock_response.raise_for_status = MagicMock()
+        mock_post = mocker.patch("app.core.ai_agents.requests.post", return_value=mock_response)
+
+        out = ai._call_jimmy_api("prompt test")
+
+        assert out == "Respuesta limpia"
+        assert mock_post.called
+
+    @pytest.mark.asyncio
+    async def test_call_llm_text_routes_to_jimmy_when_provider_is_jimmy(self, ai, mocker):
+        ai._provider = "jimmy"
+        mocker.patch.object(ai, "_build_prompt_text", return_value="PROMPT")
+        mocker.patch.object(ai, "_call_jimmy_api", return_value="Jimmy OK")
+
+        out = await ai._call_llm_text("X {y}", {"y": 1})
+
+        assert out == "Jimmy OK"
+
+
+# ---------------------------------------------------------------------------
 # _build_current_setup_summary
 # ---------------------------------------------------------------------------
 

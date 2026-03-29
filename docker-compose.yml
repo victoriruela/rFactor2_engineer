@@ -1,11 +1,4 @@
 services:
-  ollama:
-    image: ollama/ollama:latest
-    ports:
-      - "11434:11434"
-    volumes:
-      - ollama_data:/root/.ollama
-
   backend:
     build:
       context: .
@@ -13,13 +6,11 @@ services:
     ports:
       - "8000:8000"
     environment:
-      - OLLAMA_BASE_URL=http://ollama:11434
+      - OLLAMA_BASE_URL=http://host.docker.internal:11434
       - OLLAMA_MODEL=llama3.2:latest
     volumes:
       - ./data:/app/data
       - ./app/core/param_mapping.json:/app/app/core/param_mapping.json
-    depends_on:
-      - ollama
 
   frontend:
     build:
@@ -44,6 +35,3 @@ services:
     profiles:
       - test            # not started by `docker compose up`; run with `docker compose run --rm test`
     command: ["pytest", "tests/", "--ignore=tests/integration", "-v"]
-
-volumes:
-  ollama_data:
