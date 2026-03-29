@@ -3,6 +3,7 @@ import re
 import subprocess
 import time
 import os
+import logging
 import requests
 from langchain_ollama import ChatOllama
 from langchain_core.output_parsers import StrOutputParser
@@ -15,6 +16,7 @@ JIMMY_API_URL = os.getenv("JIMMY_API_URL", "https://chatjimmy.ai/api/chat")
 JIMMY_MODEL_TAG = "llama3.1-8B"
 JIMMY_STATS_RE = re.compile(r"<\|stats\|>.*?<\|/stats\|>", re.DOTALL)
 JIMMY_RUNTIME_CONFIG_PATH = "app/core/jimmy_runtime_config.v1.json"
+logger = logging.getLogger(__name__)
 
 
 def list_available_models():
@@ -258,6 +260,13 @@ class AIAngineer:
         self._telemetry_cache = ""
         self._agent_reports_cache = []
 
+    def _log_event(self, level, event, **fields):
+        serialized_fields = " ".join(f"{k}={json.dumps(v, ensure_ascii=False)}" for k, v in fields.items())
+        msg = f"ai_pipeline event={event}"
+        if serialized_fields:
+            msg = f"{msg} {serialized_fields}"
+        logger.log(level, msg)
+
     def _load_jimmy_runtime_config(self):
         default_cfg = {
             "selectedModel": JIMMY_MODEL_TAG,
@@ -367,14 +376,43 @@ class AIAngineer:
             try:
                 response = await self._call_llm_text(prompt, inputs)
             except Exception as e:
-                print(f"Error en LLM texto (intento {attempt}/{attempts}): {e}")
+                self._log_event(
+                    logging.WARNING,
+                    "llm_text_attempt_error",
+                    provider=provider,
+                    attempt=attempt,
+                    attempts=attempts,
+                    error=str(e),
+                )
                 continue
 
             cleaned = response.strip() if isinstance(response, str) else ""
             if len(cleaned) >= max(1, int(min_len)):
+                if attempt > 1:
+                    self._log_event(
+                        logging.INFO,
+                        "llm_text_retry_recovered",
+                        provider=provider,
+                        attempt=attempt,
+                        attempts=attempts,
+                    )
                 return cleaned
-            print(f"Respuesta de texto demasiado corta (intento {attempt}/{attempts}).")
+            self._log_event(
+                logging.WARNING,
+                "llm_text_attempt_too_short",
+                provider=provider,
+                attempt=attempt,
+                attempts=attempts,
+                min_len=max(1, int(min_len)),
+                actual_len=len(cleaned),
+            )
 
+        self._log_event(
+            logging.WARNING,
+            "llm_text_exhausted",
+            provider=provider,
+            attempts=attempts,
+        )
         return None
 
     def _init_llm(self, model_tag=None, provider="ollama"):
@@ -475,22 +513,62 @@ class AIAngineer:
             try:
                 response = await self._call_llm_text(prompt, inputs)
             except Exception as e:
-                print(f"Error en LLM (intento {attempt}/{attempts}): {e}")
+                self._log_event(
+                    logging.WARNING,
+                    "llm_json_attempt_error",
+                    provider=provider,
+                    attempt=attempt,
+                    attempts=attempts,
+                    error=str(e),
+                )
                 continue
 
             try:
                 candidate = self._extract_json_candidate(response)
                 parsed = self._parse_json_candidate(candidate)
                 if parsed is None:
-                    print(f"JSON no parseable (intento {attempt}/{attempts}).")
+                    self._log_event(
+                        logging.WARNING,
+                        "llm_json_not_parseable",
+                        provider=provider,
+                        attempt=attempt,
+                        attempts=attempts,
+                    )
                     continue
                 if validate_fn and not validate_fn(parsed):
-                    print(f"JSON inválido para el contrato esperado (intento {attempt}/{attempts}).")
+                    self._log_event(
+                        logging.WARNING,
+                        "llm_json_invalid_contract",
+                        provider=provider,
+                        attempt=attempt,
+                        attempts=attempts,
+                    )
                     continue
+                if attempt > 1:
+                    self._log_event(
+                        logging.INFO,
+                        "llm_json_retry_recovered",
+                        provider=provider,
+                        attempt=attempt,
+                        attempts=attempts,
+                    )
                 return parsed
             except Exception as e:
-                print(f"Error en LLM JSON (intento {attempt}/{attempts}): {e}")
+                self._log_event(
+                    logging.WARNING,
+                    "llm_json_attempt_exception",
+                    provider=provider,
+                    attempt=attempt,
+                    attempts=attempts,
+                    error=str(e),
+                )
 
+        self._log_event(
+            logging.WARNING,
+            "llm_json_exhausted",
+            provider=provider,
+            attempts=attempts,
+        )
         return None
 
     async def update_mappings(self, setup_data):
@@ -612,6 +690,15 @@ class AIAngineer:
             print("Inicializando LLM...")
             self._init_llm(model_tag, provider=provider_key)
 
+        self._log_event(
+            logging.INFO,
+            "analysis_started",
+            provider=provider_key,
+            model=getattr(self, "_current_model", model_tag),
+            circuit=circuit_name,
+            setup_sections=len(setup_data or {}),
+        )
+
         # Preparar prompt de parámetros fijos
         fixed_list = fixed_params or []
         if fixed_list:
@@ -639,14 +726,25 @@ class AIAngineer:
             }, min_len=10)
             if not driving_analysis:
                 raise ValueError("driving_analysis_empty_or_too_short")
-            print(f"[DEBUG driving_analysis] {repr(driving_analysis[:300])}")
+            self._log_event(
+                logging.INFO,
+                "stage_driving_completed",
+                ok=True,
+                text_len=len(driving_analysis),
+            )
         except Exception as e:
-            print(f"Error en driving_chain: {e}")
+            self._log_event(
+                logging.WARNING,
+                "stage_driving_completed",
+                ok=False,
+                error=str(e),
+            )
             driving_analysis = "No se pudo obtener el análisis de conducción."
             fallback_reasons.append("driving_analysis_empty_or_too_short")
 
         # 3. Análisis de Setup por secciones (un agente por cada sección)
         specialist_reports = []
+        specialist_sections_attempted = 0
 
         for section_name, section_data in setup_data.items():
             if section_name.upper() in ("BASIC", "LEFTFENDER", "RIGHTFENDER"):
@@ -655,6 +753,8 @@ class AIAngineer:
             filtered_data = {k: v for k, v in section_data.items() if not (k.startswith('Gear') and 'Setting' in k)}
             if not filtered_data:
                 continue
+
+            specialist_sections_attempted += 1
 
             cleaned_data = {k: self._clean_value(v) for k, v in filtered_data.items()}
 
@@ -668,8 +768,27 @@ class AIAngineer:
                 "fixed_params_prompt": fixed_params_prompt
             })
             if report:
-                print(f"[DEBUG {section_name}_report] {repr(str(report)[:300])}")
                 specialist_reports.append({"name": section_name, "items": report.get("items", [])})
+
+        specialist_items = sum(
+            len(r.get("items", [])) for r in specialist_reports if isinstance(r.get("items", []), list)
+        )
+        specialist_reasons = 0
+        for report in specialist_reports:
+            items = report.get("items", [])
+            if not isinstance(items, list):
+                continue
+            for item in items:
+                if isinstance(item, dict) and str(item.get("reason", "")).strip():
+                    specialist_reasons += 1
+        self._log_event(
+            logging.INFO,
+            "stage_specialists_completed",
+            attempted=specialist_sections_attempted,
+            reports=len(specialist_reports),
+            items=specialist_items,
+            reasons=specialist_reasons,
+        )
 
         # Preparar resumen del setup actual para el ingeniero jefe
         current_setup_summary = self._build_current_setup_summary(setup_data)
@@ -683,7 +802,18 @@ class AIAngineer:
             "memory_context": "N/A",
             "fixed_params_prompt": fixed_params_prompt
         }, validate_fn=lambda data: isinstance(data, dict) and isinstance(data.get("full_setup", {}).get("sections", None), list))
-        print(f"[DEBUG chief_engineer_report] {repr(str(chief_engineer_report)[:300])}")
+        chief_sections_count = 0
+        chief_reasoning_len = 0
+        if chief_engineer_report:
+            chief_sections_count = len(chief_engineer_report.get("full_setup", {}).get("sections", []))
+            chief_reasoning_len = len((chief_engineer_report.get("chief_reasoning") or "").strip())
+        self._log_event(
+            logging.INFO,
+            "stage_chief_completed",
+            ok=bool(chief_engineer_report),
+            sections=chief_sections_count,
+            reasoning_len=chief_reasoning_len,
+        )
 
         # Guardar razonamiento del jefe en memoria (con contexto completo)
         chief_reasoning = ""
@@ -760,5 +890,32 @@ class AIAngineer:
         if provider_key == "jimmy" and should_signal_degraded and fallback_reason_text:
             result["degraded"] = True
             result[reason_field] = fallback_reason_text
+
+        result["llm_provider"] = provider_key
+        result["llm_model"] = getattr(self, "_current_model", model_tag or "")
+
+        if fallback_reason_text:
+            self._log_event(
+                logging.WARNING,
+                "analysis_completed",
+                provider=provider_key,
+                model=result["llm_model"],
+                degraded=bool(result.get("degraded", False)),
+                fallback_reason=fallback_reason_text,
+                specialists_reports=len(specialist_reports),
+                specialist_reasons=specialist_reasons,
+                chief_present=bool(chief_engineer_report),
+            )
+        else:
+            self._log_event(
+                logging.INFO,
+                "analysis_completed",
+                provider=provider_key,
+                model=result["llm_model"],
+                degraded=False,
+                specialists_reports=len(specialist_reports),
+                specialist_reasons=specialist_reasons,
+                chief_present=bool(chief_engineer_report),
+            )
 
         return result

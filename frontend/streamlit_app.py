@@ -1157,7 +1157,9 @@ if tele_to_send and svm_to_send:
                                 st.session_state['ai_analysis_data'] = data
                                 st.session_state['ai_telemetry_summary'] = data.get('telemetry_summary_sent', '')
                                 st.session_state['ai_circuit_name'] = tele_name.split('-')[-2].strip() if '-' in tele_name else "Desconocido"
-                                st.session_state['ai_model'] = f"{provider_label} / {sel_model or 'default'}"
+                                backend_provider = data.get("llm_provider") or sel_provider
+                                backend_model = data.get("llm_model") or sel_model or "default"
+                                st.session_state['ai_model'] = f"{backend_provider} / {backend_model}"
                                 # Parsear setup_data del .svm para re-análisis
                                 st.session_state['ai_setup_data'] = parse_svm_content(svm_to_send)
                             else:
@@ -1166,6 +1168,10 @@ if tele_to_send and svm_to_send:
                     # Mostrar resultados (persistentes en session_state)
                     if 'ai_analysis_data' in st.session_state:
                         data = st.session_state['ai_analysis_data']
+
+                        llm_provider_used = data.get("llm_provider", "desconocido")
+                        llm_model_used = data.get("llm_model", "desconocido")
+                        st.caption(f"Proveedor/modelo usado en backend: {llm_provider_used} / {llm_model_used}")
 
                         # ── Análisis del Ingeniero de Conducción ──
                         st.subheader("🏁 Análisis del Ingeniero de Conducción")

@@ -41,6 +41,8 @@ def _minimal_ai_result() -> dict:
         "full_setup": {"sections": []},
         "agent_reports": [],
         "chief_reasoning": "Razonamiento OK",
+        "llm_provider": "ollama",
+        "llm_model": "llama3.2:latest",
     }
 
 
@@ -232,7 +234,10 @@ class TestAnalyze:
 
     def test_analyze_passes_provider_and_model(self, mocker):
         """Endpoint forwards provider/model form fields to ai_engineer.analyze()."""
-        mock_analyze = AsyncMock(return_value=_minimal_ai_result())
+        ai_payload = _minimal_ai_result()
+        ai_payload["llm_provider"] = "jimmy"
+        ai_payload["llm_model"] = "llama3.1-8B"
+        mock_analyze = AsyncMock(return_value=ai_payload)
         mocker.patch("app.main.ai_engineer.analyze", new=mock_analyze)
         r = client.post(
             "/analyze",
@@ -250,6 +255,9 @@ class TestAnalyze:
         call_kwargs = mock_analyze.call_args.kwargs
         assert call_kwargs.get("provider") == "jimmy"
         assert call_kwargs.get("model_tag") == "llama3.1-8B"
+        body = r.json()
+        assert body.get("llm_provider") == "jimmy"
+        assert body.get("llm_model") == "llama3.1-8B"
 
     def test_analyze_accepts_controlled_fallback_payload_without_crash(self, mocker):
         """Even with degraded AI output, /analyze should return 200 and structured payload."""

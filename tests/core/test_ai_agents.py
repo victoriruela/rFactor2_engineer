@@ -1,5 +1,6 @@
 """Unit tests for app/core/ai_agents.py"""
 import json
+import logging
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -492,4 +493,33 @@ class TestAnalyzeJimmyFailureShapes:
 
         assert result["driving_analysis"] == "No se pudo obtener el análisis de conducción."
         assert "full_setup" in result
+
+    @pytest.mark.asyncio
+    async def test_logs_diagnostic_context_for_chief_none_without_specialist_reasoning(self, ai, mocker, caplog):
+        mocker.patch.object(ai, "update_mappings", new=AsyncMock())
+        mocker.patch.object(ai, "_call_llm_text", new=AsyncMock(return_value="Conduccion OK"))
+
+        specialist_without_reason = {
+            "items": [{"parameter": "SpringSetting", "new_value": "110", "reason": ""}],
+            "summary": "sin razonamiento",
+        }
+        mocker.patch.object(
+            ai,
+            "_get_json_from_llm",
+            new=AsyncMock(side_effect=[specialist_without_reason, specialist_without_reason, None]),
+        )
+
+        with caplog.at_level(logging.INFO, logger="app.core.ai_agents"):
+            result = await ai.analyze(
+                telemetry_summary="telemetry",
+                setup_data=self.SETUP,
+                provider="jimmy",
+            )
+
+        assert result.get("degraded") is True
+        assert result.get("fallback_reason") == "chief_none"
+        assert "event=analysis_completed" in caplog.text
+        assert 'fallback_reason="chief_none"' in caplog.text
+        assert "specialist_reasons=0" in caplog.text
+        assert "chief_present=false" in caplog.text
 
