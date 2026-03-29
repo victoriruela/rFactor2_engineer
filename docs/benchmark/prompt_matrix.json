@@ -1,0 +1,14 @@
+{
+  "runs": [
+    {
+      "run_id": "baseline_default",
+      "prompt_variant": "default",
+      "systemPrompt": "",
+      "topK": 8,
+      "temperature": 0.3,
+      "metadata": {
+        "notes": "Baseline prompts from app/core/ai_agents.py"
+      }
+    }
+  ]
+}
