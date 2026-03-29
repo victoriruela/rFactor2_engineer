@@ -14,6 +14,10 @@ appId: web
 # Navigate to AI Analysis tab
 - tapOn: "🤖"
 
+# Verify provider/model controls are present
+- assertVisible: "Proveedor LLM"
+- assertVisible: "Modelo LLM"
+
 # Trigger analysis
 - tapOn: "Analizar"
 
@@ -22,3 +26,6 @@ appId: web
 
 # Verify chief engineer output is present
 - assertVisible: "Ingeniero Jefe"
+
+# Verify backend runtime provider/model is shown
+- assertVisible: "Proveedor/modelo usado en backend"

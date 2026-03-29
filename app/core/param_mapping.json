@@ -20,7 +20,8 @@
     "LEFTFENDER": "Paragolpe Izquierdo",
     "RIGHTFENDER": "Paragolpe Derecho",
     "AERODYNAMICS": "Aerodinámica",
-    "TIRES": "Neumáticos"
+    "TIRES": "Neumáticos",
+    "Ignored": "Secciones Ignoradas"
   },
   "parameters": {
     "FuelSetting": "Carga de Combustible",
@@ -136,6 +137,7 @@
     "Pitstop2Setting": "Ajuste Parada 2",
     "Pitstop3Setting": "Ajuste Parada 3",
     "GearAutoUpShiftSetting": "Subida de Marchas Automática",
-    "GearAutoDownShiftSetting": "Reducción de Marchas Automática"
+    "GearAutoDownShiftSetting": "Reducción de Marchas Automática",
+    "Ignored": "Parámetros Ignorados"
   }
 }

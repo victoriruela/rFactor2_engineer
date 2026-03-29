@@ -1,14 +1,252 @@
 import streamlit as st
+import streamlit.components.v1 as components
 import requests
 import pandas as pd
 import numpy as np
 import scipy.io
-import io
 import os
 import json as _json
+import shutil
+import tempfile
+import uuid
 
 FIXED_PARAMS_FILE = "app/core/fixed_params.json"
 API_BASE_URL = os.environ.get("RF2_API_URL", "http://localhost:8000")
+BROWSER_API_BASE_URL = os.environ.get("RF2_BROWSER_API_BASE_URL", "/api")
+UPLOAD_CHUNK_SIZE = 64 * 1024 * 1024
+TEMP_UPLOAD_ROOT = os.path.join(tempfile.gettempdir(), "rfactor2_engineer_uploads")
+CLIENT_SESSION_COOKIE = "rf2_session_id"
+
+
+def _ensure_temp_upload_root():
+    os.makedirs(TEMP_UPLOAD_ROOT, exist_ok=True)
+    return TEMP_UPLOAD_ROOT
+
+
+def _cleanup_temp_session_files():
+    temp_dir = st.session_state.pop('temp_upload_dir', None)
+    for key in ('telemetry_temp_path', 'svm_temp_path', 'tele_name', 'svm_name', 'selected_session_id'):
+        st.session_state.pop(key, None)
+
+    if temp_dir and os.path.isdir(temp_dir):
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+def _write_uploaded_file_in_chunks(uploaded_file, target_path, chunk_size=UPLOAD_CHUNK_SIZE):
+    uploaded_file.seek(0)
+    with open(target_path, 'wb') as temp_file:
+        while True:
+            chunk = uploaded_file.read(chunk_size)
+            if not chunk:
+                break
+            temp_file.write(chunk)
+    uploaded_file.seek(0)
+
+
+def _persist_uploaded_session(telemetry_file, svm_file):
+    temp_root = _ensure_temp_upload_root()
+    session_dir = tempfile.mkdtemp(prefix=f"rf2-session-{uuid.uuid4()}-", dir=temp_root)
+
+    tele_name = os.path.basename(telemetry_file.name)
+    svm_name = os.path.basename(svm_file.name)
+    tele_path = os.path.join(session_dir, tele_name)
+    svm_path = os.path.join(session_dir, svm_name)
+
+    _write_uploaded_file_in_chunks(telemetry_file, tele_path)
+    _write_uploaded_file_in_chunks(svm_file, svm_path)
+
+    return {
+        "temp_upload_dir": session_dir,
+        "telemetry_temp_path": tele_path,
+        "svm_temp_path": svm_path,
+        "tele_name": tele_name,
+        "svm_name": svm_name,
+    }
+
+
+def _is_streamlit_mocked() -> bool:
+        return st.__class__.__module__.startswith("unittest.mock")
+
+
+def _safe_cookie_value(cookie_name):
+        try:
+                ctx = getattr(st, "context", None)
+                cookies = getattr(ctx, "cookies", None) if ctx is not None else None
+                if cookies is None:
+                        return None
+                value = cookies.get(cookie_name)
+                if isinstance(value, str) and value.strip():
+                    return value.strip()
+                return None
+        except Exception:
+                return None
+
+
+def _ensure_client_session_id():
+    existing = st.session_state.get("client_session_id")
+    if isinstance(existing, str) and existing.strip():
+        return existing
+
+        cookie_value = _safe_cookie_value(CLIENT_SESSION_COOKIE)
+        if cookie_value:
+                st.session_state["client_session_id"] = cookie_value
+                return cookie_value
+
+        generated = uuid.uuid4().hex
+        st.session_state["client_session_id"] = generated
+
+        if _is_streamlit_mocked():
+                return generated
+
+        components.html(
+                f"""
+                <script>
+                    document.cookie = "{CLIENT_SESSION_COOKIE}={generated}; path=/; max-age=31536000; SameSite=Lax";
+                    window.parent.location.reload();
+                </script>
+                """,
+                height=0,
+        )
+        st.stop()
+
+
+def _api_headers():
+        session_id = st.session_state.get("client_session_id")
+        return {"X-Client-Session-Id": session_id} if session_id else {}
+
+
+def _render_chunked_uploader():
+        session_id = st.session_state.get("client_session_id", "")
+        html = f"""
+        <div style='font-family:sans-serif;'>
+            <input id='rf2_files' type='file' multiple accept='.mat,.csv,.svm' />
+            <button id='rf2_upload_btn' style='margin-top:6px;'>Subir en chunks (64 MB)</button>
+            <pre id='rf2_upload_status' style='white-space:pre-wrap;font-size:12px;max-height:120px;overflow:auto;'></pre>
+        </div>
+        <script>
+            const apiBase = { _json.dumps(BROWSER_API_BASE_URL) };
+            const sessionId = { _json.dumps(session_id) };
+            const chunkSize = {UPLOAD_CHUNK_SIZE};
+            const statusEl = document.getElementById('rf2_upload_status');
+
+            function log(msg) {{
+                statusEl.textContent += msg + "\\n";
+                statusEl.scrollTop = statusEl.scrollHeight;
+            }}
+
+            async function uploadOne(file) {{
+                log(`Inicializando ${{file.name}}...`);
+                const initResp = await fetch(`${{apiBase}}/uploads/init`, {{
+                    method: 'POST',
+                    headers: {{
+                        'Content-Type': 'application/json',
+                        'X-Client-Session-Id': sessionId,
+                    }},
+                    body: JSON.stringify({{ filename: file.name }}),
+                    credentials: 'omit',
+                }});
+                if (!initResp.ok) throw new Error(`init failed (${{initResp.status}})`);
+                const initData = await initResp.json();
+
+                let chunkIndex = 0;
+                for (let offset = 0; offset < file.size; offset += chunkSize) {{
+                    const chunk = file.slice(offset, Math.min(offset + chunkSize, file.size));
+                    const chunkResp = await fetch(`${{apiBase}}/uploads/${{initData.upload_id}}/chunk?chunk_index=${{chunkIndex}}`, {{
+                        method: 'PUT',
+                        headers: {{
+                            'Content-Type': 'application/octet-stream',
+                            'X-Client-Session-Id': sessionId,
+                        }},
+                        body: chunk,
+                        credentials: 'omit',
+                    }});
+                    if (!chunkResp.ok) throw new Error(`chunk ${{chunkIndex}} failed (${{chunkResp.status}})`);
+                    chunkIndex += 1;
+                      log(`${{file.name}}: chunk ${{chunkIndex}} enviado`);
+                }}
+
+                const completeResp = await fetch(`${{apiBase}}/uploads/${{initData.upload_id}}/complete`, {{
+                    method: 'POST',
+                    headers: {{ 'X-Client-Session-Id': sessionId }},
+                    credentials: 'omit',
+                }});
+                if (!completeResp.ok) throw new Error(`complete failed (${{completeResp.status}})`);
+                log(`${{file.name}}: completado`);
+            }}
+
+            document.getElementById('rf2_upload_btn').addEventListener('click', async () => {{
+                statusEl.textContent = '';
+                const files = Array.from(document.getElementById('rf2_files').files || []);
+                if (!files.length) {{
+                    log('Selecciona archivos primero.');
+                    return;
+                }}
+                try {{
+                    for (const file of files) {{
+                        await uploadOne(file);
+                    }}
+                    log('Subida completada. Recargando para listar sesiones...');
+                    window.parent.location.reload();
+                }} catch (err) {{
+                    log(`Error: ${{err.message}}`);
+                }}
+            }});
+        </script>
+        """
+        components.html(html, height=190, scrolling=False)
+
+
+def _fetch_backend_sessions():
+        try:
+                response = requests.get(f"{API_BASE_URL}/sessions", headers=_api_headers(), timeout=20)
+                if response.status_code == 200:
+                        return response.json().get("sessions", [])
+        except Exception:
+                pass
+        return []
+
+
+def _download_session_file(url, target_path):
+        with requests.get(url, headers=_api_headers(), stream=True, timeout=120) as response:
+                if response.status_code != 200:
+                        raise RuntimeError(f"Download failed ({response.status_code})")
+                with open(target_path, "wb") as output:
+                        for chunk in response.iter_content(chunk_size=UPLOAD_CHUNK_SIZE):
+                                if chunk:
+                                        output.write(chunk)
+
+
+def _load_session_locally(session_entry):
+        temp_root = _ensure_temp_upload_root()
+        session_dir = tempfile.mkdtemp(prefix=f"rf2-session-{uuid.uuid4()}-", dir=temp_root)
+
+        tele_name = session_entry["telemetry"]
+        svm_name = session_entry["svm"]
+        tele_path = os.path.join(session_dir, tele_name)
+        svm_path = os.path.join(session_dir, svm_name)
+
+        session_id = session_entry["id"]
+        _download_session_file(f"{API_BASE_URL}/sessions/{session_id}/file/{tele_name}", tele_path)
+        _download_session_file(f"{API_BASE_URL}/sessions/{session_id}/file/{svm_name}", svm_path)
+
+        return {
+                "temp_upload_dir": session_dir,
+                "telemetry_temp_path": tele_path,
+                "svm_temp_path": svm_path,
+                "tele_name": tele_name,
+                "svm_name": svm_name,
+                "selected_session_id": session_id,
+                "selected_session_name": session_entry.get("display_name", session_id),
+        }
+
+
+def _post_analysis_for_session(session_id, data_form):
+        return requests.post(
+                f"{API_BASE_URL}/analyze_session",
+                data={"session_id": session_id, **data_form},
+                headers=_api_headers(),
+                timeout=0,
+        )
 
 def load_fixed_params():
     """Carga los parámetros fijados desde el archivo JSON."""
@@ -41,11 +279,10 @@ st.subheader("Análisis de Telemetría y Setup mediante IA")
 # ─────────────────────────────────────────────────────────────────────────────
 
 @st.cache_data(show_spinner=False)
-def get_mat_dataframe(file_bytes):
+def get_mat_dataframe(file_path):
     """Carga el .mat y devuelve un DataFrame ordenado por tiempo."""
     try:
-        tele_io = io.BytesIO(file_bytes)
-        mat = scipy.io.loadmat(tele_io, struct_as_record=False, squeeze_me=True)
+        mat = scipy.io.loadmat(file_path, struct_as_record=False, squeeze_me=True)
         channels = {}
         for k in mat.keys():
             if not k.startswith('__') and hasattr(mat[k], 'Value'):
@@ -779,10 +1016,13 @@ def plot_all_laps_interactive(all_lap_figs, laps, lap_options, fastest_lap):
     components.html(html_code, height=total_height, scrolling=False)
 
 
-def parse_svm_content(file_bytes):
+def parse_svm_content(file_path):
     setup = {}
     # Intentar decodificar con diferentes codificaciones
     content = None
+
+    with open(file_path, 'rb') as file_handle:
+        file_bytes = file_handle.read()
 
     # Heurística para UTF-16 con BOM
     if file_bytes.startswith((b'\xff\xfe', b'\xfe\xff')):
@@ -843,7 +1083,7 @@ def parse_svm_content(file_bytes):
 def cleanup_server_data():
     """Llama al endpoint de limpieza del backend."""
     try:
-        requests.post(f"{API_BASE_URL}/cleanup", timeout=5)
+        requests.post(f"{API_BASE_URL}/cleanup", headers=_api_headers(), timeout=10)
     except Exception:
         pass
 
@@ -853,6 +1093,8 @@ def cleanup_server_data():
 # ─────────────────────────────────────────────────────────────────────────────
 with st.sidebar:
     st.header("Carga de Datos")
+
+    _ensure_client_session_id()
 
     # Estado para controlar si hay una sesión activa y analizada
     is_analyzed = 'ai_analysis_data' in st.session_state
@@ -865,45 +1107,33 @@ with st.sidebar:
     if 'selected_session_name' not in st.session_state:
         st.session_state['selected_session_name'] = None
 
-    tele_to_send = None
-    svm_to_send = None
+    tele_path = None
+    svm_path = None
     tele_name = None
     svm_name = None
 
     # Lógica de visualización de la barra lateral
     if not st.session_state['selected_session_name']:
-        # ESTADO 1: No hay archivos cargados
-        uploaded_files = st.file_uploader(
-            "Sube archivos .mat y .svm", type=["mat", "svm", "csv"],
-            accept_multiple_files=True
-        )
-        if uploaded_files:
-            sessions = {}
-            for f in uploaded_files:
-                base_name = f.name.rsplit('.', 1)[0]
-                ext = f.name.rsplit('.', 1)[1].lower()
-                if base_name not in sessions:
-                    sessions[base_name] = {}
-                sessions[base_name][ext] = f
+        # ESTADO 1: Subida chunked directa browser -> API (64 MB por petición)
+        st.caption("Subida robusta para Cloudflare: el navegador envía chunks de 64 MB a la API.")
+        _render_chunked_uploader()
 
-            valid_sessions = [
-                name for name, files in sessions.items()
-                if ("mat" in files or "csv" in files) and "svm" in files
-            ]
-            if valid_sessions:
-                selected_label = st.selectbox("Selecciona sesión subida", valid_sessions)
-                if st.button("Cargar sesión"):
-                    ext_found = "mat" if "mat" in sessions[selected_label] else "csv"
-                    tele_obj = sessions[selected_label][ext_found]
-                    svm_obj = sessions[selected_label]["svm"]
+        available_sessions = _fetch_backend_sessions()
+        if available_sessions:
+            labels = [s.get("display_name", s["id"]) for s in available_sessions]
+            selected_label = st.selectbox("Selecciona sesión subida", labels)
 
-                    # Guardar en session_state para persistencia entre reruns
-                    st.session_state['tele_to_send'] = tele_obj.getvalue()
-                    st.session_state['svm_to_send'] = svm_obj.getvalue()
-                    st.session_state['tele_name'] = tele_obj.name
-                    st.session_state['svm_name'] = svm_obj.name
-                    st.session_state['selected_session_name'] = selected_label
+            if st.button("Cargar sesión"):
+                selected_entry = next(
+                    (s for s in available_sessions if s.get("display_name", s["id"]) == selected_label),
+                    None,
+                )
+                if selected_entry is not None:
+                    _cleanup_temp_session_files()
+                    st.session_state.update(_load_session_locally(selected_entry))
                     st.rerun()
+        else:
+            st.info("No hay sesiones completas en el backend todavía. Sube .mat/.csv + .svm.")
     else:
         # ESTADO 2 o 3: Sesión cargada (con o sin análisis)
         st.info(f"Sesión activa: **{st.session_state['selected_session_name']}**")
@@ -914,23 +1144,24 @@ with st.sidebar:
             cleanup_server_data()
 
             # 2. Limpiar estado y recargar
+            _cleanup_temp_session_files()
             st.session_state.clear()
             st.rerun()
 
     # Recuperar datos de la sesión si existen
     if st.session_state.get('selected_session_name'):
-        tele_to_send = st.session_state.get('tele_to_send')
-        svm_to_send = st.session_state.get('svm_to_send')
+        tele_path = st.session_state.get('telemetry_temp_path')
+        svm_path = st.session_state.get('svm_temp_path')
         tele_name = st.session_state.get('tele_name')
         svm_name = st.session_state.get('svm_name')
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Contenido principal
 # ─────────────────────────────────────────────────────────────────────────────
-if tele_to_send and svm_to_send:
+if tele_path and svm_path:
     if tele_name.endswith('.mat'):
         # 1. Cargar DataFrame (cacheado)
-        df_local = get_mat_dataframe(tele_to_send)
+        df_local = get_mat_dataframe(tele_path)
 
         if df_local is not None and 'Lap_Number' in df_local.columns:
             laps = sorted([int(l) for l in df_local['Lap_Number'].unique() if l > 0])
@@ -996,7 +1227,7 @@ if tele_to_send and svm_to_send:
                                 return parts[1].strip()
                         return val_str.strip()
 
-                    setup_data = parse_svm_content(svm_to_send)
+                    setup_data = parse_svm_content(svm_path)
                     # Cargar mapping para nombres amigables
                     _mapping_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "app", "core", "param_mapping.json")
                     _mapping = {"sections": {}, "parameters": {}}
@@ -1114,7 +1345,7 @@ if tele_to_send and svm_to_send:
                     sel_model = None
                     if sel_provider == "ollama":
                         try:
-                            models_resp = requests.get(f"{API_BASE_URL}/models", timeout=2)
+                            models_resp = requests.get(f"{API_BASE_URL}/models", headers=_api_headers(), timeout=2)
                             available_models = (
                                 models_resp.json().get("models", [])
                                 if models_resp.status_code == 200 else []
@@ -1134,10 +1365,6 @@ if tele_to_send and svm_to_send:
 
                     if analyze_button:
                         with st.spinner("Analizando con IA…"):
-                            files = {
-                                "telemetry_file": (tele_name, tele_to_send),
-                                "svm_file": (svm_name, svm_to_send),
-                            }
                             data_form = {}
                             data_form["provider"] = sel_provider
                             if sel_model:
@@ -1147,9 +1374,9 @@ if tele_to_send and svm_to_send:
                             if 'fixed_params' in st.session_state and st.session_state['fixed_params']:
                                 data_form["fixed_params"] = _json.dumps(list(st.session_state['fixed_params']))
 
-                            response = requests.post(
-                                f"{API_BASE_URL}/analyze",
-                                files=files, data=data_form
+                            response = _post_analysis_for_session(
+                                st.session_state.get("selected_session_id", st.session_state['selected_session_name']),
+                                data_form,
                             )
                             if response.status_code == 200:
                                 data = response.json()
@@ -1161,9 +1388,9 @@ if tele_to_send and svm_to_send:
                                 backend_model = data.get("llm_model") or sel_model or "default"
                                 st.session_state['ai_model'] = f"{backend_provider} / {backend_model}"
                                 # Parsear setup_data del .svm para re-análisis
-                                st.session_state['ai_setup_data'] = parse_svm_content(svm_to_send)
+                                st.session_state['ai_setup_data'] = parse_svm_content(svm_path)
                             else:
-                                st.error("Error en el análisis.")
+                                st.error(f"Error en el análisis ({response.status_code}).")
 
                     # Mostrar resultados (persistentes en session_state)
                     if 'ai_analysis_data' in st.session_state:
@@ -1217,16 +1444,15 @@ if tele_to_send and svm_to_send:
         st.info("La visualización detallada actualmente solo soporta archivos .mat.")
         if st.button("Analizar con IA"):
             with st.spinner("Analizando con IA…"):
-                files = {
-                    "telemetry_file": (tele_name, tele_to_send),
-                    "svm_file": (svm_name, svm_to_send),
-                }
-                response = requests.post(f"{API_BASE_URL}/analyze", files=files)
+                response = _post_analysis_for_session(
+                    st.session_state.get("selected_session_id", st.session_state['selected_session_name']),
+                    {},
+                )
                 if response.status_code == 200:
                     data = response.json()
                     st.success("Análisis completado")
                     st.write(data['driving_analysis'])
                 else:
-                    st.error("Error en el análisis.")
+                    st.error(f"Error en el análisis ({response.status_code}).")
 else:
     st.info("👋 Sube tus archivos o elige una sesión anterior en la barra lateral para comenzar.")

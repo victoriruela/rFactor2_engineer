@@ -291,6 +291,9 @@ ollama pull llama3.2:latest
 ### Running tests (always use Docker)
 
 ```bash
+# Preferred wrapper (auto-cleans exited one-off test containers for this project)
+powershell -ExecutionPolicy Bypass -NoProfile -File scripts/run_docker_test.ps1
+
 # Unit tests — fast, no Ollama required (~3s in container)
 docker compose --profile test run --rm test
 
@@ -305,6 +308,26 @@ docker compose --profile test run --rm test pytest -m integration -v
 
 # E2E API tests — requires backend container running at :8000
 docker compose --profile test run --rm test pytest e2e/api/ -v
+```
+
+To pass custom arguments through the wrapper, append them after the script path:
+
+```bash
+powershell -ExecutionPolicy Bypass -NoProfile -File scripts/run_docker_test.ps1 pytest tests/test_main.py -q
+```
+
+If stale containers exist from interrupted runs, clean exited test containers for both:
+- this project (`rfactor2_engineer`), and
+- temporary benchmark projects (`t1-*`, `t2-*`, ...):
+
+```bash
+powershell -ExecutionPolicy Bypass -NoProfile -File scripts/cleanup_docker_test_artifacts.ps1
+```
+
+After a benchmark/temporary task is completed, those temporary test containers must be purged. If you also want to remove temporary benchmark test images (e.g. `t1-...-test`), run:
+
+```bash
+powershell -ExecutionPolicy Bypass -NoProfile -File scripts/cleanup_docker_test_artifacts.ps1 -RemoveTemporaryTestImages
 ```
 
 The `test` service bind-mounts the full source tree at `/app`, so **code changes are reflected immediately without rebuilding** the image. Only rebuild (`docker compose --profile test build test`) when `requirements.txt` or `requirements-dev.txt` change.
@@ -400,6 +423,104 @@ ollama pull llama3.2:latest
 | `Dockerfile` | Multi-stage build (targets: `backend`, `frontend`) |
 | `docker-compose.yml` | Orchestrates backend/frontend/test containers; uses host Ollama |
 | `.dockerignore` | Excludes data/, tests/, .git/ from build context |
+| `deploy/docker-compose.gcp.yml` | GCP host override: localhost-only port binds + host-gateway mapping |
+| `deploy/nginx-rfactor2_engineer.conf` | HTTP reverse-proxy config (Nginx -> frontend/backend) |
+| `deploy/.htpasswd` | Basic Auth credentials file (hashed) copied to host Nginx |
+| `scripts/deploy_gcp.ps1` | One-command deploy to the configured GCP host |
+
+## GCP Deployment
+
+### Canonical host
+
+- SSH target: `bitor@34.175.126.128`
+- Auth: default SSH keypair already configured for current user.
+- Docker access: use `sudo -n docker ...` (user is not in `docker` group).
+- Nginx binary path: `/usr/sbin/nginx`
+
+### Runtime topology
+
+- `frontend` container bound to `127.0.0.1:18501`
+- `backend` container bound to `127.0.0.1:18000`
+- Public domains: `telemetria.bot.nu`, `car-setup.com`
+- Nginx listens on `:80` and `:443`
+- `http://telemetria.bot.nu` redirects to `https://telemetria.bot.nu`
+- `http://car-setup.com` redirects to `https://car-setup.com`
+- HTTPS proxy routes:
+  - `/` -> `http://127.0.0.1:18501`
+  - `/api/` -> `http://127.0.0.1:18000`
+- Nginx enforces HTTP Basic Auth on **all routes** (`/` and `/api/*`).
+- Nginx upload limit is set to `client_max_body_size 20000M` (aligned with Streamlit `maxUploadSize=20000`) and includes an explicit `/_stcore/upload_file/` route to avoid `413 Request Entity Too Large` on telemetry uploads.
+- TLS is terminated at host Nginx using Let's Encrypt certs from `/etc/letsencrypt/live/telemetria.bot.nu/` and `/etc/letsencrypt/live/car-setup.com/`.
+
+### HTTP Basic Auth (current)
+
+- User: `racef1`
+- Password: `100fuchupabien`
+- Credential file deployed to host: `/etc/nginx/.htpasswd_rfactor2_engineer`
+- Source file in repo: `deploy/.htpasswd` (hashed value)
+
+Quick verify commands on host:
+
+```bash
+curl -I http://127.0.0.1/                          # expected 401
+curl -u racef1:100fuchupabien -I http://127.0.0.1/ # expected 200
+curl -u racef1:100fuchupabien -I http://127.0.0.1/api/models # expected 200
+```
+
+If credentials must rotate:
+1. Update `deploy/.htpasswd` with the new hashed credential.
+2. Redeploy with `scripts/deploy_gcp.ps1`.
+3. Validate with authenticated `curl` checks.
+
+### TLS / Certbot
+
+- Certbot and the Nginx plugin are installed on the host via apt (`certbot`, `python3-certbot-nginx`).
+- Active certificate names: `telemetria.bot.nu`, `car-setup.com`
+- Live cert paths:
+  - `/etc/letsencrypt/live/telemetria.bot.nu/fullchain.pem`
+  - `/etc/letsencrypt/live/car-setup.com/fullchain.pem`
+- Live key paths:
+  - `/etc/letsencrypt/live/telemetria.bot.nu/privkey.pem`
+  - `/etc/letsencrypt/live/car-setup.com/privkey.pem`
+- Automatic renewal is handled by `certbot.timer`.
+
+Quick verify commands on host:
+
+```bash
+curl -I http://telemetria.bot.nu/                                  # expected 301 to https://telemetria.bot.nu/
+curl -u racef1:100fuchupabien -I https://telemetria.bot.nu/        # expected 200
+curl -u racef1:100fuchupabien https://telemetria.bot.nu/api/models # expected JSON response
+curl -I http://car-setup.com/                                      # expected 301 to https://car-setup.com/
+curl -u racef1:100fuchupabien -I https://car-setup.com/            # expected 200
+curl -u racef1:100fuchupabien https://car-setup.com/api/models     # expected JSON response
+```
+
+### Deploy / update procedure
+
+From repository root:
+
+```bash
+powershell -ExecutionPolicy Bypass -NoProfile -File scripts/deploy_gcp.ps1
+```
+
+What the script does:
+1. Creates a tar artifact from `git archive` (tracked files only).
+2. Uploads/extracts to `/home/bitor/apps/rFactor2_engineer`.
+3. Runs `docker compose -f deploy/docker-compose.gcp.yml up -d --build`.
+4. Installs/validates/reloads Nginx config.
+5. Runs health checks for frontend/backend/nginx endpoints.
+
+If only config/code changed and you want to skip image rebuild:
+
+```bash
+powershell -ExecutionPolicy Bypass -NoProfile -File scripts/deploy_gcp.ps1 -SkipDockerBuild
+```
+
+### Operational notes
+
+- Do not expose backend/frontend directly to public interfaces; keep loopback bindings and route through Nginx.
+- Do not replace `deploy/nginx-rfactor2_engineer.conf` with a non-TLS variant; future deploys copy that file directly onto the host.
+- After benchmark/temporary tasks, purge temporary Docker test artifacts (see cleanup scripts in this document).
 
 ## Git Workflow
 

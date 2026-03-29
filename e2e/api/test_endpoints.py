@@ -1,5 +1,10 @@
 """E2E tests for the FastAPI backend. Requires a running server (see conftest.py)."""
+from pathlib import Path
+
 import pytest
+
+
+FIXTURES_DIR = Path(__file__).resolve().parents[2] / "tests" / "fixtures"
 
 
 @pytest.mark.asyncio
@@ -45,3 +50,39 @@ async def test_analyze_wrong_format_returns_error(async_client):
         },
     )
     assert r.status_code in (400, 500)
+
+
+@pytest.mark.asyncio
+async def test_analyze_happy_path_returns_structured_payload(async_client):
+    """Valid fixture files should return a complete analysis payload."""
+    telemetry_bytes = (FIXTURES_DIR / "sample.csv").read_bytes()
+    svm_bytes = (FIXTURES_DIR / "sample.svm").read_bytes()
+
+    r = await async_client.post(
+        "/analyze",
+        files={
+            "telemetry_file": ("session.csv", telemetry_bytes, "text/csv"),
+            "svm_file": ("car.svm", svm_bytes, "text/plain"),
+        },
+    )
+
+    assert r.status_code == 200
+    body = r.json()
+    for key in (
+        "circuit_data",
+        "issues_on_map",
+        "driving_analysis",
+        "setup_analysis",
+        "full_setup",
+        "session_stats",
+        "laps_data",
+        "llm_provider",
+        "llm_model",
+    ):
+        assert key in body
+
+    assert isinstance(body["circuit_data"].get("x"), list)
+    assert isinstance(body["circuit_data"].get("y"), list)
+    assert len(body["circuit_data"]["x"]) > 0
+    assert len(body["laps_data"]) >= 1
+    assert body["llm_provider"] in ("ollama", "jimmy")
