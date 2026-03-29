@@ -4,14 +4,14 @@
   "status": "approved_for_next_phase_runtime_integration",
   "selectedModel": "llama3.1-8B",
   "prompt": {
-    "variantId": "batch_b_hybrid_strict_compact_k8_t0",
-    "runId": "batch_b_07",
-    "source": "docs/benchmark/prompt_matrix_batch_b.json",
-    "systemPrompt": "Rol: Jimmy ingeniero de pista rFactor2. Salida esperada: recomendaciones precisas, breves y trazables a la telemetria. Si se pide estructura, responde SOLO JSON estricto (objeto unico, doble comilla, sin markdown, sin texto extra). Mantiene coherencia entre especialistas y reporte final."
+    "variantId": "grid500_s4_k4_t0.2",
+    "runId": "grid500_013",
+    "source": "docs/benchmark/results/grid_search_500_20260329T172924Z/best_run.json",
+    "systemPrompt": "Eres Jimmy (llama3.1-8B) ingeniero de pista rFactor2. Tono tecnico, breve y accionable. Si se solicita estructura, responde SOLO JSON estricto, sin texto extra ni markdown. No inventes vueltas, curvas ni distancias fuera de la telemetria dada. Especialistas: entrega items con parameter, new_value y reason, enfocados en cambios reales. Chief: integra propuestas validas de especialistas y conserva su razonamiento tecnico."
   },
   "sampling": {
-    "topK": 8,
-    "temperature": 0.0
+    "topK": 4,
+    "temperature": 0.2
   },
   "parseCleanup": {
     "stripStatsTags": true,
@@ -40,38 +40,44 @@
     "finalFailureAction": "Return controlled fallback payload and stop further retries for this stage."
   },
   "selectionEvidence": {
+    "grid500": {
+      "winnerRunId": "grid500_013",
+      "winnerVariantId": "grid500_s4_k4_t0.2",
+      "score": 0.9775,
+      "jsonValidity": 0.95,
+      "coverage": 1.0,
+      "drivingNonEmpty": 1.0,
+      "refusalRate": 0.0,
+      "lapReferenceViolationRate": 0.0,
+      "latencyAvgMs": 6633.93,
+      "latencyP95Ms": 8691.20,
+      "totalRuns": 20,
+      "batchSize": 10,
+      "source": "docs/benchmark/results/grid_search_500_20260329T172924Z/best_run.json"
+    },
     "batchA": {
       "winnerRunId": "batch_a_03",
       "winnerVariantId": "batch_a_prose_json_strict_k8_t03",
-      "score": 0.9325,
-      "jsonValidity": 0.85,
+      "score": 0.975,
+      "jsonValidity": 0.9,
       "coverage": 1.0,
       "drivingNonEmpty": 1.0,
-      "latencyAvgMs": 3901.94,
-      "source": "docs/benchmark/results/batch_a/report.md"
-    },
-    "batchB": {
-      "winnerRunId": "batch_b_07",
-      "winnerVariantId": "batch_b_hybrid_strict_compact_k8_t0",
-      "score": 0.9325,
-      "jsonValidity": 0.85,
-      "coverage": 1.0,
-      "drivingNonEmpty": 1.0,
-      "latencyAvgMs": 3813.77,
-      "source": "docs/benchmark/results/batch_b/report.md"
+      "latencyAvgMs": 3735.07,
+      "source": "docs/benchmark/results/jimmy_prompt_matrix_20260329T121618Z/summary.csv"
     },
     "comparisonVsBatchA": {
-      "scoreDelta": 0.0,
-      "jsonValidityDelta": 0.0,
+      "scoreDelta": 0.0025,
+      "jsonValidityDelta": 0.05,
       "coverageDelta": 0.0,
       "drivingNonEmptyDelta": 0.0,
-      "latencyAvgDeltaMs": -88.17
+      "refusalRateImprovement": 0.0,
+      "lapViolationRateImprovement": 0.0
     }
   },
   "productionRolloutAcceptanceCriteria": [
-    "Runtime integration uses selectedModel=llama3.1-8B, variantId=batch_b_hybrid_strict_compact_k8_t0, topK=8, temperature=0.0 with no drift.",
-    "A regression benchmark run against the same fixture set keeps composite score >= 0.93.",
-    "chief_none and chief_invalid_json_or_missing_full_setup_sections combined rate stays <= baseline from batch_b report when retries are enabled.",
+    "Runtime integration uses selectedModel=llama3.1-8B, variantId=grid500_s4_k4_t0.2, topK=4, temperature=0.2 with no drift.",
+    "A regression benchmark run against the same fixture set keeps composite score >= 0.97.",
+    "chief_none and chief_invalid_json_or_missing_full_setup_sections combined rate stays <= baseline from grid500 run.",
     "Fallback path sets degraded=true and fallback_reason for all exhausted retry cases.",
     "No runtime wiring is considered complete until JSON cleanup and retry behavior match this artifact exactly."
   ]

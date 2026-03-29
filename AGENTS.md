@@ -75,6 +75,12 @@ rFactor2_engineer/
 │   └── web/
 │       ├── upload_telemetry.yaml  # Maestro Web flow: file upload → telemetry tab
 │       └── ai_analysis.yaml       # Maestro Web flow: AI analysis → results visible
+├── scripts/
+│   ├── release_and_deploy.ps1     # Master release orchestration (RC → tag → publish → deploy)
+│   ├── deploy_gcp.ps1             # Deploy tagged artifact to GCP host (requires -ReleaseTag)
+│   ├── run_docker_test.ps1        # Wrapper: docker compose test run with container cleanup
+│   ├── cleanup_docker_test_artifacts.ps1  # Remove exited test containers/images
+│   └── grid_search_jimmy_500.py   # New large-scale grid search with 500 runs in batches of 10
 ├── deploy/
 │   ├── docker-compose.gcp.yml     # GCP host override (loopback port binds + host-gateway)
 │   ├── nginx-rfactor2_engineer.conf  # Nginx reverse-proxy config (TLS, Basic Auth, proxy)
@@ -336,6 +342,17 @@ All hardcoded values (ports, paths, thresholds, parameter lists, telemetry chann
 **Section name resolution**: LLM may return friendly names instead of internal names. Both `AIAngineer.analyze()` and `_format_full_setup()` use reverse-mapping dicts to handle this.
 
 **Ollama auto-start**: `_ensure_ollama_running()` checks health via `GET /api/tags`, starts `ollama serve` as background process if needed, waits up to 15s.
+
+**Jimmy specialist normalization**: `AIAngineer._normalize_specialist_report()` accepts alternate JSON keys from Jimmy responses (`recomendaciones`, `parametro`, `nuevo_valor`, `motivo`, etc.) and maps them to the canonical `items[{parameter,new_value,reason}]` shape. Specialist `summary` is preserved and passed to the chief engineer context.
+
+**Prompt benchmarking protocol (Jimmy) — mandatory**: Any change to Jimmy runtime settings (`app/core/jimmy_runtime_config.v1.json`) or prompt behavior must be backed by a comparative run of `scripts/benchmark_prompt_matrix.py` against the benchmark fixtures. Required evidence in the same PR/commit:
+- `docs/benchmark/results/<run_folder>/summary.csv`
+- `docs/benchmark/results/<run_folder>/results.json`
+- Updated `selectionEvidence` in `jimmy_runtime_config.v1.json` pointing to that run
+
+**Use batch grid search for major iterations**: For large-scale tuning, prefer the new `scripts/grid_search_jimmy_500.py`, which performs 500 candidate runs in parallel batches of 10 and auto-selects the best scoring profile into `best_run.json`.
+
+No prompt/runtime change is considered valid if it lacks benchmark evidence showing no regression in JSON validity, recommendation coverage, and driving-analysis non-empty rate.
 
 **Frontend session analysis timeout**: `frontend/streamlit_app.py` posts stored sessions to `/analyze_session` with a long-running Requests timeout tuple `(10, 1800)`. Never use `timeout=0` with `requests`; urllib3 rejects non-positive timeouts before the backend call is made.
 
