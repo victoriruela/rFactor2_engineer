@@ -29,6 +29,9 @@ services:
     build:
       context: .
       target: test
+    environment:
+      - OLLAMA_BASE_URL=http://host.docker.internal:11434
+      - RF2_API_URL=http://host.docker.internal:8000
     volumes:
       - .:/app          # full source bind-mount so edits are reflected without rebuild
     working_dir: /app
