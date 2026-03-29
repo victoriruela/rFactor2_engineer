@@ -98,6 +98,13 @@ La aplicación se abrirá automáticamente en tu navegador (por defecto en `http
 4. Haz clic en **"Analizar Datos"**.
 5. Revisa el mapa del circuito y las listas de recomendaciones para mejorar tu tiempo de vuelta.
 
+## 🔗 Asana MCP Integration
+
+Este proyecto incluye un plugin de Claude Code para gestionar la autenticación OAuth2 y configuración MCP de Asana en múltiples IDEs (Claude Desktop, Claude CLI, VS Code Copilot, JetBrains Copilot).
+
+- **Plugin zip:** [`asana-mcp-plugin.zip`](asana-mcp-plugin.zip) — descomprimir en `~/.claude/asana-mcp/`
+- **Documentación completa:** [`ASANA.md`](ASANA.md)
+
 ## 📝 Notas Técnicas
 - El parseo de archivos `.ld` se realiza mediante una implementación interna que lee la estructura binaria de MoTeC, extrayendo canales de telemetría sin depender de librerías externas de terceros.
 - La visualización del mapa utiliza `Plotly` para gráficos interactivos.
