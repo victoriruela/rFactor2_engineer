@@ -202,6 +202,55 @@ Auto-extended by the Translation Agent when new parameters are encountered. The 
 
 See [`ASANA.md`](ASANA.md) for full details. Plugin zip at `asana-mcp-plugin.zip`. Manages OAuth2 auth and token injection into Claude Desktop, Claude CLI, VS Code Copilot, and JetBrains Copilot configs.
 
+### Canonical project
+
+The single Asana project for all phases of this repo is **"rFactor2 Engineer"** (GID `1213839935179235`, workspace `1213846793386214`). **Always use this project.** Never create a second project.
+
+### Board layout
+
+The project uses **Board layout** with four fixed sections. These must exist before creating tasks:
+
+| Section | Meaning |
+|---------|---------|
+| `To Do` | Task created, not yet started |
+| `In Progress` | Assigned to a subagent and actively being worked |
+| `In Review` | Subagent committed; supervisor is merging |
+| `Done` | Merged and verified |
+
+When creating tasks, always supply `section_id` pointing to the `To Do` section GID. Retrieve section GIDs with `get_project(project_id, include_sections=True)`.
+
+Task status transitions use `update_tasks` with `add_projects` containing the target section GID, or a dedicated move-to-section call.
+
+### MCP tool failure protocol — MANDATORY
+
+The `mcp_asana-mcp_*` tools authenticate via a token stored in the JetBrains IDE config file. That token **expires every hour**. The IDE **caches it at startup** and does not reload it mid-session.
+
+When any `mcp_asana-mcp_*` call fails with `invalid_token`:
+
+```
+Step 1 — Refresh & re-inject the token (run in terminal):
+    python "$env:USERPROFILE\.claude\asana-mcp\scripts\asana_mcp.py" auth
+    python "$env:USERPROFILE\.claude\asana-mcp\scripts\asana_mcp.py" update-mcp
+
+Step 2 — Retry the MCP tool immediately (the token in the config file is
+    now valid; occasionally the IDE picks it up without a restart).
+
+Step 3 — If the tool still fails:
+    ► STOP. Tell the user:
+      "The Asana MCP token has been refreshed and written to the IDE
+       config, but JetBrains has cached the old token. Please restart
+       the IDE (File → Invalidate Caches / Restart, or close and reopen
+       the project), then ask me to continue."
+    ► Wait for the user to confirm restart before doing anything else.
+
+NEVER create a workaround Python script that calls the Asana API or MCP
+endpoint directly. NEVER silently bypass the MCP tools.
+```
+
+### Creating the board sections (one-time setup)
+
+If `get_project(project_id, include_sections=True)` returns fewer than four sections, create the missing ones using `create_project` with the `sections` array, or via the Asana web UI. The four required section names are exactly: `To Do`, `In Progress`, `In Review`, `Done`.
+
 ## Constants
 
 All hardcoded values (ports, paths, thresholds, parameter lists, telemetry channels, Asana config) are documented in [`CONSTANTS.md`](CONSTANTS.md). Reference that file when working with specific numeric values or configuration.
@@ -429,38 +478,48 @@ PHASE_COMPLETE:
 
 ### Asana Task Structure
 
-Tasks are created and managed via the Asana MCP tools (JSON-RPC 2.0 at `https://mcp.asana.com/v2/mcp`).
+Tasks are created and managed via the **`mcp_asana-mcp_*` tools only** — never via custom scripts or direct HTTP calls.
+
+#### Pre-flight checklist
+
+Before creating any task:
+1. Call `get_project("1213839935179235", include_sections=True)` to retrieve the four section GIDs (`To Do`, `In Progress`, `In Review`, `Done`).
+2. If a section is missing, stop and create it (or ask the user to create it in the Asana web UI).
+3. Confirm the token is valid (if the previous step failed, follow the **MCP tool failure protocol** above).
 
 #### Creating tasks
 
-Use `create_task_preview` (or `create_tasks` if batch-supported):
+Use `create_tasks` with `default_project` and `section_id` pointing to `To Do`:
 
 ```json
 {
-  "name": "[Phase Name] Task: <task name>",
-  "projects": ["<project_gid>"],
-  "notes": "<task description from phase spec>\n\nFiles: <expected files>\nPhase: <phase name>",
-  "add_dependencies": ["<dependency_task_gid>", "..."]
+  "default_project": "1213839935179235",
+  "tasks": [
+    {
+      "name": "[Phase Name] Task: <task name>",
+      "notes": "<description>\n\nFiles: <files>\nPhase: <phase>",
+      "section_id": "<to_do_section_gid>"
+    }
+  ]
 }
 ```
 
-**Dependency ordering**: Tasks without dependencies are created first. Then tasks with dependencies reference the GIDs returned from the first batch. This may require two `create_task_preview` calls.
+**Dependency ordering**: Tasks without dependencies are created first. Then tasks with dependencies pass `add_dependencies` referencing the GIDs returned by the first batch.
 
-#### Updating task status
+#### Moving tasks between sections
 
-Use `update_tasks`:
+Use `update_tasks` with `add_projects` to move a task into a new section:
 
-| Transition | Fields |
+| Transition | Action |
 |------------|--------|
-| → In Progress | `{"task": "<gid>", "custom_fields": {...}}` + `add_comment`: "Assigned to subagent" |
+| Created → To Do | supply `section_id` in `create_tasks` |
+| → In Progress | `update_tasks` → `add_projects: [{project_id, section_id: in_progress_gid}]` + `add_comment`: "Assigned to subagent" |
 | → In Review | `add_comment`: "Subagent committed. Reviewing and merging." |
-| → Done | `{"task": "<gid>", "completed": true}` + `add_comment`: "Merged in <sha>" |
-
-If the Asana project uses Board layout with sections (To Do / In Progress / In Review / Done), move tasks between sections using the appropriate section GIDs.
+| → Done | `update_tasks` → `completed: true` + `add_comment`: "Merged in \<sha\>" |
 
 #### Querying tasks
 
-Use `get_tasks` with `project` filter to list all tasks in the phase project. Check `completed` field to identify remaining work. Check dependency GIDs against completed tasks to determine the ready frontier.
+Use `get_tasks(project="1213839935179235")` to list all tasks. Check `completed` and `memberships[].section.name` to identify the current state and compute the ready frontier.
 
 ---
 
