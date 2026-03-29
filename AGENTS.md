@@ -68,7 +68,10 @@ rFactor2_engineer/
 ├── asana-mcp-plugin.zip           # Asana MCP plugin (install to ~/.claude/asana-mcp/)
 ├── CONSTANTS.md                   # Index of domain constant files
 ├── SPECIFICATION.md               # Original project spec
-└── README.md                      # User-facing docs (Spanish)
+├── README.md                      # User-facing docs (Spanish)
+├── Dockerfile                     # Multi-stage build (backend + frontend targets)
+├── docker-compose.yml             # 3-service orchestration (ollama, backend, frontend)
+└── .dockerignore                  # Build context exclusions
 ```
 
 ## Dependencies
@@ -99,9 +102,10 @@ requests                   # HTTP calls (Ollama API, frontend→backend)
 | Variable | Default | Purpose |
 |----------|---------|---------|
 | `OLLAMA_BASE_URL` | `http://localhost:11434` | Ollama API endpoint |
-| `OLLAMA_MODEL` | `llama3.2:3b` | Model tag passed to ChatOllama |
+| `OLLAMA_MODEL` | `llama3.2:latest` | Model tag passed to ChatOllama |
+| `RF2_API_URL` | `http://localhost:8000` | Backend URL used by Streamlit frontend |
 
-Set in `.env` at project root (loaded by python-dotenv).
+Set in `.env` at project root (loaded by python-dotenv). In Docker, these are set via `docker-compose.yml`.
 
 ## API Endpoints
 
@@ -266,6 +270,54 @@ e2e/
 ├── api/test_endpoints.py           # Live backend smoke tests
 └── web/*.yaml                      # Maestro Web flows (Streamlit UI)
 ```
+
+## Docker
+
+### Quick start
+
+```bash
+docker compose up --build
+```
+
+Services:
+- **Frontend**: http://localhost:8501
+- **Backend**: http://localhost:8000
+- **Ollama**: http://localhost:11434
+
+### First run — pull the model
+
+After the Ollama container is up, pull the required model:
+
+```bash
+docker compose exec ollama ollama pull llama3.2:latest
+```
+
+### Architecture
+
+```
+┌─────────────┐    ┌──────────┐    ┌────────┐
+│  Frontend   │───▶│ Backend  │───▶│ Ollama │
+│  :8501      │    │  :8000   │    │ :11434 │
+└─────────────┘    └──────────┘    └────────┘
+  RF2_API_URL       OLLAMA_BASE_URL
+```
+
+### Volumes
+
+| Mount | Purpose |
+|-------|---------|
+| `./data` → `/app/data` | Session uploads (persist across restarts) |
+| `./app/core/param_mapping.json` | Translation cache (generated at runtime) |
+| `./app/core/fixed_params.json` | User-locked parameters |
+| `ollama_data` (named) | Downloaded model weights |
+
+### Files
+
+| File | Purpose |
+|------|---------|
+| `Dockerfile` | Multi-stage build (targets: `backend`, `frontend`) |
+| `docker-compose.yml` | Orchestrates all 3 services |
+| `.dockerignore` | Excludes data/, tests/, .git/ from build context |
 
 ## Development Methodology
 

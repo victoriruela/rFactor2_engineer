@@ -9,6 +9,7 @@ import os
 import json as _json
 
 FIXED_PARAMS_FILE = "app/core/fixed_params.json"
+API_BASE_URL = os.environ.get("RF2_API_URL", "http://localhost:8000")
 
 def load_fixed_params():
     """Carga los parámetros fijados desde el archivo JSON."""
@@ -752,7 +753,7 @@ def parse_svm_content(file_bytes):
 def cleanup_server_data():
     """Llama al endpoint de limpieza del backend."""
     try:
-        requests.post("http://localhost:8000/cleanup", timeout=5)
+        requests.post(f"{API_BASE_URL}/cleanup", timeout=5)
     except:
         pass
 
@@ -1014,7 +1015,7 @@ if tele_to_send and svm_to_send:
                     st.header("Análisis de Ingeniero Virtual")
 
                     try:
-                        models_resp = requests.get("http://localhost:8000/models", timeout=2)
+                        models_resp = requests.get(f"{API_BASE_URL}/models", timeout=2)
                         available_models = (
                             models_resp.json().get("models", [])
                             if models_resp.status_code == 200 else []
@@ -1040,7 +1041,7 @@ if tele_to_send and svm_to_send:
                                 data_form["fixed_params"] = _json.dumps(list(st.session_state['fixed_params']))
                             
                             response = requests.post(
-                                "http://localhost:8000/analyze",
+                                f"{API_BASE_URL}/analyze",
                                 files=files, data=data_form
                             )
                             if response.status_code == 200:
@@ -1107,7 +1108,7 @@ if tele_to_send and svm_to_send:
                     "telemetry_file": (tele_name, tele_to_send),
                     "svm_file": (svm_name, svm_to_send),
                 }
-                response = requests.post("http://localhost:8000/analyze", files=files)
+                response = requests.post(f"{API_BASE_URL}/analyze", files=files)
                 if response.status_code == 200:
                     data = response.json()
                     st.success("Análisis completado")
