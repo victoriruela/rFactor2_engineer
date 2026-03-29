@@ -1,0 +1,78 @@
+{
+  "version": "1.0.0",
+  "selectionDate": "2026-03-29",
+  "status": "approved_for_next_phase_runtime_integration",
+  "selectedModel": "llama3.1-8B",
+  "prompt": {
+    "variantId": "batch_b_hybrid_strict_compact_k8_t0",
+    "runId": "batch_b_07",
+    "source": "docs/benchmark/prompt_matrix_batch_b.json",
+    "systemPrompt": "Rol: Jimmy ingeniero de pista rFactor2. Salida esperada: recomendaciones precisas, breves y trazables a la telemetria. Si se pide estructura, responde SOLO JSON estricto (objeto unico, doble comilla, sin markdown, sin texto extra). Mantiene coherencia entre especialistas y reporte final."
+  },
+  "sampling": {
+    "topK": 8,
+    "temperature": 0.0
+  },
+  "parseCleanup": {
+    "stripStatsTags": true,
+    "stripOuterQuotes": true,
+    "trimWhitespace": true,
+    "extractFirstJsonObject": true,
+    "removeTrailingCommasBeforeParse": true
+  },
+  "fallbackPolicy": {
+    "maxRetriesPerStage": 1,
+    "retryOnFailureConditions": [
+      "empty_raw_output",
+      "specialist_invalid_json_or_missing_items",
+      "chief_none",
+      "chief_invalid_json_or_missing_full_setup_sections",
+      "driving_analysis_empty_or_too_short"
+    ],
+    "doNotRetryOnFailureConditions": [
+      "http_4xx_except_408_429",
+      "prompt_contract_violation_repeated_after_retry"
+    ],
+    "failureSignal": {
+      "degraded": true,
+      "reasonField": "fallback_reason"
+    },
+    "finalFailureAction": "Return controlled fallback payload and stop further retries for this stage."
+  },
+  "selectionEvidence": {
+    "batchA": {
+      "winnerRunId": "batch_a_03",
+      "winnerVariantId": "batch_a_prose_json_strict_k8_t03",
+      "score": 0.9325,
+      "jsonValidity": 0.85,
+      "coverage": 1.0,
+      "drivingNonEmpty": 1.0,
+      "latencyAvgMs": 3901.94,
+      "source": "docs/benchmark/results/batch_a/report.md"
+    },
+    "batchB": {
+      "winnerRunId": "batch_b_07",
+      "winnerVariantId": "batch_b_hybrid_strict_compact_k8_t0",
+      "score": 0.9325,
+      "jsonValidity": 0.85,
+      "coverage": 1.0,
+      "drivingNonEmpty": 1.0,
+      "latencyAvgMs": 3813.77,
+      "source": "docs/benchmark/results/batch_b/report.md"
+    },
+    "comparisonVsBatchA": {
+      "scoreDelta": 0.0,
+      "jsonValidityDelta": 0.0,
+      "coverageDelta": 0.0,
+      "drivingNonEmptyDelta": 0.0,
+      "latencyAvgDeltaMs": -88.17
+    }
+  },
+  "productionRolloutAcceptanceCriteria": [
+    "Runtime integration uses selectedModel=llama3.1-8B, variantId=batch_b_hybrid_strict_compact_k8_t0, topK=8, temperature=0.0 with no drift.",
+    "A regression benchmark run against the same fixture set keeps composite score >= 0.93.",
+    "chief_none and chief_invalid_json_or_missing_full_setup_sections combined rate stays <= baseline from batch_b report when retries are enabled.",
+    "Fallback path sets degraded=true and fallback_reason for all exhausted retry cases.",
+    "No runtime wiring is considered complete until JSON cleanup and retry behavior match this artifact exactly."
+  ]
+}
