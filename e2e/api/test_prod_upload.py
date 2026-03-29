@@ -154,9 +154,11 @@ def test_full_chunked_upload_cycle(prod_client, prod_session_id):
     csv_bytes = (FIXTURES_DIR / "sample.csv").read_bytes()
     svm_bytes = (FIXTURES_DIR / "sample.svm").read_bytes()
 
+    # Backend session discovery groups files by base name (same stem for .csv/.svm).
+    # Keep a shared stem so /sessions can surface the pair as one complete session.
     for filename, content in [
         ("prod_e2e_session.csv", csv_bytes),
-        ("prod_e2e_car.svm", svm_bytes),
+        ("prod_e2e_session.svm", svm_bytes),
     ]:
         # 1. Init
         init_r = prod_client.post("/uploads/init", json={"filename": filename})
