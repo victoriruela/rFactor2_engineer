@@ -20,7 +20,7 @@ TEMP_UPLOAD_ROOT = os.path.join(tempfile.gettempdir(), "rfactor2_engineer_upload
 CLIENT_SESSION_COOKIE = "rf2_session_id"
 CLIENT_SESSION_QUERY_PARAM = "rf2sid"
 SESSION_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{8,128}$")
-MAT_PREVIEW_MAX_MB = int(os.environ.get("RF2_FRONTEND_MAX_PREVIEW_MAT_MB", "120"))
+MAT_PREVIEW_MAX_MB = int(os.environ.get("RF2_FRONTEND_MAX_PREVIEW_MAT_MB", "800"))
 
 
 def _ensure_temp_upload_root():
