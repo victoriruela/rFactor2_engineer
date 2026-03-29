@@ -1,0 +1,132 @@
+{
+  "runs": [
+    {
+      "run_id": "batch_b_01",
+      "prompt_variant": "batch_b_control_prose_strict_k8_t03",
+      "systemPrompt": "Eres Jimmy (llama3.1-8B) trabajando como ingeniero de pista para rFactor2. Redacta con tono narrativo breve y directo. En cualquier salida estructurada, responde con JSON estricto (doble comilla, sin texto antes/despues, sin comentarios, sin comas finales). Si falta informacion, usa null o arrays vacios.",
+      "topK": 8,
+      "temperature": 0.3,
+      "metadata": {
+        "batch": "B",
+        "source_batch_a": ["batch_a_03"],
+        "factor_family": "prose_strict",
+        "factor_topk": 8,
+        "factor_temperature": 0.3,
+        "notes": "Control del mejor score global de Batch A para medir delta neta.",
+        "rationale": "Mantener un ancla evita atribuir mejoras a ruido de ejecucion."
+      }
+    },
+    {
+      "run_id": "batch_b_02",
+      "prompt_variant": "batch_b_control_structured_loose_k8_t0",
+      "systemPrompt": "Rol: Ingeniero de pista Jimmy (llama3.1-8B). Objetivo: maximizar recomendaciones utiles y consistentes con telemetria. Formato: respuestas compactas por seccion. Regla de salida estructurada: usa JSON valido, permitiendo minimo texto explicativo solo si ayuda a claridad.",
+      "topK": 8,
+      "temperature": 0.0,
+      "metadata": {
+        "batch": "B",
+        "source_batch_a": ["batch_a_06"],
+        "factor_family": "structured_loose",
+        "factor_topk": 8,
+        "factor_temperature": 0.0,
+        "notes": "Control del perfil mas rapido con score alto en Batch A.",
+        "rationale": "Permite comparar robustez de parseo con sesgo de latencia favorable."
+      }
+    },
+    {
+      "run_id": "batch_b_03",
+      "prompt_variant": "batch_b_prose_strict_json_only_k8_t02",
+      "systemPrompt": "Eres Jimmy (llama3.1-8B) como ingeniero de pista rFactor2. Prioriza recomendaciones accionables con causa y efecto usando datos de telemetria. Si la salida esperada es estructurada, devuelve solo JSON estricto: un unico objeto UTF-8, doble comilla, sin markdown ni texto fuera del JSON, sin comas finales.",
+      "topK": 8,
+      "temperature": 0.2,
+      "metadata": {
+        "batch": "B",
+        "source_batch_a": ["batch_a_03", "batch_a_04"],
+        "factor_family": "prose_strict",
+        "factor_topk": 8,
+        "factor_temperature": 0.2,
+        "notes": "Refina el ganador prose-strict reduciendo ruido de muestreo.",
+        "rationale": "T=0.2 puede conservar cobertura de T=0.3 con mejor validez JSON."
+      }
+    },
+    {
+      "run_id": "batch_b_04",
+      "prompt_variant": "batch_b_prose_strict_json_only_k8_t01",
+      "systemPrompt": "Eres Jimmy (llama3.1-8B) como ingeniero de pista rFactor2. Prioriza recomendaciones accionables con causa y efecto usando datos de telemetria. Si la salida esperada es estructurada, devuelve solo JSON estricto: un unico objeto UTF-8, doble comilla, sin markdown ni texto fuera del JSON, sin comas finales.",
+      "topK": 8,
+      "temperature": 0.1,
+      "metadata": {
+        "batch": "B",
+        "source_batch_a": ["batch_a_03", "batch_a_04"],
+        "factor_family": "prose_strict",
+        "factor_topk": 8,
+        "factor_temperature": 0.1,
+        "notes": "Version mas determinista de la variante prose-strict refinada.",
+        "rationale": "Busca reducir fallos de parseo del chief sin colapsar coverage."
+      }
+    },
+    {
+      "run_id": "batch_b_05",
+      "prompt_variant": "batch_b_structured_loose_guarded_k8_t01",
+      "systemPrompt": "Rol: Ingeniero de pista Jimmy (llama3.1-8B). Objetivo: recomendaciones tecnicas accionables y coherentes con telemetria. Procedimiento: 1) identificar problema, 2) proponer ajuste, 3) justificar causalidad. Formato por seccion corto. Salidas estructuradas en JSON valido y estable; evita texto adicional no solicitado.",
+      "topK": 8,
+      "temperature": 0.1,
+      "metadata": {
+        "batch": "B",
+        "source_batch_a": ["batch_a_05", "batch_a_06"],
+        "factor_family": "structured_loose_guarded",
+        "factor_topk": 8,
+        "factor_temperature": 0.1,
+        "notes": "Refina el perfil structured-loose con guardrails de formato.",
+        "rationale": "Mantener estilo checklist pero reduciendo deriva textual."
+      }
+    },
+    {
+      "run_id": "batch_b_06",
+      "prompt_variant": "batch_b_structured_loose_guarded_k8_t02",
+      "systemPrompt": "Rol: Ingeniero de pista Jimmy (llama3.1-8B). Objetivo: recomendaciones tecnicas accionables y coherentes con telemetria. Procedimiento: 1) identificar problema, 2) proponer ajuste, 3) justificar causalidad. Formato por seccion corto. Salidas estructuradas en JSON valido y estable; evita texto adicional no solicitado.",
+      "topK": 8,
+      "temperature": 0.2,
+      "metadata": {
+        "batch": "B",
+        "source_batch_a": ["batch_a_05", "batch_a_06"],
+        "factor_family": "structured_loose_guarded",
+        "factor_topk": 8,
+        "factor_temperature": 0.2,
+        "notes": "Misma variante guarded con algo mas de diversidad.",
+        "rationale": "Contrasta si un poco de creatividad recupera cobertura perdida."
+      }
+    },
+    {
+      "run_id": "batch_b_07",
+      "prompt_variant": "batch_b_hybrid_strict_compact_k8_t0",
+      "systemPrompt": "Rol: Jimmy ingeniero de pista rFactor2. Salida esperada: recomendaciones precisas, breves y trazables a la telemetria. Si se pide estructura, responde SOLO JSON estricto (objeto unico, doble comilla, sin markdown, sin texto extra). Mantiene coherencia entre especialistas y reporte final.",
+      "topK": 8,
+      "temperature": 0.0,
+      "metadata": {
+        "batch": "B",
+        "source_batch_a": ["batch_a_03", "batch_a_06"],
+        "factor_family": "hybrid_strict_compact",
+        "factor_topk": 8,
+        "factor_temperature": 0.0,
+        "notes": "Fusiona disciplina de formato con tono compacto.",
+        "rationale": "Busca maxima estabilidad de parseo para pipelines sensibles."
+      }
+    },
+    {
+      "run_id": "batch_b_08",
+      "prompt_variant": "batch_b_hybrid_strict_compact_k8_t02",
+      "systemPrompt": "Rol: Jimmy ingeniero de pista rFactor2. Salida esperada: recomendaciones precisas, breves y trazables a la telemetria. Si se pide estructura, responde SOLO JSON estricto (objeto unico, doble comilla, sin markdown, sin texto extra). Mantiene coherencia entre especialistas y reporte final.",
+      "topK": 8,
+      "temperature": 0.2,
+      "metadata": {
+        "batch": "B",
+        "source_batch_a": ["batch_a_03", "batch_a_06"],
+        "factor_family": "hybrid_strict_compact",
+        "factor_topk": 8,
+        "factor_temperature": 0.2,
+        "notes": "Version de hybrid strict con variacion moderada.",
+        "rationale": "Valida equilibrio entre robustez JSON y riqueza de contenido."
+      }
+    }
+  ]
+}
