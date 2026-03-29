@@ -2,6 +2,7 @@ import io
 import sys
 from pathlib import Path
 from unittest.mock import MagicMock
+from unittest.mock import sentinel
 
 
 _st_mock = MagicMock()
@@ -94,3 +95,19 @@ def test_api_headers_uses_only_valid_session_id():
 
     streamlit_app.st.session_state["client_session_id"] = "abc12345XYZ"
     assert streamlit_app._api_headers() == {"X-Client-Session-Id": "abc12345XYZ"}
+
+
+def test_post_analysis_for_session_uses_long_running_timeout(mocker):
+    streamlit_app.st.session_state.clear()
+    streamlit_app.st.session_state["client_session_id"] = "abc12345XYZ"
+    mock_post = mocker.patch("frontend.streamlit_app.requests.post", return_value=sentinel.response)
+
+    response = streamlit_app._post_analysis_for_session("session-1", {"provider": "ollama", "model": "x"})
+
+    assert response is sentinel.response
+    mock_post.assert_called_once_with(
+        f"{streamlit_app.API_BASE_URL}/analyze_session",
+        data={"session_id": "session-1", "provider": "ollama", "model": "x"},
+        headers={"X-Client-Session-Id": "abc12345XYZ"},
+        timeout=streamlit_app.ANALYSIS_REQUEST_TIMEOUT,
+    )

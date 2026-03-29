@@ -20,6 +20,7 @@ services:
       - "8501:8501"
     environment:
       - RF2_API_URL=http://backend:8000
+      - RF2_BROWSER_API_BASE_URL=http://localhost:8000
     volumes:
       - ./app/core/fixed_params.json:/app/app/core/fixed_params.json
     depends_on:

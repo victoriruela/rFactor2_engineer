@@ -1,4 +1,5 @@
 from fastapi import FastAPI, UploadFile, File, HTTPException, Form, Request, Header, Cookie, Depends
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Dict, Any, Optional
 import shutil
@@ -12,6 +13,21 @@ import pandas as pd
 from app.core.telemetry_parser import parse_csv_file, parse_mat_file, parse_svm_file
 
 app = FastAPI(title="rFactor2 Engineer API")
+
+ALLOWED_BROWSER_ORIGINS = [
+    "http://localhost:8501",
+    "http://127.0.0.1:8501",
+    "https://car-setup.com",
+    "https://telemetria.bot.nu",
+]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=ALLOWED_BROWSER_ORIGINS,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # Modelo de datos para la respuesta
 class AnalysisResponse(BaseModel):

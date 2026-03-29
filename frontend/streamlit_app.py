@@ -15,6 +15,7 @@ FIXED_PARAMS_FILE = "app/core/fixed_params.json"
 API_BASE_URL = os.environ.get("RF2_API_URL", "http://localhost:8000")
 BROWSER_API_BASE_URL = os.environ.get("RF2_BROWSER_API_BASE_URL", "/api")
 UPLOAD_CHUNK_SIZE = 64 * 1024 * 1024
+ANALYSIS_REQUEST_TIMEOUT = (10, 1800)
 TEMP_UPLOAD_ROOT = os.path.join(tempfile.gettempdir(), "rfactor2_engineer_uploads")
 CLIENT_SESSION_COOKIE = "rf2_session_id"
 SESSION_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{8,128}$")
@@ -256,7 +257,7 @@ def _post_analysis_for_session(session_id, data_form):
                 f"{API_BASE_URL}/analyze_session",
                 data={"session_id": session_id, **data_form},
                 headers=_api_headers(),
-                timeout=0,
+        timeout=ANALYSIS_REQUEST_TIMEOUT,
         )
 
 def load_fixed_params():

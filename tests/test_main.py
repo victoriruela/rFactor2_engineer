@@ -137,6 +137,18 @@ class TestCleanup:
 
 
 class TestChunkedUploads:
+    def test_upload_init_accepts_cors_preflight_from_local_frontend(self):
+        preflight = client.options(
+            "/uploads/init",
+            headers={
+                "Origin": "http://localhost:8501",
+                "Access-Control-Request-Method": "POST",
+            },
+        )
+
+        assert preflight.status_code == 200
+        assert preflight.headers["access-control-allow-origin"] == "http://localhost:8501"
+
     def test_chunk_upload_complete_and_list_sessions(self, tmp_path):
         with patch("app.main._client_root", return_value=str(tmp_path)):
             r1 = client.post("/uploads/init", headers=SESSION_HEADERS, json={"filename": "session.csv"})

@@ -141,6 +141,8 @@ requests                   # HTTP calls (Ollama API, frontend→backend)
 | `RF2_PROD_BASIC_AUTH` | *(unset)* | Nginx BasicAuth credentials for prod-circuit E2E tests, format `user:password`. Not used at runtime. |
 
 Set in `.env` at project root (loaded by python-dotenv). In Docker, backend points to host Ollama via `OLLAMA_BASE_URL=http://host.docker.internal:11434`.
+For local Docker validation, the `frontend` service must set `RF2_BROWSER_API_BASE_URL=http://localhost:8000`
+so the browser talks directly to the backend; Streamlit on `:8501` does not proxy `/api` locally.
 
 ## API Endpoints
 
@@ -335,6 +337,8 @@ All hardcoded values (ports, paths, thresholds, parameter lists, telemetry chann
 
 **Ollama auto-start**: `_ensure_ollama_running()` checks health via `GET /api/tags`, starts `ollama serve` as background process if needed, waits up to 15s.
 
+**Frontend session analysis timeout**: `frontend/streamlit_app.py` posts stored sessions to `/analyze_session` with a long-running Requests timeout tuple `(10, 1800)`. Never use `timeout=0` with `requests`; urllib3 rejects non-positive timeouts before the backend call is made.
+
 ## Language
 
 All user-facing output (driving analysis, setup recommendations, parameter names) is in **Spanish (Castellano)**. Prompts explicitly instruct the LLM to respond in Spanish. The Translation Agent produces Spanish-friendly parameter names.
@@ -454,6 +458,15 @@ Bugs that only manifest through Nginx (e.g. `credentials: 'omit'` in the browser
 stored BasicAuth → 401) are invisible without testing the full stack.
 `test_prod_upload.py` specifically verifies unauthenticated requests return 401 and that the
 full chunked upload cycle works end-to-end through Cloudflare and Nginx.
+
+**Complementary local-browser topology**: local RC validation exercises a different path:
+browser on `http://localhost:8501` → backend on `http://localhost:8000`.
+That path requires:
+- `RF2_BROWSER_API_BASE_URL=http://localhost:8000` in local Docker frontend runs
+- FastAPI CORS enabled for `http://localhost:8501`
+
+Without those two pieces, the browser would incorrectly call `http://localhost:8501/api/...`
+(no proxy there) or hit cross-origin failures even though production works.
 ```
 
 ## Docker
@@ -585,6 +598,12 @@ The canonical entry point is `scripts/release_and_deploy.ps1`. It enforces:
 2. Merge one or more source branches into `develop`.
 3. Run Docker unit tests on `develop`; tag RC (`vX.Y.Z-rc.N`) and push.
 4. **MANDATORY GATE**: ask the human owner to validate that RC locally.
+   - "Validate locally" means the agent must start the local Docker stack from `develop`/RC:
+     `docker compose up -d --build`
+   - The agent must provide the user the exact URLs to visit:
+     - Frontend: `http://localhost:8501`
+     - Backend API: `http://localhost:8000` (sanity check: `/models`)
+   - The agent must wait for explicit user approval after the user tests those local URLs.
 5. Only after explicit human approval: merge `develop` into `main`; run Docker unit tests again.
 6. Tag release (`vX.Y.Z`) on `main` and push.
 7. Create `dist/rfactor2_engineer-vX.Y.Z.tar.gz` via `git archive <tag>`.
@@ -592,7 +611,7 @@ The canonical entry point is `scripts/release_and_deploy.ps1`. It enforces:
 9. Call `deploy_gcp.ps1 -ReleaseTag vX.Y.Z -UseGithubReleaseArtifact`.
 
 **Mandatory policy for all agents**: never continue automatically from RC to `main`/deploy.
-After RC push, stop and ask the user to run local validation and confirm before proceeding.
+After RC push, start local Docker for RC validation, provide local URLs, and wait for user confirmation before proceeding.
 
 ```powershell
 # Full release from a feature branch
@@ -908,6 +927,8 @@ After every merge into develop:
 [ ] All tasks complete → full test suite green
 [ ] RC tagged on develop
 [ ] User asked to validate RC locally
+[ ] Local Docker stack for RC started (`docker compose up -d --build`)
+[ ] Local validation URLs shared (`http://localhost:8501`, `http://localhost:8000`)
 [ ] Explicit user approval received
 [ ] Asana project status updated
 ```
