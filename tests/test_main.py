@@ -251,4 +251,34 @@ class TestAnalyze:
         assert call_kwargs.get("provider") == "jimmy"
         assert call_kwargs.get("model_tag") == "llama3.1-8B"
 
+    def test_analyze_accepts_controlled_fallback_payload_without_crash(self, mocker):
+        """Even with degraded AI output, /analyze should return 200 and structured payload."""
+        fallback_ai_result = {
+            "driving_analysis": "No se pudo obtener el análisis de conducción.",
+            "setup_analysis": "degraded=true; fallback_reason=chief_none",
+            "full_setup": {"sections": []},
+            "agent_reports": [],
+            "chief_reasoning": "degraded=true; fallback_reason=chief_none",
+        }
+        mock_analyze = AsyncMock(return_value=fallback_ai_result)
+        mocker.patch("app.main.ai_engineer.analyze", new=mock_analyze)
+
+        r = client.post(
+            "/analyze",
+            files={
+                "telemetry_file": ("session.csv", self._csv_bytes, "text/csv"),
+                "svm_file": ("car.svm", self._svm_bytes, "text/plain"),
+            },
+            data={
+                "provider": "jimmy",
+                "model": "llama3.1-8B",
+            },
+        )
+
+        assert r.status_code == 200
+        body = r.json()
+        assert body["driving_analysis"] == fallback_ai_result["driving_analysis"]
+        assert "degraded=true" in body["setup_analysis"]
+        assert "fallback_reason=chief_none" in body["chief_reasoning"]
+
 
