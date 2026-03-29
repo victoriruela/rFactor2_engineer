@@ -679,6 +679,7 @@ What `deploy_gcp.ps1` does:
 - Do not expose backend/frontend directly to public interfaces; keep loopback bindings and route through Nginx.
 - Do not replace `deploy/nginx-rfactor2_engineer.conf` with a non-TLS variant; future deploys copy that file directly onto the host.
 - The `data/` directory on the remote host is owned by the Docker container user (root). Never run `sudo rm -rf $RemoteDir` or a broad sweep; use `find ... -not -name data` patterns when clearing old code.
+- Host memory safeguard: configure persistent swap on the GCP host (`/swapfile`, 2 GiB, `vm.swappiness=10`) to reduce OOM kills of the Streamlit process during peak telemetry workloads.
 - After benchmark/temporary tasks, purge temporary Docker test artifacts (see cleanup scripts in this document).
 
 ## Git Workflow
