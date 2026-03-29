@@ -271,26 +271,54 @@ All hardcoded values (ports, paths, thresholds, parameter lists, telemetry chann
 
 All user-facing output (driving analysis, setup recommendations, parameter names) is in **Spanish (Castellano)**. Prompts explicitly instruct the LLM to respond in Spanish. The Translation Agent produces Spanish-friendly parameter names.
 
-## Test Infrastructure
+## Development Environment
 
-### Running tests
+**Docker is the canonical development environment for this project.** Do NOT use the host Python installation for running tests or lint — the host may have incompatible package versions (e.g. Python 3.13 + pandas).
+
+### Quick start (first time)
 
 ```bash
-# Install test dependencies (one-time)
-pip install -r requirements-dev.txt
+# Build the test image (one-time, or after requirements changes)
+docker compose --profile test build test
 
-# Unit tests — fast, no Ollama required (~0.5s)
-pytest tests/ --ignore=tests/integration -v
+# Start the full app stack
+docker compose up --build
 
-# Integration tests — real LLM, requires ollama + llama3.2:latest (~3min)
-pytest -m integration -v
-
-# E2E API tests — requires backend running at :8000
-pytest e2e/api/ -v
-
-# E2E Web tests — requires backend + Streamlit + Maestro installed
-maestro test e2e/web/upload_telemetry.yaml
+# Pull the LLM model into the Ollama container (one-time)
+docker compose exec ollama ollama pull llama3.2:latest
 ```
+
+### Running tests (always use Docker)
+
+```bash
+# Unit tests — fast, no Ollama required (~3s in container)
+docker compose --profile test run --rm test
+
+# Unit tests with extra args (e.g. -k filter, -x stop-on-first-fail)
+docker compose --profile test run --rm test pytest tests/ --ignore=tests/integration -v -k "my_test"
+
+# Lint
+docker compose --profile test run --rm test ruff check app/ frontend/ tests/
+
+# Integration tests — real LLM, requires ollama container running with llama3.2:latest (~3min)
+docker compose --profile test run --rm test pytest -m integration -v
+
+# E2E API tests — requires backend container running at :8000
+docker compose --profile test run --rm test pytest e2e/api/ -v
+```
+
+The `test` service bind-mounts the full source tree at `/app`, so **code changes are reflected immediately without rebuilding** the image. Only rebuild (`docker compose --profile test build test`) when `requirements.txt` or `requirements-dev.txt` change.
+
+### App services
+
+| Service | URL | Start command |
+|---------|-----|---------------|
+| Backend | http://localhost:8000 | `docker compose up backend` |
+| Frontend | http://localhost:8501 | `docker compose up frontend` |
+| Ollama | http://localhost:11434 | `docker compose up ollama` |
+| All | — | `docker compose up --build` |
+
+## Test Infrastructure
 
 ### System requirement
 

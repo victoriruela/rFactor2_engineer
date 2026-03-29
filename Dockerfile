@@ -19,3 +19,10 @@ COPY app/core/param_mapping.json app/core/param_mapping.json
 COPY .streamlit/ .streamlit/
 EXPOSE 8501
 CMD ["streamlit", "run", "frontend/streamlit_app.py", "--server.address", "0.0.0.0"]
+
+# --- test (unit + lint) ---
+FROM base AS test
+COPY requirements-dev.txt .
+RUN pip install --no-cache-dir -r requirements-dev.txt
+# Source is bind-mounted at runtime; no COPY here so edits are reflected immediately.
+CMD ["pytest", "tests/", "--ignore=tests/integration", "-v"]
