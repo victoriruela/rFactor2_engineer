@@ -1192,7 +1192,7 @@ with st.sidebar:
                     st.session_state['selected_session_name'] = selected_entry.get("display_name", selected_entry["id"])
                     try:
                         st.session_state.update(_load_session_locally(selected_entry))
-                        st.rerun()
+                        st.success("Sesión cargada correctamente")
                     except Exception as e:
                         st.error(f"No se pudo cargar la sesión localmente: {e}")
         else:

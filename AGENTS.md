@@ -363,6 +363,8 @@ All hardcoded values (ports, paths, thresholds, parameter lists, telemetry chann
 
 **Frontend re-analysis path**: The Streamlit UI now re-runs analysis using local temp files via `POST /analyze` whenever local files are available, instead of always calling `POST /analyze_session`. This avoids `404 Session not found` after a successful prior analysis consumed stored backend session files.
 
+**Frontend session load without forced rerun**: after clicking `Cargar sesión`, the UI should keep the newly loaded local temp file paths in `st.session_state` and continue the same render cycle instead of forcing an immediate `st.rerun()`. In production, an eager rerun can race with websocket reconnection and return the app to the initial state even though the backend file downloads succeeded.
+
 **Prompt benchmarking protocol (Jimmy) — mandatory**: Any change to Jimmy runtime settings (`app/core/jimmy_runtime_config.v1.json`) or prompt behavior must be backed by a comparative run of `scripts/benchmark_prompt_matrix.py` against the benchmark fixtures. Required evidence in the same PR/commit:
 - `docs/benchmark/results/<run_folder>/summary.csv`
 - `docs/benchmark/results/<run_folder>/results.json`
