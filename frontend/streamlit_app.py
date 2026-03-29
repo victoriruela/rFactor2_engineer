@@ -217,10 +217,11 @@ def _render_chunked_uploader():
                         await uploadOne(file);
                     }}
                     log('Subida completada. Recargando para listar sesiones...');
-                    // Preserve session ID in the URL so it survives the full page reload
-                    const url = new URL(window.parent.location.href);
-                    url.searchParams.set('{CLIENT_SESSION_QUERY_PARAM}', sessionId);
-                    window.parent.location.href = url.toString();
+                    // Persist session ID in a cookie so it survives the full page reload.
+                    // The iframe cannot navigate window.parent (cross-origin security),
+                    // but it CAN set cookies on the same domain.
+                    document.cookie = "{CLIENT_SESSION_COOKIE}=" + sessionId + "; path=/; max-age=31536000; SameSite=Lax";
+                    window.parent.location.reload();
                 }} catch (err) {{
                     log(`Error: ${{err.message}}`);
                 }}
