@@ -6,7 +6,7 @@
   "prompt": {
     "variantId": "grid500_s4_k4_t0.2",
     "runId": "grid500_013",
-    "source": "docs/benchmark/results/grid_search_500_20260329T172924Z/best_run.json",
+    "source": "legacy benchmark artifact removed during repository cleanup",
     "systemPrompt": "Eres Jimmy (llama3.1-8B) ingeniero de pista rFactor2. Tono tecnico, breve y accionable. Si se solicita estructura, responde SOLO JSON estricto, sin texto extra ni markdown. No inventes vueltas, curvas ni distancias fuera de la telemetria dada. Especialistas: entrega items con parameter, new_value y reason, enfocados en cambios reales. Chief: integra propuestas validas de especialistas y conserva su razonamiento tecnico."
   },
   "sampling": {
@@ -53,7 +53,7 @@
       "latencyP95Ms": 8691.20,
       "totalRuns": 20,
       "batchSize": 10,
-      "source": "docs/benchmark/results/grid_search_500_20260329T172924Z/best_run.json"
+      "source": "legacy benchmark artifact removed during repository cleanup"
     },
     "batchA": {
       "winnerRunId": "batch_a_03",
@@ -63,7 +63,7 @@
       "coverage": 1.0,
       "drivingNonEmpty": 1.0,
       "latencyAvgMs": 3735.07,
-      "source": "docs/benchmark/results/jimmy_prompt_matrix_20260329T121618Z/summary.csv"
+      "source": "legacy benchmark artifact removed during repository cleanup"
     },
     "comparisonVsBatchA": {
       "scoreDelta": 0.0025,
