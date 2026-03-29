@@ -1,0 +1,57 @@
+{
+  "case_id": "case_01_suzuka_baseline",
+  "description": "Baseline case with mild front-limited behavior and stable long-run pace.",
+  "circuit_name": "Suzuka",
+  "telemetry_summary": "CIRCUITO: Suzuka\nESTADISTICAS SESION: {\"total_laps\": 4, \"fastest_lap\": \"1:30.842\"}\nDATOS POR VUELTA (resumen): VUELTA 1: Tiempo=1:31.502, Vel(max=301.2, avg=157.8), Brake(max=93.0%, avg=15.2%), Throttle_avg=63.8%, RPM(avg=9540, max=11380), Temp_front_avg=91.0C, Temp_rear_avg=95.5C. VUELTA 2: Tiempo=1:31.120, en 130R velocidad minima 232.1 km/h, ligera correccion de volante. VUELTA 3: Tiempo=1:30.842, en horquilla freno pico 88.4% a 78m, salida con wheelspin leve. VUELTA 4: Tiempo=1:31.044, degradacion neumatico delantero izq +2.1% respecto vuelta 1.",
+  "setup_data": {
+    "GENERAL": {
+      "FuelSetting": "34//L",
+      "BrakeDuctSetting": "3"
+    },
+    "FRONTLEFT": {
+      "PressureSetting": "146//kPa",
+      "CamberSetting": "-3.4//deg"
+    },
+    "FRONTRIGHT": {
+      "PressureSetting": "145//kPa",
+      "CamberSetting": "-3.3//deg"
+    },
+    "REARLEFT": {
+      "PressureSetting": "138//kPa",
+      "CamberSetting": "-2.1//deg"
+    },
+    "REARRIGHT": {
+      "PressureSetting": "139//kPa",
+      "CamberSetting": "-2.0//deg"
+    },
+    "SUSPENSION": {
+      "FrontARBSetting": "5",
+      "RearARBSetting": "4",
+      "FrontRideHeightSetting": "32//mm",
+      "RearRideHeightSetting": "55//mm"
+    }
+  },
+  "session_stats": {
+    "total_laps": 4,
+    "fuel_total": 6.1,
+    "fuel_avg": 1.525,
+    "wear_total": 11.4,
+    "wear_avg": 2.85,
+    "fastest_lap": "1:30.842",
+    "fastest_lap_num": "3"
+  },
+  "fixed_params": [
+    "FuelSetting"
+  ],
+  "expected_focus_sections": [
+    "SUSPENSION",
+    "FRONTLEFT",
+    "FRONTRIGHT"
+  ],
+  "rubric_expectations": {
+    "telemetry_specificity_min": 3,
+    "causal_quality_min": 3,
+    "actionability_min": 3,
+    "consistency_min": 3
+  }
+}

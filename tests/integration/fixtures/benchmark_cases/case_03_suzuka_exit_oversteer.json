@@ -1,0 +1,52 @@
+{
+  "case_id": "case_03_suzuka_exit_oversteer",
+  "description": "Exit oversteer and traction instability in low-speed acceleration zones.",
+  "circuit_name": "Suzuka",
+  "telemetry_summary": "CIRCUITO: Suzuka\nESTADISTICAS SESION: {\"total_laps\": 3, \"fastest_lap\": \"1:31.744\"}\nDATOS POR VUELTA (resumen): VUELTA 1: Tiempo=1:32.480, salida de horquilla con picos de slip ratio trasero 14-17%, throttle 68% en 0.6s provoca correccion de volante. VUELTA 2: Tiempo=1:31.998, en chicane final sobreviraje al abrir gas con RPM 9100 y marcha 2. VUELTA 3: Tiempo=1:31.744, mejora parcial con acelerador mas progresivo pero se mantiene yaw pico 5.2 deg/s en salidas lentas. Temperatura trasera izq 100.1C, trasera der 99.7C.",
+  "setup_data": {
+    "DRIVELINE": {
+      "PowerRampSetting": "72//%",
+      "CoastRampSetting": "40//%",
+      "PreloadSetting": "170//Nm"
+    },
+    "REARLEFT": {
+      "PressureSetting": "132//kPa",
+      "ToeSetting": "0.08//deg"
+    },
+    "REARRIGHT": {
+      "PressureSetting": "132//kPa",
+      "ToeSetting": "0.08//deg"
+    },
+    "SUSPENSION": {
+      "RearARBSetting": "2",
+      "RearReboundSetting": "11"
+    },
+    "CONTROLS": {
+      "TractionControlSetting": "1"
+    }
+  },
+  "session_stats": {
+    "total_laps": 3,
+    "fuel_total": 4.4,
+    "fuel_avg": 1.467,
+    "wear_total": 9.6,
+    "wear_avg": 3.2,
+    "fastest_lap": "1:31.744",
+    "fastest_lap_num": "3"
+  },
+  "fixed_params": [
+    "TractionControlSetting"
+  ],
+  "expected_focus_sections": [
+    "DRIVELINE",
+    "REARLEFT",
+    "REARRIGHT",
+    "SUSPENSION"
+  ],
+  "rubric_expectations": {
+    "telemetry_specificity_min": 4,
+    "causal_quality_min": 4,
+    "actionability_min": 4,
+    "consistency_min": 3
+  }
+}

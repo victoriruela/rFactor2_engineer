@@ -1,0 +1,54 @@
+{
+  "case_id": "case_02_suzuka_mid_understeer",
+  "description": "Pronounced mid-corner understeer in medium-speed corners and front overheating.",
+  "circuit_name": "Suzuka",
+  "telemetry_summary": "CIRCUITO: Suzuka\nESTADISTICAS SESION: {\"total_laps\": 3, \"fastest_lap\": \"1:32.211\"}\nDATOS POR VUELTA (resumen): VUELTA 1: Tiempo=1:33.004, Curva 7 velocidad minima 118.3 km/h con volante 26.1 deg y yaw bajo. VUELTA 2: Tiempo=1:32.587, Curva 13 minima 142.8 km/h, throttle parcial prolongado (42-58%) por falta de rotacion. VUELTA 3: Tiempo=1:32.211, Temp FL 104.2C y FR 102.7C en sector 2, desgaste delantero +3.8% vs trasero +2.1%. Frenada consistente, problema principal en paso por curva.",
+  "setup_data": {
+    "BODYAERO": {
+      "FrontWingSetting": "10",
+      "RearWingSetting": "12"
+    },
+    "SUSPENSION": {
+      "FrontARBSetting": "6",
+      "RearARBSetting": "3",
+      "FrontSpringSetting": "185//N/mm",
+      "RearSpringSetting": "145//N/mm"
+    },
+    "FRONTLEFT": {
+      "PressureSetting": "151//kPa",
+      "ToeSetting": "0.03//deg"
+    },
+    "FRONTRIGHT": {
+      "PressureSetting": "150//kPa",
+      "ToeSetting": "0.03//deg"
+    },
+    "REARLEFT": {
+      "PressureSetting": "138//kPa"
+    },
+    "REARRIGHT": {
+      "PressureSetting": "138//kPa"
+    }
+  },
+  "session_stats": {
+    "total_laps": 3,
+    "fuel_total": 4.5,
+    "fuel_avg": 1.5,
+    "wear_total": 10.8,
+    "wear_avg": 3.6,
+    "fastest_lap": "1:32.211",
+    "fastest_lap_num": "3"
+  },
+  "fixed_params": [],
+  "expected_focus_sections": [
+    "SUSPENSION",
+    "BODYAERO",
+    "FRONTLEFT",
+    "FRONTRIGHT"
+  ],
+  "rubric_expectations": {
+    "telemetry_specificity_min": 4,
+    "causal_quality_min": 4,
+    "actionability_min": 3,
+    "consistency_min": 3
+  }
+}
