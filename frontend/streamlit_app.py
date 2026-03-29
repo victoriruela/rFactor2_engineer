@@ -18,6 +18,7 @@ UPLOAD_CHUNK_SIZE = 64 * 1024 * 1024
 ANALYSIS_REQUEST_TIMEOUT = (10, 1800)
 TEMP_UPLOAD_ROOT = os.path.join(tempfile.gettempdir(), "rfactor2_engineer_uploads")
 CLIENT_SESSION_COOKIE = "rf2_session_id"
+CLIENT_SESSION_QUERY_PARAM = "rf2sid"
 SESSION_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{8,128}$")
 
 
@@ -94,27 +95,45 @@ def _ensure_client_session_id():
     if _is_valid_session_id(existing):
         return existing
 
+    try:
+        qp_value = st.query_params.get(CLIENT_SESSION_QUERY_PARAM)
+        if isinstance(qp_value, list):
+            qp_value = qp_value[0] if qp_value else None
+    except Exception:
+        qp_value = None
+    if _is_valid_session_id(qp_value):
+        st.session_state["client_session_id"] = qp_value.strip()
+        return qp_value.strip()
+
     cookie_value = _safe_cookie_value(CLIENT_SESSION_COOKIE)
     if _is_valid_session_id(cookie_value):
         st.session_state["client_session_id"] = cookie_value
+        try:
+            st.query_params[CLIENT_SESSION_QUERY_PARAM] = cookie_value
+        except Exception:
+            pass
         return cookie_value
 
     generated = uuid.uuid4().hex
     st.session_state["client_session_id"] = generated
+    try:
+        st.query_params[CLIENT_SESSION_QUERY_PARAM] = generated
+    except Exception:
+        pass
 
     if _is_streamlit_mocked():
         return generated
 
+    # Best effort: persist in cookie without forcing a full-page reload.
     components.html(
             f"""
             <script>
                 document.cookie = "{CLIENT_SESSION_COOKIE}={generated}; path=/; max-age=31536000; SameSite=Lax";
-                window.parent.location.reload();
             </script>
             """,
             height=0,
     )
-    st.stop()
+    return generated
 
 
 def _api_headers():
