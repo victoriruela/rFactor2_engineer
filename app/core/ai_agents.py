@@ -23,11 +23,21 @@ JIMMY_MAX_TELEMETRY_CHARS = 4_000
 logger = logging.getLogger(__name__)
 
 
-def list_available_models():
-    """Devuelve la lista de modelos disponibles en Ollama."""
-    _ensure_ollama_running()
+def list_available_models(base_url=None, api_key=None):
+    """Devuelve la lista de modelos disponibles en Ollama (local o remoto).
+
+    Args:
+        base_url: URL base de Ollama. Si es None usa OLLAMA_BASE_URL del env.
+        api_key: Bearer token para autenticación (Ollama Cloud u otro endpoint remoto).
+    """
+    effective_url = base_url or OLLAMA_BASE_URL
+    headers = {}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    if not base_url:  # solo auto-arrancar si se usa el Ollama local del backend
+        _ensure_ollama_running()
     try:
-        r = requests.get(f"{OLLAMA_BASE_URL}/api/tags", timeout=5)
+        r = requests.get(f"{effective_url}/api/tags", headers=headers, timeout=5)
         if r.status_code == 200:
             return [m["name"] for m in r.json().get("models", [])]
     except Exception:
@@ -453,7 +463,7 @@ class AIAngineer:
         )
         return None
 
-    def _init_llm(self, model_tag=None, provider="ollama"):
+    def _init_llm(self, model_tag=None, provider="ollama", custom_base_url=None, custom_api_key=None):
         provider_key = (provider or "ollama").lower()
         if provider_key == "jimmy":
             self.llm = None
@@ -465,17 +475,27 @@ class AIAngineer:
         if provider_key != "ollama":
             raise ValueError(f"Proveedor LLM no soportado: {provider}")
 
-        _ensure_ollama_running()
+        effective_url = custom_base_url or OLLAMA_BASE_URL
+        # Solo intentar arrancar Ollama local si no hay URL personalizada
+        if not custom_base_url:
+            _ensure_ollama_running()
+
         tag = model_tag or OLLAMA_MODEL_TAG
-        self.llm = ChatOllama(
-            model=tag,
-            base_url=OLLAMA_BASE_URL,
-            num_predict=4096,
-            temperature=0.3,
-        )
+        ollama_kwargs = {
+            "model": tag,
+            "base_url": effective_url,
+            "num_predict": 4096,
+            "temperature": 0.3,
+        }
+        if custom_api_key:
+            ollama_kwargs["client_kwargs"] = {"headers": {"Authorization": f"Bearer {custom_api_key}"}}
+            ollama_kwargs["async_client_kwargs"] = {"headers": {"Authorization": f"Bearer {custom_api_key}"}}
+        self.llm = ChatOllama(**ollama_kwargs)
         self._provider = "ollama"
         self._current_model = tag
-        print(f"LLM listo: ollama/{tag}")
+        self._custom_base_url = effective_url
+        self._custom_api_key = custom_api_key
+        print(f"LLM listo: ollama/{tag} @ {effective_url}")
 
     def _build_prompt_text(self, prompt, inputs):
         prompt_tmpl = PromptTemplate.from_template(prompt)
@@ -993,7 +1013,7 @@ class AIAngineer:
 
         return full_setup_recommendations
 
-    async def analyze(self, telemetry_summary, setup_data, circuit_name="Desconocido", session_stats=None, model_tag=None, fixed_params=None, driving_telemetry_summary=None, provider="ollama"):
+    async def analyze(self, telemetry_summary, setup_data, circuit_name="Desconocido", session_stats=None, model_tag=None, fixed_params=None, driving_telemetry_summary=None, provider="ollama", ollama_base_url=None, ollama_api_key=None):
         provider_key = (provider or "ollama").lower()
         current_provider = getattr(self, "_provider", None)
         needs_init = current_provider != provider_key
@@ -1003,10 +1023,14 @@ class AIAngineer:
                 needs_init = True
             if model_tag and getattr(self, "_current_model", None) != model_tag:
                 needs_init = True
+            if ollama_base_url != getattr(self, "_custom_base_url", None):
+                needs_init = True
+            if ollama_api_key != getattr(self, "_custom_api_key", None):
+                needs_init = True
 
         if needs_init:
             print("Inicializando LLM...")
-            self._init_llm(model_tag, provider=provider_key)
+            self._init_llm(model_tag, provider=provider_key, custom_base_url=ollama_base_url, custom_api_key=ollama_api_key)
 
         self._log_event(
             logging.INFO,

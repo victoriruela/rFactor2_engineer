@@ -65,6 +65,18 @@ class TestGetModels:
         assert r.status_code == 200
         assert r.json() == {"models": []}
 
+    def test_passes_custom_base_url_to_list_available_models(self, mocker):
+        mock_list = mocker.patch("app.main.list_available_models", return_value=["gpt-oss:120b"])
+        r = client.get("/models", params={"ollama_base_url": "https://ollama.com"})
+        assert r.status_code == 200
+        mock_list.assert_called_once_with(base_url="https://ollama.com", api_key=None)
+
+    def test_passes_api_key_to_list_available_models(self, mocker):
+        mock_list = mocker.patch("app.main.list_available_models", return_value=[])
+        r = client.get("/models", params={"ollama_base_url": "https://ollama.com", "ollama_api_key": "secretkey"})
+        assert r.status_code == 200
+        mock_list.assert_called_once_with(base_url="https://ollama.com", api_key="secretkey")
+
 
 # ---------------------------------------------------------------------------
 # GET /sessions

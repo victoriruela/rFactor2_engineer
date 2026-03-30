@@ -277,8 +277,11 @@ def get_session_file(
     return FileResponse(file_path)
 
 @app.get("/models")
-def get_models():
-    models = list_available_models()
+def get_models(
+    ollama_base_url: Optional[str] = None,
+    ollama_api_key: Optional[str] = None,
+):
+    models = list_available_models(base_url=ollama_base_url, api_key=ollama_api_key)
     return {"models": models}
 
 @app.post("/analyze", response_model=AnalysisResponse)
@@ -287,7 +290,9 @@ async def analyze_telemetry(
     svm_file: UploadFile = File(...),
     model: Optional[str] = Form(None),
     provider: Optional[str] = Form("ollama"),
-    fixed_params: Optional[str] = Form(None)
+    fixed_params: Optional[str] = Form(None),
+    ollama_base_url: Optional[str] = Form(None),
+    ollama_api_key: Optional[str] = Form(None),
 ):
     session_id = str(uuid.uuid4())
     upload_dir = os.path.join(DATA_DIR, "_analysis_tmp", session_id)
@@ -677,6 +682,8 @@ async def analyze_telemetry(
             provider=provider or "ollama",
             fixed_params=fixed_params_list,
             driving_telemetry_summary=driving_summary,
+            ollama_base_url=ollama_base_url or None,
+            ollama_api_key=ollama_api_key or None,
         )
 
         # 4. Generar puntos de interés en el mapa
@@ -742,6 +749,8 @@ async def analyze_stored_session(
     model: Optional[str] = Form(None),
     provider: Optional[str] = Form("ollama"),
     fixed_params: Optional[str] = Form(None),
+    ollama_base_url: Optional[str] = Form(None),
+    ollama_api_key: Optional[str] = Form(None),
     client_session_id: str = Depends(_resolve_client_session_id),
 ):
     pair = _find_session_pair(client_session_id, session_id)
@@ -765,6 +774,8 @@ async def analyze_stored_session(
             model=model,
             provider=provider,
             fixed_params=fixed_params,
+            ollama_base_url=ollama_base_url,
+            ollama_api_key=ollama_api_key,
         )
         analysis_succeeded = True
         return result

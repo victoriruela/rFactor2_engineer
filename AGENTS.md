@@ -189,6 +189,8 @@ Direct-upload analysis (no prior chunking required). Accepts multipart form:
 - `model` (optional): Ollama model tag override
 - `provider` (optional): LLM provider (default `ollama`)
 - `fixed_params` (optional): JSON string array of locked parameter names
+- `ollama_base_url` (optional): Override Ollama endpoint (e.g. `https://ollama.com` for Ollama Cloud)
+- `ollama_api_key` (optional): Bearer token for remote/cloud Ollama
 
 Temp files are written to `data/_analysis_tmp/{uuid}/` and deleted in `finally`. Returns
 `AnalysisResponse` with: `circuit_data`, `issues_on_map`, `driving_analysis`, `setup_analysis`,
@@ -196,13 +198,14 @@ Temp files are written to `data/_analysis_tmp/{uuid}/` and deleted in `finally`.
 
 #### `POST /analyze_session`
 Analyzes a previously uploaded stored session (via chunked upload). Form params:
-`session_id` (required), `model`, `provider`, `fixed_params`. Deletes the session files
+`session_id` (required), `model`, `provider`, `fixed_params`, `ollama_base_url` (optional), `ollama_api_key` (optional). Deletes the session files
 after a successful analysis. Same `AnalysisResponse` shape as `POST /analyze`.
 
 ### Other
 
 #### `GET /models`
 Returns available Ollama models via `GET /api/tags` on Ollama.
+Optional query params: `ollama_base_url` (override Ollama endpoint, e.g. `https://ollama.com`) and `ollama_api_key` (Bearer token for remote/cloud Ollama).
 
 #### `POST /cleanup`
 Deletes the current client session's telemetry/setup files and in-progress chunk files from
@@ -347,7 +350,9 @@ All hardcoded values (ports, paths, thresholds, parameter lists, telemetry chann
 
 **Section name resolution**: LLM may return friendly names instead of internal names. Both `AIAngineer.analyze()` and `_format_full_setup()` use reverse-mapping dicts to handle this.
 
-**Ollama auto-start**: `_ensure_ollama_running()` checks health via `GET /api/tags`, starts `ollama serve` as background process if needed, waits up to 15s.
+**Ollama auto-start**: `_ensure_ollama_running()` checks health via `GET /api/tags`, starts `ollama serve` as background process if needed, waits up to 15s. Skipped automatically when a `custom_base_url` is passed to `_init_llm()` or `list_available_models()` (i.e. remote/cloud Ollama).
+
+**Ollama remote/cloud API**: `list_available_models(base_url, api_key)`, `_init_llm(..., custom_base_url, custom_api_key)`, and `AIAngineer.analyze(..., ollama_base_url, ollama_api_key)` all support targeting a remote Ollama server (e.g. Ollama Cloud at `https://ollama.com`). When `api_key` is provided, `Authorization: Bearer <key>` is injected into `ChatOllama` headers. API keys for Ollama Cloud are obtained from `https://ollama.com/settings/keys` (distinct from SSH keys used for model registry push/pull).
 
 **Jimmy specialist normalization**: `AIAngineer._normalize_specialist_report()` accepts alternate JSON keys from Jimmy responses (`recomendaciones`, `parametro`, `nuevo_valor`, `motivo`, etc.) and maps them to the canonical `items[{parameter,new_value,reason}]` shape. Specialist `summary` is preserved and passed to the chief engineer context.
 
@@ -372,6 +377,10 @@ All hardcoded values (ports, paths, thresholds, parameter lists, telemetry chann
 **Frontend session analysis timeout**: `frontend/streamlit_app.py` posts stored sessions to `/analyze_session` with a long-running Requests timeout tuple `(10, 1800)`. Never use `timeout=0` with `requests`; urllib3 rejects non-positive timeouts before the backend call is made.
 
 **Frontend large-.mat safeguard**: when a local `.mat` file exceeds `RF2_FRONTEND_MAX_PREVIEW_MAT_MB` (default `800` MB), the frontend skips detailed telemetry preview parsing to avoid Streamlit OOM/restarts on low-memory hosts. AI analysis remains available through backend endpoints. The default was raised from 120 MB to 800 MB after a 2 GiB persistent swap was added to the GCP host, making files up to ~700 MB safe to render.
+
+**Frontend lap-figure cache (session_state)**: `precompute_all_laps()` is a plain function (no `@st.cache_resource`). The caller caches its result in `st.session_state['_lap_cache']` under key `st.session_state['_lap_cache_key'] = (tele_path, tuple(laps))`. Key is a tuple of strings (cheap equality check), avoiding the costly DataFrame hash that `@st.cache_resource` performed on every Streamlit rerun.
+
+**Frontend defensive re-download gate**: the block that re-downloads temp files from the backend is guarded by a `_files_ok` check (all expected local paths exist and are non-empty). It only fires when a file is genuinely missing, and it invalidates `_lap_cache_key` so the cache is rebuilt from the fresh download.
 
 ## Language
 
