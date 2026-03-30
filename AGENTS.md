@@ -53,7 +53,7 @@ rFactor2_engineer/
 ├── frontend/
 │   ├── js/
 │   │   └── mas_extractor.js       # MAS 2.90 archive extractor (browser JS, extracts .AIW)
-│   └── streamlit_app.py           # Streamlit UI; chunked uploader; session isolation
+│   └── streamlit_app.py           # Streamlit UI; chunked uploader; session isolation; track selection
 ├── .streamlit/
 │   └── config.toml                # maxUploadSize = 20000
 ├── tests/                         # Unit + integration test suite (pytest)
@@ -63,7 +63,8 @@ rFactor2_engineer/
 │   │   └── test_ai_agents.py         # Pure functions + AIAngineer unit tests (mocked LLM)
 │   ├── frontend/
 │   │   ├── test_mas_extractor.py    # MAS 2.90 extractor: format, TOC, AIW extraction tests
-│   │   └── test_upload_temp_files.py # Chunked upload helper functions
+│   │   ├── test_upload_temp_files.py # Chunked upload helper functions
+│   │   └── test_track_selection.py  # Track auto-match, centroid, preview, SHA256
 │   ├── integration/
 │   │   ├── conftest.py            # Auto-skip guard if Ollama/llama3.2 unavailable
 │   │   └── test_ai_pipeline.py    # 3 tests: full AI pipeline with real LLM (opt-in)
