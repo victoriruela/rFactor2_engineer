@@ -103,6 +103,9 @@ rFactor2_engineer/
 │   └── components/
 │       ├── __init__.py
 │       ├── browser_hooks.py       # Browser-side unload cleanup hook injection
+│       ├── chunked_uploader.py    # Streamlit wrapper for browser-side chunked upload component
+│       └── chunked_uploader/
+│           └── index.html         # iframe HTML/JS uploader for large telemetry/setup files via /uploads/*
 │       └── telemetry_embed.py     # Plotly/JS embed renderer for interactive lap telemetry
 ├── .streamlit/
 │   └── config.toml                # maxUploadSize = 20000
@@ -221,6 +224,11 @@ Returns `{"upload_id", "chunk_index", "bytes_received"}`.
 #### `POST /uploads/{upload_id}/complete`
 Assembles all chunks into the final file under `data/<client_session_id>/`.
 Returns `{"filename", "bytes_received"}`.
+
+#### `GET /uploads/file/{filename}`
+Downloads an already assembled client-scoped uploaded file from `data/<client_session_id>/`
+before it has necessarily been paired into a complete session. Used by the frontend's
+ephemeral chunked-upload flow for both telemetry and `.svm` files.
 
 ### Session management
 
@@ -429,6 +437,8 @@ All hardcoded values (ports, paths, thresholds, parameter lists, telemetry chann
 **Frontend unload cleanup hook**: browser-side `beforeunload` sends a keepalive cleanup request (`POST /cleanup` with `X-Client-Session-Id`) so data is removed when reloading or leaving the page.
 
 **Frontend local-only analysis flow**: analysis requests are executed from local temporary files via `POST /analyze`; fallback to `POST /analyze_session` was removed to enforce strict ephemeral behavior.
+
+**Frontend chunked upload flow**: both telemetry (`.mat/.csv`) and setup (`.svm`) can be uploaded through the browser-side chunked uploader component. After `POST /uploads/init` → `PUT /uploads/{id}/chunk` → `POST /uploads/{id}/complete`, the frontend downloads the assembled files through `GET /uploads/file/{filename}` into its temp directory and continues with the unchanged local `POST /analyze` flow.
 
 **Frontend Ollama model selector persistence**: the model dropdown in `frontend/views/analysis_view.py` now normalizes, de-duplicates, and sorts model names deterministically, then stores the selected model in `st.session_state['selected_ollama_model']`. This prevents random model jumps across Streamlit reruns.
 

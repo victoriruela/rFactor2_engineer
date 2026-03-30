@@ -146,12 +146,12 @@ def test_post_analysis_with_local_files_raises_if_missing_files(mocker):
 
 
 # ---------------------------------------------------------------------------
-# download_session_file
+# download_uploaded_file
 # ---------------------------------------------------------------------------
 
 
-def test_download_session_file_writes_streamed_bytes(tmp_path):
-    """download_session_file streams backend response and writes it to disk."""
+def test_download_uploaded_file_writes_streamed_bytes(tmp_path):
+    """download_uploaded_file streams backend response and writes it to disk."""
     from frontend import api_client
 
     content = b"mat-binary-content" * 500
@@ -164,7 +164,7 @@ def test_download_session_file_writes_streamed_bytes(tmp_path):
 
     target = tmp_path / "session.mat"
     with patch("frontend.api_client.requests.get", return_value=mock_resp) as mock_get:
-        api_client.download_session_file(
+        api_client.download_uploaded_file(
             "http://backend:8000",
             "abc123session",
             "session.mat",
@@ -173,12 +173,12 @@ def test_download_session_file_writes_streamed_bytes(tmp_path):
 
     mock_get.assert_called_once()
     call_url = mock_get.call_args[0][0]
-    assert "/sessions/abc123session/file/session.mat" in call_url
+    assert "/uploads/file/session.mat" in call_url
     assert target.read_bytes() == content
 
 
-def test_download_session_file_passes_session_header(tmp_path):
-    """download_session_file includes X-Client-Session-Id header."""
+def test_download_uploaded_file_passes_session_header(tmp_path):
+    """download_uploaded_file includes X-Client-Session-Id header."""
     from frontend import api_client
 
     mock_resp = MagicMock()
@@ -189,7 +189,7 @@ def test_download_session_file_passes_session_header(tmp_path):
 
     target = tmp_path / "out.mat"
     with patch("frontend.api_client.requests.get", return_value=mock_resp) as mock_get:
-        api_client.download_session_file(
+        api_client.download_uploaded_file(
             "http://backend:8000",
             "my-session-id",
             "out.mat",

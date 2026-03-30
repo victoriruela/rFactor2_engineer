@@ -207,6 +207,28 @@ class TestChunkedUploads:
             )
             assert bad.status_code == 409
 
+    def test_get_uploaded_file_returns_content_before_session_pair_exists(self, tmp_path):
+        filename = "raw-upload.mat"
+        expected = b"mat-data"
+
+        with patch("app.main._client_root", return_value=str(tmp_path)):
+            init = client.post("/uploads/init", headers=SESSION_HEADERS, json={"filename": filename})
+            upload_id = init.json()["upload_id"]
+
+            chunk = client.put(
+                f"/uploads/{upload_id}/chunk?chunk_index=0",
+                headers=SESSION_HEADERS,
+                content=expected,
+            )
+            assert chunk.status_code == 200
+
+            complete = client.post(f"/uploads/{upload_id}/complete", headers=SESSION_HEADERS)
+            assert complete.status_code == 200
+
+            download = client.get(f"/uploads/file/{filename}", headers=SESSION_HEADERS)
+            assert download.status_code == 200
+            assert download.content == expected
+
 
 # ---------------------------------------------------------------------------
 # POST /analyze

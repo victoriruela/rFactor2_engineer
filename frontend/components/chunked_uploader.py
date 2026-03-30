@@ -36,6 +36,7 @@ def chunked_uploader(
     file_types: Optional[List[str]] = None,
     height: int = 120,
     key: Optional[str] = None,
+    help_text: Optional[str] = None,
 ) -> Optional[Dict]:
     """Render a chunked-upload file picker and return the upload result.
 
@@ -56,6 +57,8 @@ def chunked_uploader(
         Height in pixels for the component iframe.
     key:
         Streamlit component key (keeps value stable across reruns).
+    help_text:
+        Small secondary text shown below the title inside the drop zone.
 
     Returns
     -------
@@ -69,6 +72,8 @@ def chunked_uploader(
         client_session_id=client_session_id,
         chunk_size=chunk_size,
         file_types=file_types or [],
+        height=height,
+        help_text=help_text,
         key=key,
         default=None,
     )

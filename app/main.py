@@ -91,6 +91,21 @@ def complete_upload(
     return upload_service.complete_upload(upload_id, client_session_id, root_resolver=_client_root)
 
 
+@app.get("/uploads/file/{filename}")
+def get_uploaded_file(
+    filename: str,
+    client_session_id: str = Depends(_resolve_client_session_id),
+):
+    safe_name = session_service.safe_filename(filename)
+    if not safe_name.lower().endswith((".mat", ".csv", ".svm")):
+        raise HTTPException(status_code=404, detail="File not found")
+
+    file_path = os.path.join(_client_root(client_session_id), safe_name)
+    if not os.path.isfile(file_path):
+        raise HTTPException(status_code=404, detail="File not found")
+    return FileResponse(file_path)
+
+
 @app.get("/sessions")
 def list_sessions(client_session_id: str = Depends(_resolve_client_session_id)):
     return {"sessions": _list_client_sessions(client_session_id)}

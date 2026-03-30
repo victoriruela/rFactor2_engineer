@@ -10,58 +10,67 @@
       background: transparent;
       font-family: "Source Sans Pro", sans-serif;
       font-size: 14px;
-      color: #fafafa;
+      color: rgb(250, 250, 250);
     }
     #drop-zone {
-      border: 1px dashed rgba(255,255,255,0.25);
-      border-radius: 4px;
-      padding: 16px 12px;
-      text-align: center;
+      border: 1px solid rgba(250, 250, 250, 0.2);
+      border-radius: 0.5rem;
+      padding: 0.75rem;
+      text-align: left;
       cursor: pointer;
-      background: rgba(255,255,255,0.03);
-      transition: border-color 0.2s, background 0.2s;
+      background: rgba(255, 255, 255, 0.02);
+      transition: border-color 0.2s, background 0.2s, box-shadow 0.2s;
       user-select: none;
     }
     #drop-zone.hovering {
-      border-color: rgba(255,255,255,0.5);
-      background: rgba(255,255,255,0.07);
+      border-color: rgb(255, 75, 75);
+      background: rgba(255, 75, 75, 0.08);
+      box-shadow: 0 0 0 1px rgba(255, 75, 75, 0.25) inset;
     }
     #drop-zone.done {
       border-color: #21c354;
+      box-shadow: 0 0 0 1px rgba(33, 195, 84, 0.2) inset;
     }
     #drop-zone.error-state {
       border-color: #ff4b4b;
+      box-shadow: 0 0 0 1px rgba(255, 75, 75, 0.25) inset;
     }
-    #label {
-      color: rgba(250,250,250,0.6);
-      font-size: 13px;
-      margin: 0 0 6px 0;
+    #title {
+      margin: 0 0 0.25rem 0;
+      font-size: 0.95rem;
+      font-weight: 600;
+      color: rgb(250, 250, 250);
+    }
+    #help-text {
+      margin: 0 0 0.65rem 0;
+      font-size: 0.8rem;
+      color: rgba(250, 250, 250, 0.65);
     }
     #browse-btn {
       display: inline-block;
-      padding: 4px 14px;
-      border: 1px solid rgba(250,250,250,0.2);
-      border-radius: 4px;
-      font-size: 13px;
+      padding: 0.35rem 0.9rem;
+      border: 1px solid rgba(250, 250, 250, 0.2);
+      border-radius: 0.5rem;
+      font-size: 0.9rem;
+      font-weight: 500;
       cursor: pointer;
-      background: rgba(255,255,255,0.06);
-      color: #fafafa;
-      margin-top: 4px;
+      background: transparent;
+      color: rgb(250, 250, 250);
     }
-    #browse-btn:hover { background: rgba(255,255,255,0.12); }
+    #browse-btn:hover { background: rgba(255, 255, 255, 0.08); }
     #filename-row {
       display: none;
       align-items: center;
       gap: 6px;
-      margin-top: 6px;
-      font-size: 13px;
-      color: #fafafa;
+      margin-top: 0.75rem;
+      font-size: 0.82rem;
+      color: rgba(250, 250, 250, 0.9);
       word-break: break-all;
     }
     #filename-row .ic { font-size: 16px; }
     #progress-wrap {
       display: none;
-      margin-top: 10px;
+      margin-top: 0.75rem;
     }
     progress {
       width: 100%;
@@ -85,7 +94,8 @@
 </head>
 <body>
   <div id="drop-zone">
-    <p id="label">Arrastra tu archivo aquí</p>
+    <p id="title">Sube tu archivo</p>
+    <p id="help-text">Arrastra y suelta o selecciona un archivo</p>
     <div id="browse-btn">Seleccionar archivo</div>
     <input type="file" id="file-input" style="display:none">
     <div id="filename-row"><span class="ic">📄</span><span id="filename-text"></span></div>
@@ -120,8 +130,8 @@
       if (!evt.data || evt.data.type !== "streamlit:render") return;
       _props = evt.data.args || {};
 
-      // Update label / accepted types from props
-      if (_props.label) document.getElementById("label").textContent = _props.label;
+      if (_props.label) document.getElementById("title").textContent = _props.label;
+      if (_props.help_text) document.getElementById("help-text").textContent = _props.help_text;
       if (_props.file_types) {
         document.getElementById("file-input").accept =
           _props.file_types.map(function (t) { return "." + t; }).join(",");
