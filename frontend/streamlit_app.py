@@ -28,6 +28,29 @@ def _ensure_temp_upload_root():
     return TEMP_UPLOAD_ROOT
 
 
+def _cleanup_stale_temp_dirs(max_age_hours=4):
+    """Borra directorios de sesión temporales con más de max_age_hours horas de antigüedad."""
+    import time
+    if not os.path.isdir(TEMP_UPLOAD_ROOT):
+        return
+    now = time.time()
+    cutoff = now - max_age_hours * 3600
+    for entry in os.scandir(TEMP_UPLOAD_ROOT):
+        if entry.is_dir(follow_symlinks=False):
+            try:
+                if entry.stat().st_mtime < cutoff:
+                    shutil.rmtree(entry.path, ignore_errors=True)
+            except Exception:
+                pass
+
+
+@st.cache_resource
+def _run_startup_cleanup():
+    """Limpia directorios temporales viejos una vez por arranque del proceso Streamlit."""
+    _cleanup_stale_temp_dirs(max_age_hours=4)
+    return True
+
+
 def _cleanup_temp_session_files():
     temp_dir = st.session_state.pop('temp_upload_dir', None)
     for key in ('telemetry_temp_path', 'svm_temp_path', 'tele_name', 'svm_name', 'selected_session_id'):
@@ -347,6 +370,8 @@ def save_fixed_params(params_set):
         return False
 
 st.set_page_config(page_title="rFactor2 Engineer", layout="wide")
+
+_run_startup_cleanup()
 
 st.title("🏎️ rFactor2 Engineer")
 st.subheader("Análisis de Telemetría y Setup mediante IA")
