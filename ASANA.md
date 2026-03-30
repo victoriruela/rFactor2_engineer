@@ -44,7 +44,7 @@ python ~/.claude/asana-mcp/scripts/asana_mcp.py test
 
 | Target              | Format                                             |
 |---------------------|----------------------------------------------------|
-| `copilot-jetbrains` | `servers.asana-mcp.requestInit.headers`             |
+| `copilot-jetbrains` | `servers.asana-mcp.requestInit.headers`            |
 | `copilot-vscode`    | `servers.asana-mcp` with `type`/`url`/`headers`    |
 | `claude-desktop`    | `mcpServers.asana-mcp` with `type`/`url`/`headers` |
 | `claude-cli`        | `mcpServers.asana-mcp` with `type`/`url`/`headers` |

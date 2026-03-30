@@ -10,6 +10,7 @@ services:
       - OLLAMA_MODEL=llama3.2:latest
     volumes:
       - ./data:/app/data
+      - ./tracks:/app/tracks
       - ./app/core/param_mapping.json:/app/app/core/param_mapping.json
 
   frontend:
@@ -22,6 +23,8 @@ services:
       - RF2_API_URL=http://backend:8000
       - RF2_BROWSER_API_BASE_URL=http://localhost:8000
     volumes:
+      - ./tracks:/app/tracks
+      - ./frontend/streamlit_app.py:/app/frontend/streamlit_app.py
       - ./app/core/fixed_params.json:/app/app/core/fixed_params.json
     depends_on:
       - backend

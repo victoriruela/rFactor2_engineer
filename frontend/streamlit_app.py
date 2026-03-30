@@ -389,7 +389,7 @@ def _is_streamlit_mocked() -> bool:
 
 def compute_track_centroid(track_json):
     """Return (mean_lat, mean_lon) from a track JSON, or None if empty."""
-    waypoints = track_json.get("waypoints", [])
+    waypoints = track_json.get("points", track_json.get("waypoints", []))
     if not waypoints:
         return None
     lats = [w["lat"] for w in waypoints if "lat" in w]
@@ -426,7 +426,7 @@ def build_track_preview_data(track_json):
 
     Prefers ``x``/``y`` fields; falls back to ``lon``/``lat`` if absent.
     """
-    waypoints = track_json.get("waypoints", [])
+    waypoints = track_json.get("points", track_json.get("waypoints", []))
     if not waypoints:
         return [], []
     if "x" in waypoints[0]:
@@ -981,7 +981,8 @@ def _fetch_track_list():
             f"{API_BASE_URL}/tracks/list", headers=_api_headers(), timeout=10
         )
         if resp.status_code == 200:
-            remote_tracks = resp.json().get("tracks", [])
+            data = resp.json()
+            remote_tracks = data if isinstance(data, list) else data.get("tracks", [])
     except Exception:
         pass
 
@@ -1211,7 +1212,7 @@ def _render_track_selection_ui(df=None):
     if final_track:
         _render_track_preview(final_track)
         st.caption(
-            f"Waypoints: {len(final_track.get('waypoints', []))} | "
+            f"Waypoints: {len(final_track.get('points', []))} | "
             f"Nombre: {final_track.get('name', 'Desconocido')}"
         )
     else:
@@ -1621,9 +1622,8 @@ def render_3d_cockpit(lap_data, track_json):
   <span id="dist-label">0 m</span>
 </div>
 
-<script src="https://unpkg.com/three@0.168.0/build/three.module.js" type="module"></script>
-<script type="module">
-import * as THREE from 'https://unpkg.com/three@0.168.0/build/three.module.js';
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
 
 // ─── Data injection ──────────────────────────────────────────────────
 window.TRACK_DATA  = {track_js};
@@ -1641,7 +1641,7 @@ renderer.setSize(canvas.clientWidth, canvas.clientHeight);
 
 const scene  = new THREE.Scene();
 scene.background = new THREE.Color(0x222233);
-scene.fog = new THREE.Fog(0x222233, 200, 1500);
+scene.fog = new THREE.Fog(0x222233, 500, 3000);
 
 const camera = new THREE.PerspectiveCamera(75, canvas.clientWidth / canvas.clientHeight, 0.5, 3000);
 scene.add(camera);
@@ -1655,8 +1655,21 @@ scene.add(dir);
 
 // ─── Track spline ────────────────────────────────────────────────────
 const pts = TRACK.points || [];
-const splinePoints = pts.map(p => new THREE.Vector3(p.x, p.y, p.z));
+console.log('[3D] THREE version:', THREE.REVISION);
+console.log('[3D] CatmullRomCurve3 exists:', typeof THREE.CatmullRomCurve3);
+console.log('[3D] Track points:', pts.length);
+console.log('[3D] First point:', JSON.stringify(pts[0]));
+console.log('[3D] TELEM:', TELEM ? Object.keys(TELEM) : 'null');
+if (TELEM) console.log('[3D] TELEM lap_distance len:', TELEM.lap_distance ? TELEM.lap_distance.length : 0);
+// Track data: x=east, y=north, z=elevation. Three.js: x=east, y=UP, z=north.
+// Normalize elevation so minimum is 0 (OpenF1 Z uses arbitrary origin)
+const minZ = Math.min(...pts.map(p => p.z || 0));
+const splinePoints = pts.map(p => new THREE.Vector3(p.x, (p.z || 0) - minZ, p.y));
+console.log('[3D] Elevation normalized: minZ offset =', minZ);
+console.log('[3D] Spline point 0:', splinePoints[0]);
+console.log('[3D] Spline point mid:', splinePoints[Math.floor(splinePoints.length/2)]);
 const curve = new THREE.CatmullRomCurve3(splinePoints, false, 'catmullrom', 0.5);
+console.log('[3D] Curve total length:', curve.getLength());
 
 // ─── Track road mesh ─────────────────────────────────────────────────
 const SPLINE_DIVISIONS = Math.max(pts.length * 4, 500);
@@ -1714,9 +1727,11 @@ roadGeo.setAttribute('uv', new THREE.Float32BufferAttribute(roadUVs, 2));
 roadGeo.setIndex(roadIdx);
 roadGeo.computeVertexNormals();
 
-const roadMat = new THREE.MeshLambertMaterial({{ color: 0x444444, side: THREE.DoubleSide }});
+console.log('[3D] Road verts:', roadVerts.length / 3, 'tris:', roadIdx.length / 3);
+const roadMat = new THREE.MeshLambertMaterial({{ color: 0x666666, side: THREE.DoubleSide }});
 const roadMesh = new THREE.Mesh(roadGeo, roadMat);
 scene.add(roadMesh);
+console.log('[3D] Road mesh added to scene. BBox:', JSON.stringify(new THREE.Box3().setFromObject(roadMesh)));
 
 // Kerb edges (thin lighter strips)
 function buildKerbStrip(side) {{
@@ -1763,8 +1778,22 @@ ground.position.y = -0.1;
 scene.add(ground);
 
 // ─── Telemetry helpers ───────────────────────────────────────────────
-const maxDist = TELEM ? TELEM.lap_distance[TELEM.lap_distance.length - 1] : curve.getLength();
 const totalLength = curve.getLength();
+// Use curve length as maxDist — telemetry lap_distance may be in different units or incomplete
+// If telemetry maxDist is reasonably close to curve length (within 10x), use it; otherwise use curve length
+const telemMaxDist = TELEM ? TELEM.lap_distance[TELEM.lap_distance.length - 1] : 0;
+let maxDist;
+if (telemMaxDist > totalLength * 0.5 && telemMaxDist < totalLength * 2.0) {{
+  maxDist = telemMaxDist; // telemetry and curve agree roughly
+}} else if (telemMaxDist > 0 && telemMaxDist < totalLength * 0.01) {{
+  // Telemetry is probably in km — convert
+  maxDist = telemMaxDist * 1000;
+  if (TELEM) TELEM.lap_distance = TELEM.lap_distance.map(d => d * 1000);
+  console.log('[3D] Converted lap_distance from km to m');
+}} else {{
+  maxDist = totalLength;
+}}
+console.log('[3D] maxDist:', maxDist, 'totalLength:', totalLength, 'telemRaw:', telemMaxDist);
 
 function telemAt(arr, dist) {{
   if (!TELEM || !arr || arr.length === 0) return 0;
@@ -1795,6 +1824,10 @@ function updateCamera(dist) {{
   // Base camera position (cockpit height above road)
   camera.position.set(pos.x, pos.y + COCKPIT_HEIGHT, pos.z);
 
+  if (!window._camLogged) {{
+    console.log('[3D] Camera pos:', pos.x.toFixed(1), pos.y.toFixed(1), pos.z.toFixed(1), 'tan:', tan.x.toFixed(2), tan.y.toFixed(2), tan.z.toFixed(2));
+    window._camLogged = true;
+  }}
   // Look direction
   const lookTarget = new THREE.Vector3(
     pos.x + tan.x * 10,
@@ -1859,6 +1892,7 @@ btnPlay.addEventListener('click', () => {{
   playing = !playing;
   btnPlay.innerHTML = playing ? '&#9646;&#9646;' : '&#9654;';
   if (playing) lastTime = performance.now();
+  console.log('[3D] Play toggled:', playing, 'maxDist:', maxDist, 'currentDist:', currentDist);
 }});
 
 speedSel.addEventListener('change', () => {{
@@ -1883,8 +1917,6 @@ window.setCockpitPosition = function(lapDistance) {{
   distLbl.textContent = Math.round(currentDist) + ' m';
   updateCamera(currentDist);
   updateHUD(currentDist);
-}};
-
   window._syncInProgress = false;
 }};
 
@@ -1900,7 +1932,7 @@ function animate(time) {{
   requestAnimationFrame(animate);
 
   if (playing) {{
-    const dt = (time - lastTime) / 1000; // seconds
+    const dt = Math.min((time - lastTime) / 1000, 0.1); // cap at 100ms to prevent jumps
     lastTime = time;
 
     // Advance based on speed at current position (or fixed rate)
@@ -1912,6 +1944,10 @@ function animate(time) {{
       advance = 50 * dt * playbackSpeed; // 50 m/s default
     }}
     currentDist += advance;
+    if (!window._advLogged) {{
+      console.log('[3D] Frame: dt=', dt.toFixed(3), 'spd=', TELEM ? telemAt(TELEM.speed, currentDist) : 'N/A', 'advance=', advance.toFixed(2), 'currentDist=', currentDist.toFixed(1));
+      window._advLogged = true;
+    }}
     if (currentDist >= maxDist) {{
       currentDist = 0; // loop
     }}
@@ -1941,6 +1977,10 @@ window.addEventListener('resize', onResize);
 onResize();
 
 // Start
+updateCamera(0);
+renderer.render(scene, camera);
+console.log('[3D] Initial render done. Scene children:', scene.children.length);
+console.log('[3D] Renderer size:', renderer.domElement.width, 'x', renderer.domElement.height);
 requestAnimationFrame(animate);
 
 </script>
@@ -2695,6 +2735,15 @@ if tele_path and svm_path:
                 if lap_times:
                     fastest_lap = min(lap_times, key=lap_times.get)
 
+                # Pre-load track data before tabs so it's available for the PIP
+                if "loaded_track_json" not in st.session_state:
+                    _preload_tracks = _fetch_track_list()
+                    if _preload_tracks:
+                        _first = _preload_tracks[0]
+                        _preloaded = _download_track_json(_first)
+                        if _preloaded and _preloaded.get("points"):
+                            st.session_state["loaded_track_json"] = _preloaded
+
                 main_tab_tele, main_tab_setup, main_tab_ai, main_tab_track = st.tabs(
                     ["📊 Telemetría", "🔧 Setup", "🤖 Análisis AI", "🏁 Pista 3D"]
                 )
@@ -2739,28 +2788,29 @@ if tele_path and svm_path:
                     st.markdown(pip_css(), unsafe_allow_html=True)
 
                     # Render cockpit in the appropriate container
-                    pip_html = pip_render_cockpit_container(current_pip)
+                    # Build cockpit HTML if track data is available
+                    _cockpit_func = None
+                    _track_j = st.session_state.get("loaded_track_json")
+                    _dbg_track = f"track={_track_j.get('name') if _track_j else 'None'}, pts={len(_track_j.get('points',[])) if _track_j else 0}"
+                    if _track_j and _track_j.get("points"):
+                        # Use fastest lap or first available lap for cockpit data
+                        _cockpit_lap = fastest_lap if fastest_lap else laps[0]
+                        _cockpit_lap_df = df_local[df_local['Lap_Number'] == _cockpit_lap].copy()
+                        _cockpit_data = _build_cockpit_data(_cockpit_lap_df)
+                        _cockpit_func = lambda: render_3d_cockpit(_cockpit_data, _track_j)
+                    else:
+                        st.caption(f"⚠️ DEBUG: No track loaded. {_dbg_track}")
+                    pip_html = pip_render_cockpit_container(current_pip, cockpit_html_func=_cockpit_func)
 
                     if current_pip == PIP_STATE_MAP_REPLACE:
-                        # Rendered above the charts, replacing the map
                         components.html(pip_html, height=320, scrolling=False)
                     elif current_pip == PIP_STATE_FULLSCREEN:
-                        # Fullscreen modal overlay
-                        components.html(pip_html, height=0, scrolling=False)
-                        st.markdown(
-                            pip_render_cockpit_container(current_pip),
-                            unsafe_allow_html=True,
-                        )
+                        components.html(pip_html, height=600, scrolling=False)
                     elif current_pip == PIP_STATE_HIDDEN:
-                        # Just the restore button
-                        components.html(pip_html, height=0, scrolling=False)
+                        components.html(pip_html, height=40, scrolling=False)
                     else:
-                        # Mini PIP - floating window via CSS
-                        components.html(pip_html, height=0, scrolling=False)
-                        st.markdown(
-                            pip_render_cockpit_container(current_pip),
-                            unsafe_allow_html=True,
-                        )
+                        # Mini PIP
+                        components.html(pip_html, height=220, scrolling=False)
 
                     # Inject PIP JS message listener
                     components.html(pip_js_listener(), height=0, scrolling=False)
