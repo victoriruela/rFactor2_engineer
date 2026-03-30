@@ -192,13 +192,15 @@ class TestInitLlmCustomOllama:
         assert call_kwargs["base_url"] == "https://ollama.com"
 
     def test_custom_api_key_sets_authorization_header(self, mocker, tmp_path):
-        """When custom_api_key is provided, ChatOllama must receive the Authorization header."""
+        """When custom_api_key is provided, ChatOllama must receive the Authorization header via client_kwargs."""
         mocker.patch("app.core.ai_agents._ensure_ollama_running")
         mock_chat = mocker.patch("app.core.ai_agents.ChatOllama")
         eng = AIAngineer()
         eng._init_llm(provider="ollama", custom_base_url="https://ollama.com", custom_api_key="mykey")
         call_kwargs = mock_chat.call_args.kwargs
-        assert call_kwargs.get("headers") == {"Authorization": "Bearer mykey"}
+        expected_headers = {"Authorization": "Bearer mykey"}
+        assert call_kwargs.get("client_kwargs", {}).get("headers") == expected_headers
+        assert call_kwargs.get("async_client_kwargs", {}).get("headers") == expected_headers
 
     def test_no_custom_url_uses_env_base_url_and_calls_ensure(self, mocker):
         """Without custom_base_url, falls back to OLLAMA_BASE_URL and calls _ensure_ollama_running."""

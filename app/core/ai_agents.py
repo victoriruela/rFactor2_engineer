@@ -488,7 +488,8 @@ class AIAngineer:
             "temperature": 0.3,
         }
         if custom_api_key:
-            ollama_kwargs["headers"] = {"Authorization": f"Bearer {custom_api_key}"}
+            ollama_kwargs["client_kwargs"] = {"headers": {"Authorization": f"Bearer {custom_api_key}"}}
+            ollama_kwargs["async_client_kwargs"] = {"headers": {"Authorization": f"Bearer {custom_api_key}"}}
         self.llm = ChatOllama(**ollama_kwargs)
         self._provider = "ollama"
         self._current_model = tag
