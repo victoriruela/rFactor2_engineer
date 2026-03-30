@@ -493,6 +493,7 @@ class AIAngineer:
         self._provider = "ollama"
         self._current_model = tag
         self._custom_base_url = effective_url
+        self._custom_api_key = custom_api_key
         print(f"LLM listo: ollama/{tag} @ {effective_url}")
 
     def _build_prompt_text(self, prompt, inputs):
@@ -1021,7 +1022,9 @@ class AIAngineer:
                 needs_init = True
             if model_tag and getattr(self, "_current_model", None) != model_tag:
                 needs_init = True
-            if ollama_base_url and getattr(self, "_custom_base_url", None) != ollama_base_url:
+            if ollama_base_url != getattr(self, "_custom_base_url", None):
+                needs_init = True
+            if ollama_api_key != getattr(self, "_custom_api_key", None):
                 needs_init = True
 
         if needs_init:

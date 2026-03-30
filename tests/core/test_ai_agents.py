@@ -209,12 +209,13 @@ class TestInitLlmCustomOllama:
         ensure_mock.assert_called_once()
 
     def test_custom_base_url_stored_on_instance(self, mocker):
-        """_custom_base_url attribute should be set after _init_llm with custom URL."""
+        """_custom_base_url and _custom_api_key attributes should be set after _init_llm."""
         mocker.patch("app.core.ai_agents._ensure_ollama_running")
         mocker.patch("app.core.ai_agents.ChatOllama")
         eng = AIAngineer()
-        eng._init_llm(provider="ollama", custom_base_url="https://custom.example.com")
+        eng._init_llm(provider="ollama", custom_base_url="https://custom.example.com", custom_api_key="tok123")
         assert eng._custom_base_url == "https://custom.example.com"
+        assert eng._custom_api_key == "tok123"
 
 
 # ---------------------------------------------------------------------------

@@ -1471,11 +1471,10 @@ if tele_path and svm_path:
                     if sel_provider == "ollama":
                         sel_ollama_url = st.text_input(
                             "URL de Ollama",
-                            value="",
-                            placeholder="http://localhost:11434  (vacío = Ollama local del backend)",
+                            value="https://ollama.com",
                             help=(
-                                "Deja vacío para usar el Ollama local del servidor backend. "
-                                "Para usar Ollama Cloud pon https://ollama.com y añade tu API Key. "
+                                "URL del servidor Ollama. Por defecto apunta a Ollama Cloud. "
+                                "Bórrala o pon http://localhost:11434 para usar el Ollama local del backend. "
                                 "Para un túnel/ngrok pon la URL completa (ej: https://xxx.ngrok.io)."
                             ),
                         )
