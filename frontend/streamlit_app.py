@@ -8,6 +8,7 @@ import os
 import json as _json
 import shutil
 import tempfile
+import time
 import uuid
 import re
 
@@ -344,6 +345,25 @@ def _cleanup_temp_session_files():
 
     if temp_dir and os.path.isdir(temp_dir):
         shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+def _cleanup_orphaned_temp_dirs(max_age_hours=24):
+    """Remove temp session directories older than max_age_hours.
+    Called once on app startup to prevent disk space buildup.
+    """
+    if not os.path.isdir(TEMP_UPLOAD_ROOT):
+        return
+    now = time.time()
+    cutoff = now - (max_age_hours * 3600)
+    for entry in os.listdir(TEMP_UPLOAD_ROOT):
+        entry_path = os.path.join(TEMP_UPLOAD_ROOT, entry)
+        if os.path.isdir(entry_path):
+            try:
+                mtime = os.path.getmtime(entry_path)
+                if mtime < cutoff:
+                    shutil.rmtree(entry_path, ignore_errors=True)
+            except OSError:
+                pass
 
 
 def _write_uploaded_file_in_chunks(uploaded_file, target_path, chunk_size=UPLOAD_CHUNK_SIZE):
@@ -866,6 +886,7 @@ def _render_track_upload_dropzone():
         components.html(html, height=250, scrolling=False)
 
 
+@st.cache_data(ttl=3600, show_spinner=False)
 def _fetch_backend_sessions():
         try:
                 response = requests.get(f"{API_BASE_URL}/sessions", headers=_api_headers(), timeout=20)
@@ -888,16 +909,21 @@ def _download_session_file(url, target_path):
 
 def _load_session_locally(session_entry):
         temp_root = _ensure_temp_upload_root()
-        session_dir = tempfile.mkdtemp(prefix=f"rf2-session-{uuid.uuid4()}-", dir=temp_root)
+        # Use deterministic path based on session_id so we can reuse cached files
+        session_id = session_entry["id"]
+        session_dir = os.path.join(temp_root, f"rf2-session-{session_id}")
+        os.makedirs(session_dir, exist_ok=True)
 
         tele_name = session_entry["telemetry"]
         svm_name = session_entry["svm"]
         tele_path = os.path.join(session_dir, tele_name)
         svm_path = os.path.join(session_dir, svm_name)
 
-        session_id = session_entry["id"]
-        _download_session_file(f"{API_BASE_URL}/sessions/{session_id}/file/{tele_name}", tele_path)
-        _download_session_file(f"{API_BASE_URL}/sessions/{session_id}/file/{svm_name}", svm_path)
+        # Only download if files don't already exist (reuse cache across restarts)
+        if not os.path.exists(tele_path) or os.path.getsize(tele_path) == 0:
+            _download_session_file(f"{API_BASE_URL}/sessions/{session_id}/file/{tele_name}", tele_path)
+        if not os.path.exists(svm_path) or os.path.getsize(svm_path) == 0:
+            _download_session_file(f"{API_BASE_URL}/sessions/{session_id}/file/{svm_name}", svm_path)
 
         return {
                 "temp_upload_dir": session_dir,
@@ -969,6 +995,7 @@ def save_fixed_params(params_set):
 TRACKS_DIR = os.path.join(os.path.dirname(__file__), "..", "tracks")
 
 
+@st.cache_resource(show_spinner=False)
 def _fetch_track_list():
     """Fetch available tracks from the backend ``GET /tracks/list`` endpoint.
 
@@ -1006,13 +1033,20 @@ def _fetch_track_list():
                 except Exception:
                     pass
 
-    # Merge: remote first, local ones that aren't already listed
-    seen_hashes = {t["content_sha256"] for t in remote_tracks}
-    merged = list(remote_tracks)
+    # Merge: prefer local entries (they have _track_json, no download needed)
+    # Dedup by name since hash computation differs between API and local
+    seen_names = set()
+    merged = []
     for lt in local_tracks:
-        if lt["content_sha256"] not in seen_hashes:
+        name = lt.get("name", "")
+        if name not in seen_names:
             merged.append(lt)
-            seen_hashes.add(lt["content_sha256"])
+            seen_names.add(name)
+    for rt in remote_tracks:
+        name = rt.get("name", "")
+        if name not in seen_names:
+            merged.append(rt)
+            seen_names.add(name)
     return merged
 
 
@@ -1076,7 +1110,11 @@ def _upload_track_to_community(file_bytes, track_json):
             headers=_api_headers(),
             timeout=15,
         )
-        return resp.status_code == 200 or resp.status_code == 201
+        if resp.status_code in (200, 201):
+            # Bust the track list cache so the new track appears immediately
+            _fetch_track_list.clear()
+            return True
+        return False
     except Exception:
         return False
 
@@ -1223,6 +1261,9 @@ def _render_track_selection_ui(df=None):
 
 
 st.set_page_config(page_title="rFactor2 Engineer", layout="wide")
+
+# Cleanup orphaned temp directories on startup (prevents disk space buildup)
+_cleanup_orphaned_temp_dirs(max_age_hours=24)
 
 st.title("🏎️ rFactor2 Engineer")
 st.subheader("Análisis de Telemetría y Setup mediante IA")
@@ -1604,6 +1645,12 @@ def render_3d_cockpit(lap_data, track_json):
 </head>
 <body>
 <canvas id="c"></canvas>
+<div id="pip-btns" style="position:absolute;top:4px;right:4px;z-index:100;display:flex;gap:3px;">
+  <button onclick="pipCmd('')" title="Mini" style="font-size:11px;padding:2px 5px;cursor:pointer;background:#333;color:#ccc;border:1px solid #666;border-radius:3px;">🎥</button>
+  <button onclick="pipCmd('pip-map')" title="Replace map" style="font-size:11px;padding:2px 5px;cursor:pointer;background:#333;color:#ccc;border:1px solid #666;border-radius:3px;">⬆</button>
+  <button onclick="pipCmd('pip-full')" title="Fullscreen" style="font-size:11px;padding:2px 5px;cursor:pointer;background:#333;color:#ccc;border:1px solid #666;border-radius:3px;">⛶</button>
+  <button onclick="pipCmd('pip-hidden')" title="Hide" style="font-size:11px;padding:2px 5px;cursor:pointer;background:#333;color:#ccc;border:1px solid #666;border-radius:3px;">✕</button>
+</div>
 <div id="hud">
   <div id="hud-speed">--- km/h</div>
   <div id="hud-gear">N</div>
@@ -1623,6 +1670,14 @@ def render_3d_cockpit(lap_data, track_json):
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+// PIP state command — sends to parent to change CSS class on #cockpit-pip
+function pipCmd(cls) {{
+  window.parent.postMessage({{type: 'pipState', cls: cls}}, '*');
+  // Also trigger resize after transition
+  setTimeout(function() {{ window.dispatchEvent(new Event('resize')); }}, 350);
+}}
+</script>
 <script>
 
 // ─── Data injection ──────────────────────────────────────────────────
@@ -1662,10 +1717,50 @@ console.log('[3D] First point:', JSON.stringify(pts[0]));
 console.log('[3D] TELEM:', TELEM ? Object.keys(TELEM) : 'null');
 if (TELEM) console.log('[3D] TELEM lap_distance len:', TELEM.lap_distance ? TELEM.lap_distance.length : 0);
 // Track data: x=east, y=north, z=elevation. Three.js: x=east, y=UP, z=north.
-// Normalize elevation so minimum is 0 (OpenF1 Z uses arbitrary origin)
-const minZ = Math.min(...pts.map(p => p.z || 0));
-const splinePoints = pts.map(p => new THREE.Vector3(p.x, (p.z || 0) - minZ, p.y));
-console.log('[3D] Elevation normalized: minZ offset =', minZ);
+// Procedural Z cleanup (Gemini signal decomposition approach):
+// 1. Slope clamp (kill monoliths)
+// 2. Low-pass filter (extract smooth road profile)
+// 3. Scale residual (keep subtle bumps, kill jitter)
+const trackSource = TRACK.source || '';
+const trustZ = (trackSource === 'aiw' || trackSource === 'tumrt');
+let cleanZ = pts.map(p => p.z || 0);
+const minZraw = Math.min(...cleanZ);
+cleanZ = cleanZ.map(z => z - minZraw); // normalize to 0
+
+// Step 1: Slope clamp — if Z jumps > threshold between consecutive points, clamp
+const slopeThreshold = trustZ ? 2.0 : 0.5; // meters
+for (let i = 1; i < cleanZ.length; i++) {{
+  const delta = cleanZ[i] - cleanZ[i-1];
+  if (Math.abs(delta) > slopeThreshold) {{
+    cleanZ[i] = cleanZ[i-1] + Math.sign(delta) * slopeThreshold;
+  }}
+}}
+
+// Step 2: Low-pass filter (moving average, window=21 points) to get Z_smooth
+const smoothWindow = 21;
+const halfW = Math.floor(smoothWindow / 2);
+const zSmooth = cleanZ.map((_, i) => {{
+  let sum = 0, count = 0;
+  for (let j = Math.max(0, i - halfW); j <= Math.min(cleanZ.length - 1, i + halfW); j++) {{
+    sum += cleanZ[j]; count++;
+  }}
+  return sum / count;
+}});
+
+// Step 3: Residual with gain — keep subtle bumps
+const bumpGain = trustZ ? 0.3 : 0.0; // OpenF1: no bumps (too noisy); AIW: subtle bumps
+const finalZ = zSmooth.map((smooth, i) => smooth + (cleanZ[i] - smooth) * bumpGain);
+
+// Step 4: Scale check — if total Z span is unreasonable for the track, compress
+const xSpan = Math.max(...pts.map(p=>p.x)) - Math.min(...pts.map(p=>p.x));
+const ySpan = Math.max(...pts.map(p=>p.y)) - Math.min(...pts.map(p=>p.y));
+const trackHSpan = Math.max(xSpan, ySpan);
+const finalZSpan = Math.max(...finalZ) - Math.min(...finalZ);
+const maxReasonableZ = trackHSpan * 0.04; // 4% is steep (e.g. Bathurst)
+const globalScale = (finalZSpan > maxReasonableZ && finalZSpan > 0) ? (maxReasonableZ / finalZSpan) : 1.0;
+
+console.log('[3D] Z cleanup: source=', trackSource, 'trustZ=', trustZ, 'rawSpan=', (Math.max(...pts.map(p=>p.z||0)) - Math.min(...pts.map(p=>p.z||0))).toFixed(1), 'cleanSpan=', finalZSpan.toFixed(1), 'globalScale=', globalScale.toFixed(3));
+const splinePoints = pts.map((p, i) => new THREE.Vector3(p.x, finalZ[i] * globalScale, p.y));
 console.log('[3D] Spline point 0:', splinePoints[0]);
 console.log('[3D] Spline point mid:', splinePoints[Math.floor(splinePoints.length/2)]);
 const curve = new THREE.CatmullRomCurve3(splinePoints, false, 'catmullrom', 0.5);
@@ -1699,13 +1794,16 @@ const roadIdx   = [];
 const UP = new THREE.Vector3(0, 1, 0);
 const _perp = new THREE.Vector3();
 
+const _flatTan = new THREE.Vector3();
 for (let i = 0; i <= SPLINE_DIVISIONS; i++) {{
   const p = sampledPts[i];
   const t = sampledTangents[i];
-  _perp.crossVectors(t, UP).normalize();
+  // Project tangent onto XZ plane to get horizontal perpendicular (no vertical artifacts)
+  _flatTan.set(t.x, 0, t.z).normalize();
+  _perp.crossVectors(_flatTan, UP).normalize();
   const {{ wl, wr }} = lerpWidth(pts, i);
 
-  // left edge
+  // left edge (keep same Y as road surface)
   roadVerts.push(p.x - _perp.x * wl, p.y, p.z - _perp.z * wl);
   // right edge
   roadVerts.push(p.x + _perp.x * wr, p.y, p.z + _perp.z * wr);
@@ -1742,7 +1840,8 @@ function buildKerbStrip(side) {{
   for (let i = 0; i <= SPLINE_DIVISIONS; i++) {{
     const p = sampledPts[i];
     const t = sampledTangents[i];
-    _perp.crossVectors(t, UP).normalize();
+    _flatTan.set(t.x, 0, t.z).normalize();
+    _perp.crossVectors(_flatTan, UP).normalize();
     const {{ wl, wr }} = lerpWidth(pts, i);
     const w = side === 'left' ? wl : wr;
     const sign = side === 'left' ? -1 : 1;
@@ -2004,7 +2103,7 @@ def precompute_all_laps(df, laps):
     return all_data
 
 
-def plot_all_laps_interactive(all_lap_figs, laps, lap_options, fastest_lap):
+def plot_all_laps_interactive(all_lap_figs, laps, lap_options, fastest_lap, track_json=None, cockpit_data=None):
     """Renderiza la telemetría interactiva de TODAS las vueltas en un solo componente HTML/JS.
     El cambio de vuelta se gestiona enteramente en el cliente (JavaScript), sin roundtrip al servidor."""
     if not all_lap_figs:
@@ -2014,6 +2113,8 @@ def plot_all_laps_interactive(all_lap_figs, laps, lap_options, fastest_lap):
     import json
     # Convertir claves int a string para JSON
     all_data_json = json.dumps({str(k): v for k, v in all_lap_figs.items() if v})
+    track_json_str = json.dumps(track_json) if track_json else "null"
+    cockpit_data_str = json.dumps(cockpit_data) if cockpit_data else "null"
     laps_json = json.dumps([int(l) for l in laps])
     lap_labels_json = json.dumps(lap_options)
     fastest_lap_js = int(fastest_lap) if fastest_lap else "null"
@@ -2022,6 +2123,7 @@ def plot_all_laps_interactive(all_lap_figs, laps, lap_options, fastest_lap):
 
     html_code = f"""
     <script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <style>
         body {{ margin: 0; background: #111; }}
         .telemetry-container {{ background-color: #111; color: white; font-family: sans-serif; width: 100%; box-sizing: border-box; display: flex; align-items: flex-start; }}
@@ -2039,13 +2141,75 @@ def plot_all_laps_interactive(all_lap_figs, laps, lap_options, fastest_lap):
         .chart-wrapper {{ position: relative; width: 100%; margin-bottom: 5px; box-sizing: border-box; cursor: grab; }}
         .chart-wrapper:active {{ cursor: grabbing; }}
         .chart-wrapper canvas.red-line {{ position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 10; }}
-        #map-container {{ width: 100%; margin-bottom: 15px; border: 1px solid #333; }}
+        #map-container {{ width: 100%; margin-bottom: 15px; border: 1px solid #333; position: relative; }}
+        #cockpit-pip {{
+            position: absolute; bottom: 4px; right: 4px;
+            width: 200px; height: 150px;
+            z-index: 50; border: 1px solid #555;
+            border-radius: 4px; overflow: hidden;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.4);
+            background: #1a1a2e;
+        }}
+        #cockpit-pip canvas {{ width: 100% !important; height: 100% !important; }}
+        #cockpit-pip.pip-hidden {{ display: none; }}
+        #cockpit-pip.pip-map {{
+            position: relative; bottom: auto; right: auto;
+            width: 100%; height: 300px; border-radius: 0;
+        }}
+        #cockpit-pip.pip-full {{
+            position: fixed; top: 0; left: 0;
+            width: 100vw; height: 100vh;
+            z-index: 10000; border: none; border-radius: 0;
+        }}
+        #cockpit-pip .pip-btns {{
+            position: absolute; top: 2px; right: 2px; z-index: 60;
+            display: flex; gap: 2px;
+        }}
+        #cockpit-pip .pip-btns button {{
+            font-size: 9px; padding: 1px 4px; cursor: pointer;
+            background: rgba(30,30,30,0.8); color: #ccc;
+            border: 1px solid #666; border-radius: 2px;
+        }}
+        #cockpit-pip .pip-btns button:hover {{ background: #555; }}
+        #cockpit-pip .pip-hud {{
+            position: absolute; top: 2px; left: 4px; z-index: 60;
+            font-family: monospace; font-size: 9px; color: #0f0;
+            text-shadow: 0 0 3px #000;
+        }}
+        #cockpit-pip .pip-controls {{
+            position: absolute; bottom: 2px; left: 4px; right: 4px;
+            z-index: 60; display: flex; align-items: center; gap: 3px;
+        }}
+        #cockpit-pip .pip-controls button, #cockpit-pip .pip-controls select {{
+            font-size: 9px; padding: 1px 3px; background: rgba(30,30,30,0.8);
+            color: #ccc; border: 1px solid #666; border-radius: 2px; cursor: pointer;
+        }}
+        #cockpit-pip .pip-controls input[type=range] {{ flex: 1; height: 8px; }}
     </style>
 
     <div class="telemetry-container">
         <div class="lap-sidebar" id="lap-sidebar"></div>
         <div class="charts-area">
-            <div id="map-container"></div>
+            <div id="map-container">
+                <div id="cockpit-pip">
+                    <div class="pip-btns">
+                        <button onclick="setPipState('')" title="Mini">🎥</button>
+                        <button onclick="setPipState('pip-map')" title="Replace map">⬆</button>
+                        <button onclick="setPipState('pip-full')" title="Fullscreen">⛶</button>
+                        <button onclick="setPipState('pip-hidden')" title="Hide">✕</button>
+                    </div>
+                    <div class="pip-hud">
+                        <div id="pip-speed">--- km/h</div>
+                        <div id="pip-gear">N</div>
+                    </div>
+                    <canvas id="cockpit-canvas"></canvas>
+                    <div class="pip-controls">
+                        <button id="pip-play">▶</button>
+                        <select id="pip-speed-sel"><option value="0.5">½</option><option value="1" selected>1x</option><option value="2">2x</option><option value="4">4x</option></select>
+                        <input type="range" id="pip-scrub" min="0" max="1000" value="0">
+                    </div>
+                </div>
+            </div>
 
             <div class="tabs">
                 <div class="tab active" onclick="showTab('general', this)">General</div>
@@ -2083,6 +2247,10 @@ def plot_all_laps_interactive(all_lap_figs, laps, lap_options, fastest_lap):
         const laps = {laps_json};
         const lapLabels = {lap_labels_json};
         const fastestLap = {fastest_lap_js};
+
+        // 3D Cockpit data
+        const COCKPIT_TRACK = {track_json_str};
+        const COCKPIT_TELEM = {cockpit_data_str};
         let currentLap = laps[0];
         let lapData = allLapData[String(currentLap)];
 
@@ -2465,14 +2633,198 @@ def plot_all_laps_interactive(all_lap_figs, laps, lap_options, fastest_lap):
         }} catch(e) {{}}
         setInterval(updateSidebarPosition, 100);
 
-        // T6: Listen for cockpitSync messages from the 3D cockpit iframe
-        window.addEventListener('message', function(evt) {{
-            if (evt.data && evt.data.type === 'cockpitSync' && typeof evt.data.lapDistance === 'number') {{
-                _syncInProgress = true;
-                sync(evt.data.lapDistance);
-                _syncInProgress = false;
+        // ── 3D Cockpit PIP (embedded in map container) ─────────────────
+        function setPipState(cls) {{
+            var el = document.getElementById('cockpit-pip');
+            if (el) {{ el.className = cls; }}
+        }}
+
+        (function initCockpitPIP() {{
+            if (!COCKPIT_TRACK || !COCKPIT_TRACK.points || COCKPIT_TRACK.points.length < 3) {{
+                var pip = document.getElementById('cockpit-pip');
+                if (pip) pip.style.display = 'none';
+                return;
             }}
-        }});
+            var pts = COCKPIT_TRACK.points;
+            var canvas = document.getElementById('cockpit-canvas');
+            if (!canvas || typeof THREE === 'undefined') return;
+
+            var renderer = new THREE.WebGLRenderer({{ canvas: canvas, antialias: true }});
+            renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+            renderer.setSize(canvas.clientWidth, canvas.clientHeight);
+
+            var scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x222233);
+            scene.fog = new THREE.Fog(0x222233, 500, 3000);
+
+            var camera = new THREE.PerspectiveCamera(75, canvas.clientWidth / canvas.clientHeight, 0.5, 5000);
+            scene.add(camera);
+            scene.add(new THREE.AmbientLight(0xffffff, 0.6));
+            var dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+            dirLight.position.set(100, 200, 50);
+            scene.add(dirLight);
+
+            // Z cleanup — slope clamp + smooth
+            var trustZ = (COCKPIT_TRACK.source === 'aiw' || COCKPIT_TRACK.source === 'tumrt');
+            var cleanZ = pts.map(function(p) {{ return p.z || 0; }});
+            var minZ = Math.min.apply(null, cleanZ);
+            cleanZ = cleanZ.map(function(z) {{ return z - minZ; }});
+            var thresh = trustZ ? 2.0 : 0.5;
+            for (var i = 1; i < cleanZ.length; i++) {{
+                var d = cleanZ[i] - cleanZ[i-1];
+                if (Math.abs(d) > thresh) cleanZ[i] = cleanZ[i-1] + (d > 0 ? thresh : -thresh);
+            }}
+            // Moving average
+            var smooth = cleanZ.map(function(_, idx) {{
+                var s = 0, c = 0;
+                for (var j = Math.max(0, idx-10); j <= Math.min(cleanZ.length-1, idx+10); j++) {{ s += cleanZ[j]; c++; }}
+                return s / c;
+            }});
+            var xSpan = Math.max.apply(null, pts.map(function(p){{return p.x;}})) - Math.min.apply(null, pts.map(function(p){{return p.x;}}));
+            var ySpan = Math.max.apply(null, pts.map(function(p){{return p.y;}})) - Math.min.apply(null, pts.map(function(p){{return p.y;}}));
+            var zSpan = Math.max.apply(null, smooth) - Math.min.apply(null, smooth);
+            var maxZ = Math.max(xSpan, ySpan) * 0.04;
+            var gScale = (zSpan > maxZ && zSpan > 0) ? maxZ / zSpan : 1.0;
+
+            var splinePts = pts.map(function(p, i) {{
+                return new THREE.Vector3(p.x, smooth[i] * gScale, p.y);
+            }});
+            var curve = new THREE.CatmullRomCurve3(splinePts, false, 'catmullrom', 0.5);
+            var totalLen = curve.getLength();
+
+            // Simple road ribbon
+            var DIVS = Math.max(pts.length * 2, 200);
+            var roadV = [], roadI = [];
+            var UP = new THREE.Vector3(0,1,0), perp = new THREE.Vector3(), ft = new THREE.Vector3();
+            for (var i = 0; i <= DIVS; i++) {{
+                var t = i / DIVS;
+                var sp = curve.getPointAt(t);
+                var st2 = curve.getTangentAt(t);
+                ft.set(st2.x, 0, st2.z).normalize();
+                perp.crossVectors(ft, UP).normalize();
+                var fi = t * (pts.length - 1), lo = Math.floor(fi), hi = Math.min(lo+1, pts.length-1), fr = fi - lo;
+                var wl = ((pts[lo].width_left||5)*(1-fr) + (pts[hi].width_left||5)*fr);
+                var wr = ((pts[lo].width_right||5)*(1-fr) + (pts[hi].width_right||5)*fr);
+                roadV.push(sp.x - perp.x*wl, sp.y, sp.z - perp.z*wl);
+                roadV.push(sp.x + perp.x*wr, sp.y, sp.z + perp.z*wr);
+            }}
+            for (var i = 0; i < DIVS; i++) {{
+                var a=i*2, b=i*2+1, c=(i+1)*2, dd=(i+1)*2+1;
+                roadI.push(a,c,b, b,c,dd);
+            }}
+            var geo = new THREE.BufferGeometry();
+            geo.setAttribute('position', new THREE.Float32BufferAttribute(roadV, 3));
+            geo.setIndex(roadI);
+            geo.computeVertexNormals();
+            scene.add(new THREE.Mesh(geo, new THREE.MeshLambertMaterial({{ color: 0x666666, side: THREE.DoubleSide }})));
+
+            // Ground
+            var gnd = new THREE.Mesh(new THREE.PlaneBufferGeometry(10000, 10000),
+                new THREE.MeshLambertMaterial({{ color: 0x2a3a20 }}));
+            gnd.rotation.x = -Math.PI/2; gnd.position.y = -0.5;
+            scene.add(gnd);
+
+            // Telemetry
+            var CT = COCKPIT_TELEM;
+            var telemMax = CT ? CT.lap_distance[CT.lap_distance.length-1] : 0;
+            // Auto-detect km vs m
+            if (telemMax > 0 && telemMax < totalLen * 0.01) {{
+                CT.lap_distance = CT.lap_distance.map(function(d){{ return d * 1000; }});
+                telemMax = CT.lap_distance[CT.lap_distance.length-1];
+            }}
+            var cockpitMaxDist = (telemMax > totalLen * 0.5 && telemMax < totalLen * 2) ? telemMax : totalLen;
+
+            function telemAt(arr, dist) {{
+                if (!CT || !arr || arr.length === 0) return 0;
+                var ld = CT.lap_distance;
+                var lo2 = 0, hi2 = ld.length - 1;
+                while (lo2 < hi2) {{ var mid = (lo2+hi2)>>1; if (ld[mid] < dist) lo2=mid+1; else hi2=mid; }}
+                return arr[lo2];
+            }}
+
+            // Camera + playback state
+            var cockpitDist = 0, cockpitPlaying = false, cockpitSpeed = 1, cockpitLastTime = 0;
+            var curPitch = 0, curRoll = 0, curHeave = 0;
+
+            function updateCockpit(dist) {{
+                var t = Math.max(0, Math.min(0.999, dist / totalLen));
+                var pos = curve.getPointAt(t);
+                var tan = curve.getTangentAt(t);
+                camera.position.set(pos.x, pos.y + 1.5, pos.z);
+                camera.lookAt(pos.x + tan.x*10, pos.y + 1.5 + tan.y*10, pos.z + tan.z*10);
+                if (CT) {{
+                    var tp = telemAt(CT.body_pitch, dist) + telemAt(CT.g_force_long, dist)*-0.02;
+                    var tr = telemAt(CT.body_roll, dist) + telemAt(CT.g_force_lat, dist)*0.03;
+                    var th = telemAt(CT.ride_height_avg, dist);
+                    curPitch += (tp - curPitch)*0.1; curRoll += (tr - curRoll)*0.1; curHeave += (th - curHeave)*0.1;
+                    camera.rotation.x += curPitch; camera.rotation.z += curRoll; camera.position.y += curHeave;
+                }}
+                // HUD
+                var sp = CT ? telemAt(CT.speed, dist) : 0;
+                var gr = CT ? telemAt(CT.gear, dist) : 0;
+                var sEl = document.getElementById('pip-speed');
+                var gEl = document.getElementById('pip-gear');
+                if (sEl) sEl.textContent = Math.round(sp) + ' km/h';
+                if (gEl) gEl.textContent = gr > 0 ? gr : 'N';
+            }}
+
+            // Controls
+            var playBtn = document.getElementById('pip-play');
+            var scrub = document.getElementById('pip-scrub');
+            var speedSel = document.getElementById('pip-speed-sel');
+            if (playBtn) playBtn.addEventListener('click', function() {{
+                cockpitPlaying = !cockpitPlaying;
+                playBtn.textContent = cockpitPlaying ? '⏸' : '▶';
+                if (cockpitPlaying) cockpitLastTime = performance.now();
+            }});
+            if (scrub) scrub.addEventListener('input', function() {{
+                cockpitDist = (parseFloat(scrub.value)/1000) * cockpitMaxDist;
+                updateCockpit(cockpitDist);
+                renderer.render(scene, camera);
+                sync(cockpitDist); // sync with 2D charts
+            }});
+            if (speedSel) speedSel.addEventListener('change', function() {{
+                cockpitSpeed = parseFloat(speedSel.value);
+            }});
+
+            // Animation loop
+            function animateCockpit(time) {{
+                requestAnimationFrame(animateCockpit);
+                if (cockpitPlaying) {{
+                    var dt = Math.min((time - cockpitLastTime)/1000, 0.1);
+                    cockpitLastTime = time;
+                    var spd = CT ? telemAt(CT.speed, cockpitDist) : 150;
+                    cockpitDist += (spd/3.6) * dt * cockpitSpeed;
+                    if (cockpitDist >= cockpitMaxDist) cockpitDist = 0;
+                    if (scrub) scrub.value = Math.round((cockpitDist/cockpitMaxDist)*1000);
+                    sync(cockpitDist); // sync 2D charts while playing
+                }}
+                updateCockpit(cockpitDist);
+                // Resize if needed
+                if (canvas.clientWidth !== renderer.domElement.width || canvas.clientHeight !== renderer.domElement.height) {{
+                    renderer.setSize(canvas.clientWidth, canvas.clientHeight);
+                    camera.aspect = canvas.clientWidth / canvas.clientHeight;
+                    camera.updateProjectionMatrix();
+                }}
+                renderer.render(scene, camera);
+            }}
+
+            // Also sync cockpit when 2D charts are hovered (sync calls us)
+            window.cockpitSyncFromCharts = function(dist) {{
+                cockpitDist = dist;
+                if (scrub) scrub.value = Math.round((dist/cockpitMaxDist)*1000);
+            }};
+
+            updateCockpit(0);
+            requestAnimationFrame(animateCockpit);
+        }})();
+
+        // Hook cockpit sync into existing sync() function
+        var _origSync = sync;
+        sync = function(x) {{
+            _origSync(x);
+            if (window.cockpitSyncFromCharts) window.cockpitSyncFromCharts(x);
+        }};
     </script>
     """
     import streamlit.components.v1 as components
@@ -2764,56 +3116,18 @@ if tele_path and svm_path:
                             t_str = f" ({t_val})"
                         lap_options.append(f"V{l}{t_str}")
 
-                    plot_all_laps_interactive(all_lap_figs, laps, lap_options, fastest_lap)
-
-                    # ── 3D Cockpit PIP Container ────────────────────────────
-                    # Initialize PIP state
-                    if "pip_state" not in st.session_state:
-                        st.session_state["pip_state"] = PIP_DEFAULT_STATE
-
-                    # Handle PIP state transitions from query params
-                    pip_action = st.query_params.get("pip_action")
-                    if pip_action:
-                        if pip_action == "restore_hidden":
-                            pip_restore_from_hidden(st.session_state)
-                        elif pip_action == "restore_fullscreen":
-                            pip_restore_from_fullscreen(st.session_state)
-                        elif pip_action in PIP_VALID_STATES:
-                            pip_transition(st.session_state, pip_action)
-                        st.query_params.pop("pip_action", None)
-
-                    current_pip = pip_get_state(st.session_state)
-
-                    # Inject PIP CSS
-                    st.markdown(pip_css(), unsafe_allow_html=True)
-
-                    # Render cockpit in the appropriate container
-                    # Build cockpit HTML if track data is available
-                    _cockpit_func = None
+                    # Build cockpit data for the 3D PIP (embedded in the chart component)
                     _track_j = st.session_state.get("loaded_track_json")
-                    _dbg_track = f"track={_track_j.get('name') if _track_j else 'None'}, pts={len(_track_j.get('points',[])) if _track_j else 0}"
+                    _cockpit_data = None
                     if _track_j and _track_j.get("points"):
-                        # Use fastest lap or first available lap for cockpit data
                         _cockpit_lap = fastest_lap if fastest_lap else laps[0]
                         _cockpit_lap_df = df_local[df_local['Lap_Number'] == _cockpit_lap].copy()
                         _cockpit_data = _build_cockpit_data(_cockpit_lap_df)
-                        _cockpit_func = lambda: render_3d_cockpit(_cockpit_data, _track_j)
-                    else:
-                        st.caption(f"⚠️ DEBUG: No track loaded. {_dbg_track}")
-                    pip_html = pip_render_cockpit_container(current_pip, cockpit_html_func=_cockpit_func)
 
-                    if current_pip == PIP_STATE_MAP_REPLACE:
-                        components.html(pip_html, height=320, scrolling=False)
-                    elif current_pip == PIP_STATE_FULLSCREEN:
-                        components.html(pip_html, height=600, scrolling=False)
-                    elif current_pip == PIP_STATE_HIDDEN:
-                        components.html(pip_html, height=40, scrolling=False)
-                    else:
-                        # Mini PIP
-                        components.html(pip_html, height=220, scrolling=False)
-
-                    # Inject PIP JS message listener
-                    components.html(pip_js_listener(), height=0, scrolling=False)
+                    plot_all_laps_interactive(
+                        all_lap_figs, laps, lap_options, fastest_lap,
+                        track_json=_track_j, cockpit_data=_cockpit_data
+                    )
 
                 with main_tab_setup:
                     st.header("Configuración del Coche (.svm)")
