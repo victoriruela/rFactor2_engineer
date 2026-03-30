@@ -622,6 +622,250 @@ def _render_chunked_uploader():
     components.html(html, height=190, scrolling=False)
 
 
+def _render_track_upload_dropzone():
+        """Render the AIW/MAS drop zone for the Pista 3D tab."""
+        api_base = _json.dumps(BROWSER_API_BASE_URL)
+        html = f"""
+        <style>
+            #track-drop-zone {{
+                border: 2px dashed #555;
+                border-radius: 10px;
+                padding: 40px 20px;
+                text-align: center;
+                color: #aaa;
+                font-family: sans-serif;
+                font-size: 15px;
+                transition: border-color 0.2s, background 0.2s;
+                cursor: pointer;
+                position: relative;
+            }}
+            #track-drop-zone.dragover {{
+                border-color: #4CAF50;
+                background: rgba(76, 175, 80, 0.08);
+                color: #4CAF50;
+            }}
+            #track-drop-zone.processing {{
+                border-color: #FF9800;
+                color: #FF9800;
+            }}
+            #track-drop-zone.success {{
+                border-color: #4CAF50;
+                background: rgba(76, 175, 80, 0.05);
+                color: #4CAF50;
+            }}
+            #track-drop-zone.error {{
+                border-color: #f44336;
+                color: #f44336;
+            }}
+            #track-file-input {{
+                display: none;
+            }}
+            #track-result {{
+                margin-top: 12px;
+                font-family: sans-serif;
+                font-size: 13px;
+                color: #ccc;
+                min-height: 20px;
+            }}
+            #track-result .track-name {{
+                font-weight: bold;
+                font-size: 16px;
+                color: #4CAF50;
+            }}
+            #track-result .track-points {{
+                color: #aaa;
+                margin-top: 4px;
+            }}
+        </style>
+
+        <div id="track-drop-zone" onclick="document.getElementById('track-file-input').click()">
+            Arrastra un archivo .aiw o .mas aqui, o haz clic para seleccionar
+            <br><small style="color:#666">Drop .aiw or .mas file here</small>
+        </div>
+        <input id="track-file-input" type="file" accept=".aiw,.mas" />
+        <div id="track-result"></div>
+
+        <script>
+        (function() {{
+            // ── Inlined AIW Parser ──
+            function parseAIW(aiwText) {{
+                const waypointRe = /pos\\s*=\\s*\\(\\s*(-?[\\d.]+)\\s*,\\s*(-?[\\d.]+)\\s*,\\s*(-?[\\d.]+)\\s*\\)/gi;
+                const trackNameRe = /^\\s*trackName\\s*=\\s*(.+)/im;
+                const nameMatch = trackNameRe.exec(aiwText);
+                const trackName = nameMatch ? nameMatch[1].trim() : "Unknown";
+                const points = [];
+                let m;
+                while ((m = waypointRe.exec(aiwText)) !== null) {{
+                    points.push({{
+                        x: parseFloat(m[1]),
+                        y: parseFloat(m[2]),
+                        z: parseFloat(m[3]),
+                    }});
+                }}
+                return {{
+                    track_name: trackName,
+                    points: points,
+                    point_count: points.length,
+                }};
+            }}
+
+            // ── Inlined MAS Extractor ──
+            function extractAIWFromMAS(arrayBuffer) {{
+                const bytes = new Uint8Array(arrayBuffer);
+                const textDecoder = new TextDecoder("utf-8", {{ fatal: false }});
+                const fullText = textDecoder.decode(bytes);
+                const aiwMarkers = ["[Waypoint]", "pos=(", "trackName="];
+                let aiwStart = -1;
+                for (const marker of aiwMarkers) {{
+                    const idx = fullText.indexOf(marker);
+                    if (idx !== -1 && (aiwStart === -1 || idx < aiwStart)) {{
+                        aiwStart = idx;
+                    }}
+                }}
+                if (aiwStart === -1) {{
+                    throw new Error("No se encontraron datos AIW dentro del archivo MAS");
+                }}
+                let searchStart = Math.max(0, aiwStart - 512);
+                const headerPatterns = ["[Header]", "[Main]", "trackName"];
+                for (const hp of headerPatterns) {{
+                    const idx = fullText.indexOf(hp, searchStart);
+                    if (idx !== -1 && idx < aiwStart) {{
+                        aiwStart = idx;
+                        break;
+                    }}
+                }}
+                let aiwEnd = fullText.length;
+                for (let i = aiwStart + 100; i < fullText.length - 4; i++) {{
+                    const ch = fullText.charCodeAt(i);
+                    if (ch === 0 && fullText.charCodeAt(i + 1) === 0 &&
+                        fullText.charCodeAt(i + 2) === 0 && fullText.charCodeAt(i + 3) === 0) {{
+                        aiwEnd = i;
+                        break;
+                    }}
+                }}
+                const aiwText = fullText.substring(aiwStart, aiwEnd);
+                if (!aiwText.includes("pos=") && !aiwText.includes("pos =")) {{
+                    throw new Error("Los datos extraidos no contienen waypoints AIW validos");
+                }}
+                return aiwText;
+            }}
+
+            // ── Drop Zone Logic ──
+            const dropZone = document.getElementById('track-drop-zone');
+            const fileInput = document.getElementById('track-file-input');
+            const resultDiv = document.getElementById('track-result');
+            const apiBase = {api_base};
+
+            function setStatus(cls, msg) {{
+                dropZone.className = cls ? cls : '';
+                if (msg) dropZone.innerHTML = msg;
+            }}
+
+            function showResult(trackData) {{
+                resultDiv.innerHTML =
+                    '<div class="track-name">' + trackData.track_name + '</div>' +
+                    '<div class="track-points">' + trackData.point_count + ' waypoints cargados</div>';
+            }}
+
+            function showError(msg) {{
+                resultDiv.innerHTML = '<span style="color:#f44336">' + msg + '</span>';
+            }}
+
+            async function processFile(file) {{
+                setStatus('processing',
+                    'Procesando ' + file.name + '...<br><small>Processing...</small>');
+                resultDiv.innerHTML = '';
+
+                try {{
+                    let aiwText;
+                    const ext = file.name.split('.').pop().toLowerCase();
+
+                    if (ext === 'aiw') {{
+                        aiwText = await file.text();
+                    }} else if (ext === 'mas') {{
+                        const buf = await file.arrayBuffer();
+                        aiwText = extractAIWFromMAS(buf);
+                    }} else {{
+                        throw new Error('Formato no soportado: .' + ext);
+                    }}
+
+                    // Parse client-side
+                    const trackData = parseAIW(aiwText);
+
+                    if (trackData.point_count === 0) {{
+                        throw new Error('No se encontraron waypoints en el archivo');
+                    }}
+
+                    // Post to backend for server-side validation
+                    try {{
+                        const resp = await fetch(apiBase + '/tracks/parse-aiw-text', {{
+                            method: 'POST',
+                            headers: {{ 'Content-Type': 'application/json' }},
+                            body: JSON.stringify({{ aiw_text: aiwText }}),
+                            credentials: 'include',
+                        }});
+                        if (resp.ok) {{
+                            const serverData = await resp.json();
+                            trackData.track_name = serverData.track_name;
+                            trackData.point_count = serverData.point_count;
+                            trackData.points = serverData.points;
+                        }}
+                    }} catch (e) {{
+                        // Server unavailable; use client-side result
+                    }}
+
+                    // Send to Streamlit parent
+                    window.parent.postMessage({{
+                        type: 'track_data',
+                        track_name: trackData.track_name,
+                        point_count: trackData.point_count,
+                        points: trackData.points,
+                    }}, '*');
+
+                    setStatus('success',
+                        'Arrastra un archivo .aiw o .mas aqui, o haz clic para seleccionar' +
+                        '<br><small>Drop .aiw or .mas file here</small>');
+                    showResult(trackData);
+
+                }} catch (err) {{
+                    setStatus('error',
+                        'Arrastra un archivo .aiw o .mas aqui, o haz clic para seleccionar' +
+                        '<br><small>Drop .aiw or .mas file here</small>');
+                    showError('Error: ' + err.message);
+                }}
+            }}
+
+            // Drag events
+            dropZone.addEventListener('dragover', function(e) {{
+                e.preventDefault();
+                e.stopPropagation();
+                dropZone.classList.add('dragover');
+            }});
+            dropZone.addEventListener('dragleave', function(e) {{
+                e.preventDefault();
+                e.stopPropagation();
+                dropZone.classList.remove('dragover');
+            }});
+            dropZone.addEventListener('drop', function(e) {{
+                e.preventDefault();
+                e.stopPropagation();
+                dropZone.classList.remove('dragover');
+                const files = e.dataTransfer.files;
+                if (files.length > 0) processFile(files[0]);
+            }});
+
+            // File input change
+            fileInput.addEventListener('change', function() {{
+                if (fileInput.files.length > 0) {{
+                    processFile(fileInput.files[0]);
+                }}
+            }});
+        }})();
+        </script>
+        """
+        components.html(html, height=250, scrolling=False)
+
+
 def _fetch_backend_sessions():
         try:
                 response = requests.get(f"{API_BASE_URL}/sessions", headers=_api_headers(), timeout=20)
@@ -929,7 +1173,7 @@ def _render_track_selection_ui(df=None):
         with st.spinner("Parseando AIW..."):
             try:
                 resp = requests.post(
-                    f"{API_BASE_URL}/tracks/parse-aiw",
+                    f"{API_BASE_URL}/tracks/parse-aiw-text",
                     files={"file": (aiw_file.name, aiw_bytes)},
                     headers=_api_headers(),
                     timeout=30,
@@ -2837,6 +3081,7 @@ if tele_path and svm_path:
 
                 with main_tab_track:
                     _render_track_selection_ui(df_local)
+                    _render_track_upload_dropzone()
             else:
                 st.warning("No se encontraron vueltas completas.")
         else:

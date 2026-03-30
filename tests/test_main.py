@@ -458,3 +458,25 @@ class TestAnalyze:
         assert len(captured.get("telemetry_summary", "")) <= main_module.MAX_AI_TELEMETRY_CHARS + 2000
 
 
+# ---------------------------------------------------------------------------
+# POST /tracks/parse-aiw
+# ---------------------------------------------------------------------------
+
+class TestParseAIWEndpoint:
+    def test_valid_aiw_text(self):
+        aiw = "[Waypoint]\nwp_pos=(1.0, 2.0, 3.0)\nwp_width=(5.0, 5.0, 8.0, 8.0)\n\n[Waypoint]\nwp_pos=(4.0, 5.0, 6.0)\nwp_width=(5.0, 5.0, 8.0, 8.0)\n"
+        r = client.post("/tracks/parse-aiw-text", json={"aiw_text": aiw})
+        assert r.status_code == 200
+        data = r.json()
+        assert data["name"] == "Unknown"
+        assert data["source"] == "aiw"
+        assert len(data["points"]) == 2
+
+    def test_empty_aiw_returns_422(self):
+        r = client.post("/tracks/parse-aiw-text", json={"aiw_text": "no waypoints here"})
+        assert r.status_code == 422
+
+    def test_missing_body(self):
+        r = client.post("/tracks/parse-aiw-text", json={})
+        assert r.status_code == 422
+

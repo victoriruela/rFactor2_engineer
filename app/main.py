@@ -12,6 +12,7 @@ import numpy as np
 import pandas as pd
 from app.core.telemetry_parser import parse_csv_file, parse_mat_file, parse_svm_file
 from app.core.track_storage import router as track_storage_router
+from app.core.track_parser import parse_aiw as parse_aiw_text
 
 app = FastAPI(title="rFactor2 Engineer API")
 app.include_router(track_storage_router)
@@ -817,6 +818,19 @@ async def cleanup_data(client_session_id: str = Depends(_resolve_client_session_
         os.rmdir(client_root)
 
     return {"status": "ok", "deleted_files": deleted_count}
+
+class AIWTextRequest(BaseModel):
+    aiw_text: str
+
+
+@app.post("/tracks/parse-aiw-text")
+async def parse_aiw_text_endpoint(payload: AIWTextRequest):
+    """Parse raw AIW text (as JSON body) and return track centreline data."""
+    result = parse_aiw_text(payload.aiw_text)
+    if not result.get("points"):
+        raise HTTPException(status_code=422, detail="No waypoints found in AIW data")
+    return result
+
 
 if __name__ == "__main__":
     import uvicorn
