@@ -23,7 +23,7 @@ services:
       - "127.0.0.1:18501:8501"
     environment:
       - RF2_API_URL=http://backend:8000
-      - RF2_FRONTEND_MAX_PREVIEW_MAT_MB=300
+      - RF2_FRONTEND_MAX_PREVIEW_MAT_MB=800
     volumes:
       - ../app/core/fixed_params.json:/app/app/core/fixed_params.json
       - ../frontend/streamlit_app.py:/app/frontend/streamlit_app.py

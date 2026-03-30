@@ -752,6 +752,7 @@ What `deploy_gcp.ps1` does:
 - Do not replace `deploy/nginx-rfactor2_engineer.conf` with a non-TLS variant; future deploys copy that file directly onto the host.
 - The `data/` directory on the remote host is owned by the Docker container user (root). Never run `sudo rm -rf $RemoteDir` or a broad sweep; use `find ... -not -name data` patterns when clearing old code.
 - Host memory safeguard: configure persistent swap on the GCP host (`/swapfile`, 2 GiB, `vm.swappiness=10`) to reduce OOM kills of the Streamlit process during peak telemetry workloads.
+- **Cloudflare upload limit**: Cloudflare free plan limits request bodies to 100 MB. For large `.mat` files (> 100 MB) going through Cloudflare, Streamlit's `/_stcore/upload_file/` upload will fail silently (the filename appears in the widget but `st.file_uploader` returns `None`). **Fix**: set the DNS records for `telemetria.bot.nu` and `car-setup.com` in Cloudflare to **DNS only** (grey cloud, not proxied). TLS continues to work because Let's Encrypt certificates are terminated at host Nginx. Only the 100 MB Cloudflare proxy limit is removed.
 - After benchmark/temporary tasks, purge temporary Docker test artifacts (see cleanup scripts in this document).
 
 ## Git Workflow
