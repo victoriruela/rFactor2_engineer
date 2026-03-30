@@ -16,6 +16,311 @@ import math
 import plotly.graph_objects as go
 
 FIXED_PARAMS_FILE = "app/core/fixed_params.json"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PIP (Picture-in-Picture) State Management for 3D Cockpit Replay
+# ─────────────────────────────────────────────────────────────────────────────
+PIP_STATE_MINI = "mini"
+PIP_STATE_HIDDEN = "hidden"
+PIP_STATE_MAP_REPLACE = "map_replace"
+PIP_STATE_FULLSCREEN = "fullscreen"
+PIP_VALID_STATES = {PIP_STATE_MINI, PIP_STATE_HIDDEN, PIP_STATE_MAP_REPLACE, PIP_STATE_FULLSCREEN}
+PIP_DEFAULT_STATE = PIP_STATE_MINI
+
+
+def pip_get_state(session_state):
+    """Return the current PIP state from session_state, defaulting to mini."""
+    state = session_state.get("pip_state", PIP_DEFAULT_STATE)
+    if state not in PIP_VALID_STATES:
+        return PIP_DEFAULT_STATE
+    return state
+
+
+def pip_get_previous_state(session_state):
+    """Return the previous visible PIP state (used when exiting fullscreen)."""
+    prev = session_state.get("pip_previous_state", PIP_STATE_MINI)
+    if prev not in PIP_VALID_STATES or prev == PIP_STATE_HIDDEN:
+        return PIP_STATE_MINI
+    return prev
+
+
+def pip_transition(session_state, target_state):
+    """Transition to a new PIP state, tracking the previous visible state.
+
+    Returns the new current state.
+    """
+    if target_state not in PIP_VALID_STATES:
+        return pip_get_state(session_state)
+
+    current = pip_get_state(session_state)
+
+    # Track previous visible state for restoring from hidden/fullscreen
+    if current not in (PIP_STATE_HIDDEN, PIP_STATE_FULLSCREEN):
+        session_state["pip_previous_state"] = current
+
+    session_state["pip_state"] = target_state
+    return target_state
+
+
+def pip_restore_from_hidden(session_state):
+    """Restore from hidden to the previous visible state."""
+    prev = pip_get_previous_state(session_state)
+    session_state["pip_state"] = prev
+    return prev
+
+
+def pip_restore_from_fullscreen(session_state):
+    """Restore from fullscreen to the previous visible state."""
+    prev = pip_get_previous_state(session_state)
+    session_state["pip_state"] = prev
+    return prev
+
+
+def pip_css():
+    """Return CSS for all PIP states, injected via st.markdown(unsafe_allow_html=True)."""
+    return """
+<style>
+/* ── PIP Container Base ─────────────────────────────────────────────── */
+.pip-container {
+    transition: all 0.3s ease-in-out;
+    z-index: 1000;
+    background: #111;
+    border-radius: 6px;
+    overflow: hidden;
+}
+.pip-container iframe {
+    width: 100% !important;
+    height: 100% !important;
+    border: none;
+}
+
+/* ── Mini PIP (default): floating bottom-right of telemetry area ──── */
+.pip-mini {
+    position: fixed;
+    bottom: 20px;
+    right: 20px;
+    width: 320px;
+    height: 200px;
+    border: 1px solid #444;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.6);
+}
+
+/* ── Hidden: collapsed to a small restore button ──────────────────── */
+.pip-hidden {
+    position: fixed;
+    bottom: 20px;
+    right: 20px;
+    width: 44px;
+    height: 44px;
+    border: 1px solid #444;
+    border-radius: 50%;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.pip-hidden iframe {
+    display: none;
+}
+
+/* ── Replace Map: takes over the map container area ───────────────── */
+.pip-map-replace {
+    position: relative;
+    width: 100%;
+    height: 300px;
+    border: 1px solid #333;
+}
+
+/* Hide the 2D map when cockpit replaces it */
+.pip-map-replace-active #map-container {
+    display: none !important;
+}
+
+/* ── Fullscreen: modal overlay ────────────────────────────────────── */
+.pip-fullscreen-backdrop {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100vw;
+    height: 100vh;
+    background: rgba(0,0,0,0.85);
+    z-index: 9998;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.pip-fullscreen {
+    position: relative;
+    width: 95vw;
+    height: 90vh;
+    border: 1px solid #555;
+    border-radius: 8px;
+    z-index: 9999;
+}
+
+/* ── PIP Control Buttons ──────────────────────────────────────────── */
+.pip-controls {
+    position: absolute;
+    top: 4px;
+    right: 4px;
+    display: flex;
+    gap: 4px;
+    z-index: 10001;
+}
+.pip-btn {
+    background: rgba(0,0,0,0.7);
+    color: #ccc;
+    border: 1px solid #555;
+    border-radius: 4px;
+    width: 28px;
+    height: 28px;
+    font-size: 14px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 0.2s;
+}
+.pip-btn:hover {
+    background: rgba(60,60,60,0.9);
+    color: #fff;
+}
+
+/* ── Restore button (shown in hidden state) ───────────────────────── */
+.pip-restore-btn {
+    background: rgba(30,30,30,0.9);
+    color: #ccc;
+    border: 1px solid #555;
+    border-radius: 50%;
+    width: 40px;
+    height: 40px;
+    font-size: 20px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    position: fixed;
+    bottom: 22px;
+    right: 22px;
+    z-index: 1001;
+    transition: background 0.2s;
+}
+.pip-restore-btn:hover {
+    background: rgba(60,60,60,0.9);
+    color: #fff;
+}
+</style>
+"""
+
+
+def pip_render_cockpit_container(state, cockpit_html_func=None):
+    """Render the PIP container with appropriate CSS class and control buttons.
+
+    Args:
+        state: One of the PIP_STATE_* constants.
+        cockpit_html_func: Optional callable that returns the cockpit HTML string.
+            If None, a placeholder is rendered.
+
+    Returns:
+        The full HTML string for the PIP container.
+    """
+    cockpit_content = ""
+    if cockpit_html_func is not None:
+        cockpit_content = cockpit_html_func()
+    else:
+        cockpit_content = (
+            '<div style="width:100%;height:100%;display:flex;'
+            'align-items:center;justify-content:center;color:#666;'
+            'font-family:sans-serif;font-size:14px;">'
+            '3D Cockpit (loading...)</div>'
+        )
+
+    if state == PIP_STATE_HIDDEN:
+        # Only show restore button, cockpit iframe is paused but not destroyed
+        return (
+            '<button class="pip-restore-btn" '
+            'onclick="window.parent.postMessage({type:\'pip_transition\','
+            'state:\'restore_hidden\'},\'*\')" '
+            'title="Restore cockpit">&#x1F3A5;</button>'
+            f'<div style="display:none;">{cockpit_content}</div>'
+        )
+
+    if state == PIP_STATE_FULLSCREEN:
+        return (
+            '<div class="pip-fullscreen-backdrop">'
+            '<div class="pip-container pip-fullscreen">'
+            '<div class="pip-controls">'
+            '<button class="pip-btn" '
+            'onclick="window.parent.postMessage({type:\'pip_transition\','
+            'state:\'restore_fullscreen\'},\'*\')" '
+            'title="Exit fullscreen">&#x2715;</button>'
+            '</div>'
+            f'{cockpit_content}'
+            '</div></div>'
+        )
+
+    if state == PIP_STATE_MAP_REPLACE:
+        return (
+            '<div class="pip-container pip-map-replace">'
+            '<div class="pip-controls">'
+            '<button class="pip-btn" '
+            'onclick="window.parent.postMessage({type:\'pip_transition\','
+            'state:\'mini\'},\'*\')" '
+            'title="Shrink to mini">&darr;</button>'
+            '<button class="pip-btn" '
+            'onclick="window.parent.postMessage({type:\'pip_transition\','
+            'state:\'fullscreen\'},\'*\')" '
+            'title="Fullscreen">&#x26F6;</button>'
+            '<button class="pip-btn" '
+            'onclick="window.parent.postMessage({type:\'pip_transition\','
+            'state:\'hidden\'},\'*\')" '
+            'title="Hide">&minus;</button>'
+            '</div>'
+            f'{cockpit_content}'
+            '</div>'
+        )
+
+    # Default: PIP_STATE_MINI
+    return (
+        '<div class="pip-container pip-mini">'
+        '<div class="pip-controls">'
+        '<button class="pip-btn" '
+        'onclick="window.parent.postMessage({type:\'pip_transition\','
+        'state:\'map_replace\'},\'*\')" '
+        'title="Replace map">&uarr;</button>'
+        '<button class="pip-btn" '
+        'onclick="window.parent.postMessage({type:\'pip_transition\','
+        'state:\'fullscreen\'},\'*\')" '
+        'title="Fullscreen">&#x26F6;</button>'
+        '<button class="pip-btn" '
+        'onclick="window.parent.postMessage({type:\'pip_transition\','
+        'state:\'hidden\'},\'*\')" '
+        'title="Hide">&minus;</button>'
+        '</div>'
+        f'{cockpit_content}'
+        '</div>'
+    )
+
+
+def pip_js_listener():
+    """Return JS snippet that listens for pip_transition postMessages
+    and triggers Streamlit reruns with the new state.
+
+    This must be injected into the parent page (via st.components.html).
+    """
+    return """
+<script>
+window.addEventListener('message', function(event) {
+    if (event.data && event.data.type === 'pip_transition') {
+        var state = event.data.state;
+        // Use Streamlit's setComponentValue or URL hack to trigger rerun
+        var url = new URL(window.location);
+        url.searchParams.set('pip_action', state);
+        window.location.replace(url.toString());
+    }
+});
+</script>
+"""
 API_BASE_URL = os.environ.get("RF2_API_URL", "http://localhost:8000")
 BROWSER_API_BASE_URL = os.environ.get("RF2_BROWSER_API_BASE_URL", "/api")
 UPLOAD_CHUNK_SIZE = 16 * 1024 * 1024
@@ -2167,6 +2472,54 @@ if tele_path and svm_path:
                         lap_options.append(f"V{l}{t_str}")
 
                     plot_all_laps_interactive(all_lap_figs, laps, lap_options, fastest_lap)
+
+                    # ── 3D Cockpit PIP Container ────────────────────────────
+                    # Initialize PIP state
+                    if "pip_state" not in st.session_state:
+                        st.session_state["pip_state"] = PIP_DEFAULT_STATE
+
+                    # Handle PIP state transitions from query params
+                    pip_action = st.query_params.get("pip_action")
+                    if pip_action:
+                        if pip_action == "restore_hidden":
+                            pip_restore_from_hidden(st.session_state)
+                        elif pip_action == "restore_fullscreen":
+                            pip_restore_from_fullscreen(st.session_state)
+                        elif pip_action in PIP_VALID_STATES:
+                            pip_transition(st.session_state, pip_action)
+                        st.query_params.pop("pip_action", None)
+
+                    current_pip = pip_get_state(st.session_state)
+
+                    # Inject PIP CSS
+                    st.markdown(pip_css(), unsafe_allow_html=True)
+
+                    # Render cockpit in the appropriate container
+                    pip_html = pip_render_cockpit_container(current_pip)
+
+                    if current_pip == PIP_STATE_MAP_REPLACE:
+                        # Rendered above the charts, replacing the map
+                        components.html(pip_html, height=320, scrolling=False)
+                    elif current_pip == PIP_STATE_FULLSCREEN:
+                        # Fullscreen modal overlay
+                        components.html(pip_html, height=0, scrolling=False)
+                        st.markdown(
+                            pip_render_cockpit_container(current_pip),
+                            unsafe_allow_html=True,
+                        )
+                    elif current_pip == PIP_STATE_HIDDEN:
+                        # Just the restore button
+                        components.html(pip_html, height=0, scrolling=False)
+                    else:
+                        # Mini PIP - floating window via CSS
+                        components.html(pip_html, height=0, scrolling=False)
+                        st.markdown(
+                            pip_render_cockpit_container(current_pip),
+                            unsafe_allow_html=True,
+                        )
+
+                    # Inject PIP JS message listener
+                    components.html(pip_js_listener(), height=0, scrolling=False)
 
                 with main_tab_setup:
                     st.header("Configuración del Coche (.svm)")
