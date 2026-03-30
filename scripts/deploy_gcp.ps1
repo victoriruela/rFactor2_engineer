@@ -152,7 +152,7 @@ scp deploy/.htpasswd "$remote`:$RemoteDir/deploy/.htpasswd"
 Assert-LastExit -Step "scp htpasswd"
 
 Write-Output "==> Cleaning legacy compose stacks (if any)"
-ssh $remote "bash -lc 'cd $RemoteDir; sudo -n docker compose -f docker-compose.yml -f deploy/docker-compose.gcp.yml down || true; sudo -n docker compose -p deploy -f deploy/docker-compose.gcp.yml down || true'"
+ssh $remote "bash -lc 'cd $RemoteDir; sudo -n docker compose -f docker-compose.yml -f deploy/docker-compose.gcp.yml down || true; cd deploy; sudo -n docker compose -p deploy -f docker-compose.gcp.yml down || true'"
 Assert-LastExit -Step "legacy compose cleanup"
 
 $composeArgs = "up -d"
@@ -161,7 +161,7 @@ if (-not $SkipDockerBuild) {
 }
 
 Write-Output "==> Starting Docker services on remote host"
-ssh $remote "cd '$RemoteDir' && sudo -n docker compose -p rfactor2_engineer -f deploy/docker-compose.gcp.yml $composeArgs"
+ssh $remote "cd '$RemoteDir/deploy' && sudo -n docker compose -p rfactor2_engineer -f docker-compose.gcp.yml $composeArgs"
 Assert-LastExit -Step "compose up"
 
 Write-Output "==> Installing/refreshing Nginx reverse proxy config"

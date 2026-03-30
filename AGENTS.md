@@ -742,6 +742,7 @@ What `deploy_gcp.ps1` does:
    - Plain `rm -rf` handles bitor-owned files; `sudo` is used only as a fallback for any
      Docker-owned files that exist outside `data/` (edge case).
 5. Copies `deploy/` config files and starts services with `docker compose ... up -d --build`.
+  - Compose must be executed from the remote `deploy/` directory (`cd "$RemoteDir/deploy"`) when using `deploy/docker-compose.gcp.yml`, because its `context: ..` and bind mounts are relative to that folder. Running it from `$RemoteDir` can resolve paths one level too high and fail with `failed to read dockerfile: open Dockerfile: no such file or directory`.
 6. Installs and reloads Nginx config.
 7. Runs health checks for frontend/backend/nginx endpoints.
 
