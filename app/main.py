@@ -10,8 +10,10 @@ import re
 import numpy as np
 import pandas as pd
 from app.core.telemetry_parser import parse_csv_file, parse_mat_file, parse_svm_file
+from app.core.track_storage import router as track_storage_router
 
 app = FastAPI(title="rFactor2 Engineer API")
+app.include_router(track_storage_router)
 
 # Modelo de datos para la respuesta
 class AnalysisResponse(BaseModel):
