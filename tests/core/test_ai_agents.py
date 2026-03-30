@@ -227,8 +227,8 @@ class TestInitLlmCustomOllama:
 class TestListAvailableModels:
     def test_custom_url_skips_ensure_ollama_running(self, mocker):
         from app.core.ai_agents import list_available_models
-        ensure_mock = mocker.patch("app.core.ai_agents._ensure_ollama_running")
-        mock_get = mocker.patch("app.core.ai_agents.requests.get")
+        ensure_mock = mocker.patch("app.core.llm_utils._ensure_ollama_running")
+        mock_get = mocker.patch("app.core.llm_utils.requests.get")
         mock_get.return_value.status_code = 200
         mock_get.return_value.json.return_value = {"models": [{"name": "gpt-oss:120b"}]}
         result = list_available_models(base_url="https://ollama.com", api_key="mykey")
@@ -240,8 +240,8 @@ class TestListAvailableModels:
 
     def test_no_custom_url_calls_ensure_ollama_running(self, mocker):
         from app.core.ai_agents import list_available_models
-        ensure_mock = mocker.patch("app.core.ai_agents._ensure_ollama_running")
-        mock_get = mocker.patch("app.core.ai_agents.requests.get")
+        ensure_mock = mocker.patch("app.core.llm_utils._ensure_ollama_running")
+        mock_get = mocker.patch("app.core.llm_utils.requests.get")
         mock_get.return_value.status_code = 200
         mock_get.return_value.json.return_value = {"models": []}
         list_available_models()
