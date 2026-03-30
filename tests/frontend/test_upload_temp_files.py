@@ -90,6 +90,16 @@ def test_ensure_client_session_id_generates_when_missing():
     assert streamlit_app._is_valid_session_id(generated)
 
 
+def test_ensure_client_session_id_prefers_browser_value():
+    from frontend import session_manager
+
+    state = {}
+    session_id = session_manager.ensure_client_session_id(state, preferred_session_id="browser12345")
+
+    assert session_id == "browser12345"
+    assert state["client_session_id"] == "browser12345"
+
+
 def test_api_headers_uses_only_valid_session_id():
     streamlit_app.st.session_state.clear()
     streamlit_app.st.session_state["client_session_id"] = "***invalid***"

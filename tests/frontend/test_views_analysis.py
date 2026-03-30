@@ -134,3 +134,28 @@ class TestNormalizeModelList:
 
     def test_returns_empty_list_when_no_valid_models(self):
         assert av._normalize_model_list(["", " ", None]) == []
+
+
+class TestPersistAnalysisResponse:
+    def setup_method(self):
+        _st_mock.session_state.clear()
+
+    def test_drops_large_telemetry_summary_before_storing(self, tmp_path, mocker):
+        svm_path = tmp_path / "setup.svm"
+        svm_path.write_text("[GENERAL]\nFuelSetting=10//L\n", encoding="utf-8")
+        mocker.patch("frontend.views.analysis_view.setup_parser.parse_svm_content", return_value={"GENERAL": {}})
+
+        av._persist_analysis_response(
+            {
+                "llm_provider": "ollama",
+                "llm_model": "llama3.2:latest",
+                "telemetry_summary_sent": "X" * 1000,
+                "driving_analysis": "ok",
+            },
+            "session.mat",
+            "ollama",
+            "llama3.2:latest",
+            str(svm_path),
+        )
+
+        assert "telemetry_summary_sent" not in _st_mock.session_state["ai_analysis_data"]

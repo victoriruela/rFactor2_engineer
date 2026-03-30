@@ -102,6 +102,9 @@ rFactor2_engineer/
 │   │   └── analysis_view.py       # AI analysis tab: provider selector, trigger, results display
 │   └── components/
 │       ├── __init__.py
+│       ├── browser_session.py    # Streamlit wrapper to persist browser tab session id via sessionStorage
+│       ├── browser_session/
+│       │   └── index.html        # iframe HTML/JS bridge for browser sessionStorage sync
 │       ├── browser_hooks.py       # Browser-side unload cleanup hook injection
 │       ├── chunked_uploader.py    # Streamlit wrapper for browser-side chunked upload component
 │       └── chunked_uploader/
@@ -430,11 +433,9 @@ All hardcoded values (ports, paths, thresholds, parameter lists, telemetry chann
 
 **Frontend reasoning alignment**: the frontend reasoning panel should consume `setup_agent_reports` (fallback to `agent_reports` only for backward compatibility). This avoids mismatches where specialist raw reports differ from the final setup after chief corrections.
 
-**Frontend ephemeral session policy**: the UI now treats uploads as session-local only. No cookie/query-param persistence is used for client session IDs.
+**Frontend ephemeral session policy**: the UI now treats uploads as session-local only. No cookie/query-param persistence is used for client session IDs. The client session id is persisted only in browser `sessionStorage`, so it survives reloads within the same tab but is discarded when the tab/browser session ends.
 
-**Frontend page-load cleanup**: at startup, frontend calls `POST /cleanup_all` once to purge stale data from previous sessions.
-
-**Frontend unload cleanup hook**: browser-side `beforeunload` sends a keepalive cleanup request (`POST /cleanup` with `X-Client-Session-Id`) so data is removed when reloading or leaving the page.
+**Frontend reload resilience**: on page reload/reconnect, the frontend reuses the browser-tab session id from `sessionStorage` and auto-restores the latest uploaded telemetry/setup pair for that client from backend storage instead of forcing a re-upload.
 
 **Frontend local-only analysis flow**: analysis requests are executed from local temporary files via `POST /analyze`; fallback to `POST /analyze_session` was removed to enforce strict ephemeral behavior.
 

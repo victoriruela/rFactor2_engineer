@@ -119,7 +119,11 @@ def _run_analysis(
 ) -> None:
     st.session_state.pop("ai_analysis_data", None)
     st.session_state.pop("ai_model", None)
+    st.session_state.pop("ai_circuit_name", None)
+    st.session_state.pop("ai_setup_data", None)
 
+    status_box = st.empty()
+    status_box.info("Analizando con IA. La respuesta puede tardar varios minutos en producción.")
     with st.spinner("Analizando con IA…"):
         data_form: dict = {"provider": sel_provider}
         if sel_model:
@@ -134,24 +138,38 @@ def _run_analysis(
         response = _post_analysis(tele_path, svm_path, tele_name, data_form)
 
     if response is None:
+        status_box.empty()
         return
 
     if response.status_code == 200:
         data = response.json()
-        st.session_state["ai_analysis_data"] = data
-        st.session_state["ai_telemetry_summary"] = data.get("telemetry_summary_sent", "")
-        circuit = tele_name.split("-")[-2].strip() if "-" in tele_name else "Desconocido"
-        st.session_state["ai_circuit_name"] = circuit
-        backend_model = data.get("llm_model") or sel_model or "default"
-        st.session_state["ai_model"] = f"{data.get('llm_provider', sel_provider)} / {backend_model}"
-        st.session_state["ai_setup_data"] = setup_parser.parse_svm_content(svm_path)
+        _persist_analysis_response(data, tele_name, sel_provider, sel_model, svm_path)
+        status_box.success("Análisis completado. Mostrando resultados.")
     else:
         try:
             error_detail = response.json().get("detail")
         except Exception:
             error_detail = None
         msg = f"Error en el análisis ({response.status_code})"
+        status_box.error(f"{msg}: {error_detail}" if error_detail else f"{msg}.")
         st.error(f"{msg}: {error_detail}" if error_detail else f"{msg}.")
+
+
+def _persist_analysis_response(data: dict, tele_name: str, sel_provider: str, sel_model, svm_path: str) -> None:
+    """Store only the frontend fields required to render the AI results.
+
+    The backend returns ``telemetry_summary_sent`` as a large debug payload; storing it in
+    Streamlit session state is wasteful and can destabilize long production sessions.
+    """
+    data = dict(data)
+    data.pop("telemetry_summary_sent", None)
+
+    st.session_state["ai_analysis_data"] = data
+    circuit = tele_name.split("-")[-2].strip() if "-" in tele_name else "Desconocido"
+    st.session_state["ai_circuit_name"] = circuit
+    backend_model = data.get("llm_model") or sel_model or "default"
+    st.session_state["ai_model"] = f"{data.get('llm_provider', sel_provider)} / {backend_model}"
+    st.session_state["ai_setup_data"] = setup_parser.parse_svm_content(svm_path)
 
 
 def _post_analysis(tele_path: str, svm_path: str, tele_name: str, data_form: dict):

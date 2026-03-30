@@ -110,7 +110,13 @@
      * Streamlit bi-directional component protocol
      * ------------------------------------------------------------------ */
     let _props = {};
-    let _uploadResult = null;   // {filename, upload_id, bytes_received}
+    let _uploadResult = null;
+    let _uploadStartedAt = null;
+    let _statusTimer = null;
+    let _baseStatus = "";
+    let _statusErr = false;
+    let _uploadedBytes = null;
+    let _totalBytes = null;
 
     function _sendReady() {
       window.parent.postMessage(
@@ -151,10 +157,7 @@
     var dropZone  = document.getElementById("drop-zone");
     var fileInput = document.getElementById("file-input");
 
-    dropZone.addEventListener("click", function (e) {
-      if (e.target !== document.getElementById("browse-btn") && e.target.closest("#browse-btn") === null) return;
-      fileInput.click();
-    });
+    dropZone.addEventListener("click", function () { fileInput.click(); });
     document.getElementById("browse-btn").addEventListener("click", function (e) {
       e.stopPropagation();
       fileInput.click();
@@ -183,13 +186,15 @@
       var baseUrl    = _props.browser_api_base_url || "";
       var sessionId  = _props.client_session_id   || "";
 
-      _setStatus("", false);
+      _uploadStartedAt = Date.now();
+      _startStatusTimer();
+      _setStatus("Preparando subida…", false, 0, file.size);
       _showProgress(true);
       document.getElementById("pgbar").value = 0;
       dropZone.className = "";
 
       // --- 1. Init ---------------------------------------------------------
-      _setStatus("Iniciando subida…");
+      _setStatus("Iniciando subida…", false, 0, file.size);
       var initResp;
       try {
         initResp = await fetch(baseUrl + "/uploads/init", {
@@ -211,8 +216,14 @@
       for (var i = 0; i < totalChunks; i++) {
         var start = i * serverChunkSize;
         var chunk = file.slice(start, start + serverChunkSize);
-        document.getElementById("pgbar").value = Math.round((i / totalChunks) * 95);
-        _setStatus("Subiendo… " + (i + 1) + " / " + totalChunks + " fragmentos");
+        var uploadedBytes = Math.min((i * serverChunkSize), file.size);
+        document.getElementById("pgbar").value = Math.round((uploadedBytes / file.size) * 95);
+        _setStatus(
+          "Subiendo… fragmento " + (i + 1) + " / " + totalChunks,
+          false,
+          uploadedBytes,
+          file.size
+        );
         var chunkResp;
         try {
           chunkResp = await fetch(
@@ -231,7 +242,7 @@
       }
 
       // --- 3. Complete -----------------------------------------------------
-      _setStatus("Finalizando…");
+      _setStatus("Finalizando subida…", false, file.size, file.size);
       var complResp;
       try {
         complResp = await fetch(baseUrl + "/uploads/" + uploadId + "/complete", {
@@ -249,8 +260,10 @@
       _uploadResult = {
         filename: file.name,
         upload_id: uploadId,
+        session_id: sessionId,
         bytes_received: complData.bytes_received || file.size,
       };
+      _stopStatusTimer();
       _showDone(file.name);
       _sendValue(_uploadResult);
     }
@@ -262,10 +275,12 @@
       document.getElementById("progress-wrap").style.display = visible ? "block" : "none";
     }
 
-    function _setStatus(msg, isErr) {
-      var el = document.getElementById("status-msg");
-      el.textContent = msg;
-      el.className = isErr ? "err" : "";
+    function _setStatus(msg, isErr, uploadedBytes, totalBytes) {
+      _baseStatus = msg || "";
+      _statusErr = !!isErr;
+      _uploadedBytes = (typeof uploadedBytes === "number") ? uploadedBytes : null;
+      _totalBytes = (typeof totalBytes === "number") ? totalBytes : null;
+      _renderStatus();
     }
 
     function _showDone(filename) {
@@ -273,13 +288,63 @@
       dropZone.classList.add("done");
       document.getElementById("filename-row").style.display = "flex";
       document.getElementById("filename-text").textContent = filename;
-      _showProgress(false);
+      _showProgress(true);
+      document.getElementById("pgbar").value = 100;
+      _setStatus("Subida completada", false, _uploadResult ? _uploadResult.bytes_received : null, _uploadResult ? _uploadResult.bytes_received : null);
     }
 
     function _showError(msg) {
+      _stopStatusTimer();
       dropZone.classList.add("error-state");
-      _setStatus(msg, true);
-      _showProgress(false);
+      _setStatus(msg, true, null, null);
+      _showProgress(true);
+    }
+
+    function _startStatusTimer() {
+      _stopStatusTimer();
+      _statusTimer = window.setInterval(function () {
+        _renderStatus();
+      }, 1000);
+    }
+
+    function _stopStatusTimer() {
+      if (_statusTimer) {
+        window.clearInterval(_statusTimer);
+        _statusTimer = null;
+      }
+    }
+
+    function _formatBytes(bytes) {
+      if (!Number.isFinite(bytes) || bytes < 0) return "0 B";
+      var units = ["B", "KB", "MB", "GB"];
+      var value = bytes;
+      var index = 0;
+      while (value >= 1024 && index < units.length - 1) {
+        value /= 1024;
+        index += 1;
+      }
+      return value.toFixed(index === 0 ? 0 : 1) + " " + units[index];
+    }
+
+    function _formatElapsed(ms) {
+      var totalSeconds = Math.max(0, Math.floor(ms / 1000));
+      var minutes = String(Math.floor(totalSeconds / 60)).padStart(2, "0");
+      var seconds = String(totalSeconds % 60).padStart(2, "0");
+      return minutes + ":" + seconds;
+    }
+
+    function _renderStatus() {
+      var el = document.getElementById("status-msg");
+      var parts = [];
+      if (_baseStatus) parts.push(_baseStatus);
+      if (_uploadedBytes !== null && _totalBytes !== null && _totalBytes > 0) {
+        parts.push(_formatBytes(_uploadedBytes) + " / " + _formatBytes(_totalBytes));
+      }
+      if (_uploadStartedAt) {
+        parts.push(_formatElapsed(Date.now() - _uploadStartedAt));
+      }
+      el.textContent = parts.join(" · ");
+      el.className = _statusErr ? "err" : "";
     }
   </script>
 </body>

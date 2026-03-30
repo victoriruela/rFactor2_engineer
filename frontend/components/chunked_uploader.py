@@ -63,7 +63,7 @@ def chunked_uploader(
     Returns
     -------
     dict or None
-        ``{"filename": str, "upload_id": str, "bytes_received": int}`` when an
+        ``{"filename": str, "upload_id": str, "session_id": str, "bytes_received": int}`` when an
         upload is complete, ``None`` when the picker is idle.
     """
     return _component_func(

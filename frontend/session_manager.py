@@ -76,11 +76,19 @@ def is_valid_session_id(value: object) -> bool:
     return isinstance(value, str) and bool(SESSION_ID_PATTERN.fullmatch(value.strip()))
 
 
-def ensure_client_session_id(state: dict) -> str:
+def new_client_session_id() -> str:
+    return uuid.uuid4().hex
+
+
+def ensure_client_session_id(state: dict, preferred_session_id: str | None = None) -> str:
+    if is_valid_session_id(preferred_session_id):
+        state["client_session_id"] = preferred_session_id.strip()
+        return state["client_session_id"]
+
     existing = state.get("client_session_id")
     if is_valid_session_id(existing):
         return existing
 
-    generated = uuid.uuid4().hex
+    generated = new_client_session_id()
     state["client_session_id"] = generated
     return generated

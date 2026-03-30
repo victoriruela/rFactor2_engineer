@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="es">
+<body>
+  <script>
+    let _lastSentValue = undefined;
+
+    function sendReady() {
+      window.parent.postMessage(
+        { isStreamlitMessage: true, type: "streamlit:componentReady", apiVersion: 1 },
+        "*"
+      );
+    }
+
+    function sendValue(value) {
+      window.parent.postMessage(
+        { isStreamlitMessage: true, type: "streamlit:setComponentValue", value: value },
+        "*"
+      );
+    }
+
+    function syncSession(args) {
+      const storageKey = String(args.storage_key || "rf2_client_session_id");
+      const resetKey = `${storageKey}:reset_counter`;
+      const candidate = String(args.candidate_session_id || "").trim();
+      const resetCounter = String(args.reset_counter || 0);
+      const storedResetCounter = window.sessionStorage.getItem(resetKey);
+
+      if (storedResetCounter !== resetCounter) {
+        window.sessionStorage.removeItem(storageKey);
+        window.sessionStorage.setItem(resetKey, resetCounter);
+      }
+
+      let current = (window.sessionStorage.getItem(storageKey) || "").trim();
+      if (!current && candidate) {
+        current = candidate;
+        window.sessionStorage.setItem(storageKey, current);
+      }
+
+      const outgoing = current || null;
+      if (_lastSentValue !== outgoing) {
+        _lastSentValue = outgoing;
+        sendValue(outgoing);
+      }
+    }
+
+    window.addEventListener("message", function (evt) {
+      if (!evt.data || evt.data.type !== "streamlit:render") return;
+      syncSession(evt.data.args || {});
+    });
+
+    sendReady();
+  </script>
+</body>
+</html>
