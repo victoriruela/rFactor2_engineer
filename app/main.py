@@ -29,6 +29,8 @@ class AnalysisResponse(BaseModel):
     llm_model: str = "" # Modelo real usado por el backend
 
 from app.core.ai_agents import AIAngineer, list_available_models
+from app.core.track_parser import router as track_parser_router
+app.include_router(track_parser_router)
 
 ai_engineer = AIAngineer()
 
