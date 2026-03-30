@@ -33,12 +33,12 @@ from scipy.spatial import procrustes as scipy_procrustes
 TRACKS_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "tracks")
 
 TUMFTM_BASE_URL = (
-    "https://raw.githubusercontent.com/TUMFTM/racetrack-database/master/racetracks"
+    "https://raw.githubusercontent.com/TUMFTM/racetrack-database/master/tracks"
 )
 
 TUMRT_BATHURST_URL = (
     "https://raw.githubusercontent.com/TUMRT/online_3D_racing_line_planning"
-    "/main/maps/Mount_Panorama_Circuit/Mount_Panorama_Circuit_3D_map.csv"
+    "/main/data/raw_track_data/mount_panorama_bounds_3d.csv"
 )
 
 # TUMFTM track filenames (without extension) and their display names
@@ -56,7 +56,7 @@ TUMFTM_TRACKS = [
     {"file": "Monza", "name": "Autodromo Nazionale Monza"},
     {"file": "Montreal", "name": "Circuit Gilles Villeneuve"},
     {"file": "Mugello", "name": "Mugello Circuit"},
-    {"file": "Nurburgring", "name": "Nurburgring"},
+    {"file": "Nuerburgring", "name": "Nurburgring"},
     {"file": "Oschersleben", "name": "Motorsport Arena Oschersleben"},
     {"file": "Sakhir", "name": "Bahrain International Circuit"},
     {"file": "SaoPaulo", "name": "Interlagos"},
@@ -94,7 +94,7 @@ TUMFTM_TO_OPENF1_MAPPING = {
     "Zandvoort": {"circuit_short_name": "Zandvoort", "session_key": 9201, "driver_number": 1},
 }
 
-OPENF1_LOCATION_URL = "https://openf1.org/v1/location"
+OPENF1_LOCATION_URL = "https://api.openf1.org/v1/location"
 
 
 # ---------------------------------------------------------------------------
@@ -421,7 +421,7 @@ def extract_single_lap(location_data):
 
 def download_tumftm_csv(track_file):
     """Download a TUMFTM track CSV from GitHub."""
-    url = f"{TUMFTM_BASE_URL}/{track_file}/{track_file}_centerline.csv"
+    url = f"{TUMFTM_BASE_URL}/{track_file}.csv"
     try:
         resp = requests.get(url, timeout=30)
         resp.raise_for_status()
