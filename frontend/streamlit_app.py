@@ -10,6 +10,10 @@ import shutil
 import tempfile
 import uuid
 
+import hashlib
+import math
+import plotly.graph_objects as go
+
 FIXED_PARAMS_FILE = "app/core/fixed_params.json"
 API_BASE_URL = os.environ.get("RF2_API_URL", "http://localhost:8000")
 BROWSER_API_BASE_URL = os.environ.get("RF2_BROWSER_API_BASE_URL", "/api")
@@ -66,6 +70,69 @@ def _persist_uploaded_session(telemetry_file, svm_file):
 
 def _is_streamlit_mocked() -> bool:
         return st.__class__.__module__.startswith("unittest.mock")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Track selection helpers (pure functions — no Streamlit dependency)
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def compute_track_centroid(track_json):
+    """Return (mean_lat, mean_lon) from a track JSON, or None if empty."""
+    waypoints = track_json.get("waypoints", [])
+    if not waypoints:
+        return None
+    lats = [w["lat"] for w in waypoints if "lat" in w]
+    lons = [w["lon"] for w in waypoints if "lon" in w]
+    if not lats or not lons:
+        return None
+    return sum(lats) / len(lats), sum(lons) / len(lons)
+
+
+def find_best_track_match(telemetry_lat, telemetry_lon, known_tracks, threshold=0.01):
+    """Find the closest known track to a GPS centroid (within *threshold* degrees).
+
+    *known_tracks* is a list of dicts with at least ``centroid_lat`` and ``centroid_lon``.
+    Returns the best match dict, or ``None`` if nothing is close enough.
+    """
+    if not known_tracks:
+        return None
+    best = None
+    best_dist = float("inf")
+    for track in known_tracks:
+        dlat = track["centroid_lat"] - telemetry_lat
+        dlon = track["centroid_lon"] - telemetry_lon
+        dist = math.sqrt(dlat ** 2 + dlon ** 2)
+        if dist < best_dist:
+            best_dist = dist
+            best = track
+    if best_dist <= threshold:
+        return best
+    return None
+
+
+def build_track_preview_data(track_json):
+    """Return (xs, ys) lists for a 2D top-down preview of the track.
+
+    Prefers ``x``/``y`` fields; falls back to ``lon``/``lat`` if absent.
+    """
+    waypoints = track_json.get("waypoints", [])
+    if not waypoints:
+        return [], []
+    if "x" in waypoints[0]:
+        xs = [w["x"] for w in waypoints]
+        ys = [w["y"] for w in waypoints]
+    elif "lon" in waypoints[0]:
+        xs = [w["lon"] for w in waypoints]
+        ys = [w["lat"] for w in waypoints]
+    else:
+        return [], []
+    return xs, ys
+
+
+def compute_file_sha256(data: bytes) -> str:
+    """Return the hex SHA-256 digest of *data*."""
+    return hashlib.sha256(data).hexdigest()
 
 
 def _safe_cookie_value(cookie_name):
@@ -268,6 +335,265 @@ def save_fixed_params(params_set):
     except Exception as e:
         st.error(f"Error al guardar parámetros: {e}")
         return False
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Track selection UI
+# ─────────────────────────────────────────────────────────────────────────────
+
+TRACKS_DIR = os.path.join(os.path.dirname(__file__), "..", "tracks")
+
+
+def _fetch_track_list():
+    """Fetch available tracks from the backend ``GET /tracks/list`` endpoint.
+
+    Each entry has at least ``name`` and ``content_sha256``.
+    Also scans the local ``tracks/`` directory for pre-hosted JSON files.
+    """
+    remote_tracks = []
+    try:
+        resp = requests.get(
+            f"{API_BASE_URL}/tracks/list", headers=_api_headers(), timeout=10
+        )
+        if resp.status_code == 200:
+            remote_tracks = resp.json().get("tracks", [])
+    except Exception:
+        pass
+
+    # Scan local tracks/ directory
+    local_tracks = []
+    if os.path.isdir(TRACKS_DIR):
+        for fname in sorted(os.listdir(TRACKS_DIR)):
+            if fname.endswith(".json"):
+                fpath = os.path.join(TRACKS_DIR, fname)
+                try:
+                    with open(fpath, "r", encoding="utf-8") as f:
+                        track_data = _json.load(f)
+                    local_tracks.append({
+                        "name": track_data.get("name", fname.replace(".json", "")),
+                        "content_sha256": compute_file_sha256(
+                            open(fpath, "rb").read()
+                        ),
+                        "_local_path": fpath,
+                        "_track_json": track_data,
+                    })
+                except Exception:
+                    pass
+
+    # Merge: remote first, local ones that aren't already listed
+    seen_hashes = {t["content_sha256"] for t in remote_tracks}
+    merged = list(remote_tracks)
+    for lt in local_tracks:
+        if lt["content_sha256"] not in seen_hashes:
+            merged.append(lt)
+            seen_hashes.add(lt["content_sha256"])
+    return merged
+
+
+def _download_track_json(track_entry):
+    """Download a track's JSON from the backend, or return local data."""
+    if "_track_json" in track_entry:
+        return track_entry["_track_json"]
+    sha = track_entry.get("content_sha256", "")
+    if not sha:
+        return None
+    try:
+        resp = requests.get(
+            f"{API_BASE_URL}/tracks/{sha}/download",
+            headers=_api_headers(),
+            timeout=15,
+        )
+        if resp.status_code == 200:
+            return resp.json()
+    except Exception:
+        pass
+    return None
+
+
+def _render_track_preview(track_json):
+    """Display a 2D top-down Plotly scatter preview of the track."""
+    xs, ys = build_track_preview_data(track_json)
+    if not xs:
+        st.caption("No hay datos de trazado disponibles para previsualizar.")
+        return
+    fig = go.Figure()
+    # Close the loop for a nicer outline
+    xs_closed = list(xs) + [xs[0]]
+    ys_closed = list(ys) + [ys[0]]
+    fig.add_trace(go.Scatter(
+        x=xs_closed, y=ys_closed,
+        mode="lines",
+        line=dict(color="#1f77b4", width=2),
+        showlegend=False,
+    ))
+    fig.update_layout(
+        template="plotly_dark",
+        height=300,
+        margin=dict(l=10, r=10, t=30, b=10),
+        xaxis=dict(visible=False, scaleanchor="y", scaleratio=1),
+        yaxis=dict(visible=False),
+        title=dict(
+            text=track_json.get("name", "Pista"),
+            font=dict(size=14),
+        ),
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+
+def _upload_track_to_community(file_bytes, track_json):
+    """Upload a parsed track JSON to community storage via ``POST /tracks/upload``."""
+    sha = compute_file_sha256(file_bytes)
+    try:
+        resp = requests.post(
+            f"{API_BASE_URL}/tracks/upload",
+            json={"sha256_source": sha, "track_json": track_json},
+            headers=_api_headers(),
+            timeout=15,
+        )
+        return resp.status_code == 200 or resp.status_code == 201
+    except Exception:
+        return False
+
+
+def _auto_match_track(df, known_tracks):
+    """Try to auto-match telemetry GPS centroid to a known track.
+
+    Returns the matched track entry or None.
+    """
+    if "GPS_Latitude" not in df.columns or "GPS_Longitude" not in df.columns:
+        return None
+    mean_lat = float(df["GPS_Latitude"].dropna().mean())
+    mean_lon = float(df["GPS_Longitude"].dropna().mean())
+    if np.isnan(mean_lat) or np.isnan(mean_lon):
+        return None
+
+    # Build centroid list from known tracks (download JSON only when needed)
+    enriched = []
+    for t in known_tracks:
+        if "centroid_lat" in t and "centroid_lon" in t:
+            enriched.append(t)
+        else:
+            tj = _download_track_json(t)
+            if tj:
+                centroid = compute_track_centroid(tj)
+                if centroid:
+                    entry = dict(t)
+                    entry["centroid_lat"] = centroid[0]
+                    entry["centroid_lon"] = centroid[1]
+                    entry["_track_json"] = tj
+                    enriched.append(entry)
+
+    return find_best_track_match(mean_lat, mean_lon, enriched)
+
+
+def _render_track_selection_ui(df=None):
+    """Render the track selection dropdown, upload flow, and preview.
+
+    *df* is the telemetry DataFrame (may be ``None`` if no telemetry loaded).
+    """
+    st.header("Seleccion de Pista para Replay 3D")
+
+    # ── 1. Track dropdown ─────────────────────────────────────────────────
+    available_tracks = _fetch_track_list()
+    track_names = ["(ninguna)"] + [t.get("name", "???") for t in available_tracks]
+
+    # Auto-match attempt
+    auto_index = 0
+    if df is not None and available_tracks:
+        matched = _auto_match_track(df, available_tracks)
+        if matched:
+            try:
+                auto_index = track_names.index(matched["name"])
+                st.info(
+                    f"Pista auto-detectada por GPS: **{matched['name']}**. "
+                    "Puedes cambiarla en el desplegable."
+                )
+            except ValueError:
+                pass
+
+    selected_name = st.selectbox(
+        "Pista disponible",
+        track_names,
+        index=auto_index,
+        key="track_selector",
+    )
+
+    # Load selected track
+    loaded_track_json = None
+    if selected_name != "(ninguna)":
+        entry = next(
+            (t for t in available_tracks if t.get("name") == selected_name),
+            None,
+        )
+        if entry:
+            loaded_track_json = _download_track_json(entry)
+            if loaded_track_json:
+                st.session_state["loaded_track_json"] = loaded_track_json
+
+    # ── 2. AIW upload ─────────────────────────────────────────────────────
+    st.subheader("Subir archivo AIW")
+    st.caption(
+        "Sube un archivo .aiw para parsear la pista. "
+        "Para archivos .mas, extrae primero el .aiw con MAS2Extract."
+    )
+    aiw_file = st.file_uploader(
+        "Archivo AIW",
+        type=["aiw"],
+        key="aiw_uploader",
+    )
+
+    if aiw_file is not None:
+        aiw_bytes = aiw_file.read()
+        aiw_file.seek(0)
+        with st.spinner("Parseando AIW..."):
+            try:
+                resp = requests.post(
+                    f"{API_BASE_URL}/tracks/parse-aiw",
+                    files={"file": (aiw_file.name, aiw_bytes)},
+                    headers=_api_headers(),
+                    timeout=30,
+                )
+                if resp.status_code == 200:
+                    parsed_track = resp.json()
+                    loaded_track_json = parsed_track
+                    st.session_state["loaded_track_json"] = parsed_track
+                    st.success("AIW parseado correctamente.")
+
+                    # Upload to community storage
+                    if _upload_track_to_community(aiw_bytes, parsed_track):
+                        st.success(
+                            "Pista subida y disponible para todos los usuarios."
+                        )
+                    else:
+                        st.warning(
+                            "No se pudo subir la pista al almacenamiento compartido."
+                        )
+                else:
+                    st.error(
+                        f"Error al parsear AIW ({resp.status_code}): "
+                        f"{resp.text[:200]}"
+                    )
+            except requests.exceptions.ConnectionError:
+                st.error(
+                    "No se pudo conectar al backend. "
+                    "Asegurate de que el servidor esta corriendo."
+                )
+            except Exception as exc:
+                st.error(f"Error inesperado: {exc}")
+
+    # ── 3. Track preview ──────────────────────────────────────────────────
+    final_track = loaded_track_json or st.session_state.get("loaded_track_json")
+    if final_track:
+        _render_track_preview(final_track)
+        st.caption(
+            f"Waypoints: {len(final_track.get('waypoints', []))} | "
+            f"Nombre: {final_track.get('name', 'Desconocido')}"
+        )
+    else:
+        st.info(
+            "Selecciona una pista del desplegable o sube un archivo AIW "
+            "para previsualizar el trazado."
+        )
+
 
 st.set_page_config(page_title="rFactor2 Engineer", layout="wide")
 
@@ -1190,8 +1516,8 @@ if tele_path and svm_path:
                 if lap_times:
                     fastest_lap = min(lap_times, key=lap_times.get)
 
-                main_tab_tele, main_tab_setup, main_tab_ai = st.tabs(
-                    ["📊 Telemetría", "🔧 Setup", "🤖 Análisis AI"]
+                main_tab_tele, main_tab_setup, main_tab_ai, main_tab_track = st.tabs(
+                    ["📊 Telemetría", "🔧 Setup", "🤖 Análisis AI", "🏁 Pista 3D"]
                 )
 
                 with main_tab_tele:
@@ -1436,6 +1762,10 @@ if tele_path and svm_path:
                                         st.table(df_ai.set_index("Parámetro"))
                                     else:
                                         st.caption("No se recomiendan cambios en esta sección.")
+
+                with main_tab_track:
+                    _render_track_selection_ui(df_local)
+
             else:
                 st.warning("No se encontraron vueltas completas.")
         else:
