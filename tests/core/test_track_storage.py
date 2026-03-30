@@ -2,18 +2,12 @@
 
 import hashlib
 import json
-import os
-import shutil
-import tempfile
-from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient
 
 from app.core.track_storage import (
-    COMMUNITY_TRACKS_DIR,
-    PREHOSTED_TRACKS_DIR,
     canonical_json,
     compute_content_sha256,
     router,
