@@ -99,22 +99,6 @@ def test_api_headers_uses_only_valid_session_id():
     assert streamlit_app._api_headers() == {"X-Client-Session-Id": "abc12345XYZ"}
 
 
-def test_post_analysis_for_session_uses_long_running_timeout(mocker):
-    streamlit_app.st.session_state.clear()
-    streamlit_app.st.session_state["client_session_id"] = "abc12345XYZ"
-    mock_post = mocker.patch("frontend.streamlit_app.requests.post", return_value=sentinel.response)
-
-    response = streamlit_app._post_analysis_for_session("session-1", {"provider": "ollama", "model": "x"})
-
-    assert response is sentinel.response
-    mock_post.assert_called_once_with(
-        f"{streamlit_app.API_BASE_URL}/analyze_session",
-        data={"session_id": "session-1", "provider": "ollama", "model": "x"},
-        headers={"X-Client-Session-Id": "abc12345XYZ"},
-        timeout=streamlit_app.ANALYSIS_REQUEST_TIMEOUT,
-    )
-
-
 def test_post_analysis_with_local_files_uses_analyze_endpoint(tmp_path, mocker):
     tele_path = tmp_path / "sample.mat"
     svm_path = tmp_path / "sample.svm"
@@ -131,18 +115,20 @@ def test_post_analysis_with_local_files_uses_analyze_endpoint(tmp_path, mocker):
             "svm_name": "sample.svm",
         }
     )
-    mock_post = mocker.patch("frontend.streamlit_app.requests.post", return_value=sentinel.response)
+    mock_post = mocker.patch("frontend.streamlit_app.api_client.post_analyze_with_files", return_value=sentinel.response)
 
     response = streamlit_app._post_analysis_with_local_files({"provider": "jimmy"})
 
     assert response is sentinel.response
     mock_post.assert_called_once()
-    _, kwargs = mock_post.call_args
-    assert kwargs["timeout"] == streamlit_app.ANALYSIS_REQUEST_TIMEOUT
-    assert kwargs["headers"] == {"X-Client-Session-Id": "abc12345XYZ"}
-    assert kwargs["data"] == {"provider": "jimmy"}
-    assert "telemetry_file" in kwargs["files"]
-    assert "svm_file" in kwargs["files"]
+    args, kwargs = mock_post.call_args
+    assert kwargs == {}
+    assert args[0] == streamlit_app.API_BASE_URL
+    assert args[1] == "abc12345XYZ"
+    assert args[2] == {"provider": "jimmy"}
+    assert "telemetry_file" in args[3]
+    assert "svm_file" in args[3]
+    assert args[4] == streamlit_app.ANALYSIS_REQUEST_TIMEOUT
 
 
 def test_post_analysis_with_local_files_raises_if_missing_files(mocker):
@@ -153,7 +139,7 @@ def test_post_analysis_with_local_files_raises_if_missing_files(mocker):
             "svm_temp_path": "C:/missing/sample.svm",
         }
     )
-    mocker.patch("frontend.streamlit_app.requests.post", return_value=sentinel.response)
+    mocker.patch("frontend.streamlit_app.api_client.post_analyze_with_files", return_value=sentinel.response)
 
     with pytest.raises(FileNotFoundError):
         streamlit_app._post_analysis_with_local_files({})

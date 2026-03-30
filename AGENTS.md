@@ -2,6 +2,23 @@
 
 Complete context for any AI agent working on this project. Read this file first before making changes.
 
+> **ASANA MANDATE — MANDATORY FOR ALL AGENTS, ALWAYS**
+>
+> Every non-trivial development task **must** be tracked in Asana before work begins.
+> This applies regardless of whether the user explicitly mentions Asana.
+>
+> **Required workflow for any task involving code changes:**
+> 1. Before writing a single line, create (or find) the corresponding Asana task in the
+>    **"rFactor2 Engineer"** project (GID `1213839935179235`).
+> 2. Move the task to **In Progress** when work begins.
+> 3. Move to **In Review** after committing; move to **Done** after the user validates.
+> 4. For multi-step work, break it down into sub-tasks and respect the dependency graph
+>    to maximize parallelism (see "Development Methodology" → "Supervisor Algorithm").
+>
+> **No exceptions.** Using Asana is how this project tracks progress, enables parallelism,
+> and avoids duplicate or conflicting work. Skipping it is treated as a process violation.
+> See the full MCP integration details in the "Asana MCP Integration" section below.
+
 > **DOCUMENTATION MAINTENANCE MANDATE — MANDATORY FOR ALL AGENTS**
 >
 > Any agent that modifies **implementation** (API endpoints, data pipeline, AI agents, parsers, tests)
@@ -27,12 +44,15 @@ User (Browser)
     |
 Streamlit Frontend (:8501)        ← frontend/streamlit_app.py
     |  HTTP calls to localhost:8000
-FastAPI Backend (:8000)           ← app/main.py
+FastAPI API Layer (:8000)         ← app/main.py + app/api/schemas.py
     |
-    ├── Telemetry Parser          ← app/core/telemetry_parser.py
-    │     parse_mat_file(), parse_csv_file(), parse_svm_file()
+  ├── Service Layer             ← app/services/
+  │     session_service.py, upload_service.py, analysis_service.py
     |
-    └── AI Agent Pipeline         ← app/core/ai_agents.py (class AIAngineer)
+  ├── Core Parsing              ← app/core/telemetry_parser.py
+  │     parse_mat_file(), parse_csv_file(), parse_svm_file()
+  |
+  └── AI Agent Pipeline         ← app/core/ai_agents.py (class AIAngineer)
           |  LangChain → ChatOllama
           Ollama LLM Server (:11434)
 ```
@@ -44,14 +64,46 @@ FastAPI Backend (:8000)           ← app/main.py
 ```
 rFactor2_engineer/
 ├── app/
-│   ├── main.py                    # FastAPI server; all API endpoints; data pipeline
+│   ├── main.py                    # FastAPI API layer; lightweight endpoint orchestration
+│   ├── AGENTS.md                  # Backend layer guidance
+│   ├── api/
+│   │   ├── __init__.py
+│   │   └── schemas.py             # Pydantic request/response schemas
+│   ├── config/
+│   │   ├── __init__.py
+│   │   ├── AGENTS.md              # Config-layer guidance
+│   │   └── settings.py            # Centralized runtime settings/constants
+│   ├── services/
+│   │   ├── __init__.py
+│   │   ├── AGENTS.md              # Service-layer contracts and rules
+│   │   ├── session_service.py     # Session id handling, listing, cleanup
+│   │   ├── upload_service.py      # Chunked upload orchestration
+│   │   └── analysis_service.py    # Telemetry + setup + AI orchestration
 │   └── core/
-│       ├── ai_agents.py           # AIAngineer class, prompts, LLM orchestration
+│       ├── ai_agents.py           # AIAngineer class only; re-exports helpers from llm_utils
+│       ├── ai_prompts.py          # LLM prompt template strings (DRIVING, SECTION, CHIEF, TRANSLATOR)
+│       ├── llm_utils.py           # LLM constants, _ensure_ollama_running, list_available_models, numeric helpers
 │       ├── telemetry_parser.py    # .mat, .csv, .svm parsers
 │       ├── param_mapping.json     # Internal→friendly name translation (116 entries)
 │       └── fixed_params.json      # Parameters locked from AI modification (28 entries)
 ├── frontend/
-│   └── streamlit_app.py           # Streamlit UI; chunked uploader; session isolation
+│   ├── AGENTS.md                  # Frontend-layer guidance
+│   ├── streamlit_app.py           # Streamlit UI orchestrator (~120 lines); delegates to views/
+│   ├── config.py                  # Frontend runtime constants (URLs, timeouts, paths)
+│   ├── api_client.py              # Frontend HTTP wrapper for backend endpoints
+│   ├── session_manager.py         # Session-local temp file lifecycle and validation helpers
+│   ├── setup_parser.py            # Frontend helper for setup file parsing/reuse
+│   ├── telemetry_processing.py    # Frontend telemetry prep (MAT load, lap filtering, channel extraction)
+│   ├── views/
+│   │   ├── __init__.py
+│   │   ├── sidebar_view.py        # Sidebar UI: file upload, ephemeral session controls
+│   │   ├── setup_view.py          # Setup tab: fixed-params editor backed by .svm file
+│   │   ├── telemetry_view.py      # Telemetry tab: lap times + interactive charts
+│   │   └── analysis_view.py       # AI analysis tab: provider selector, trigger, results display
+│   └── components/
+│       ├── __init__.py
+│       ├── browser_hooks.py       # Browser-side unload cleanup hook injection
+│       └── telemetry_embed.py     # Plotly/JS embed renderer for interactive lap telemetry
 ├── .streamlit/
 │   └── config.toml                # maxUploadSize = 20000
 ├── tests/                         # Unit + integration test suite (pytest)
@@ -211,6 +263,10 @@ Optional query params: `ollama_base_url` (override Ollama endpoint, e.g. `https:
 Deletes the current client session's telemetry/setup files and in-progress chunk files from
 `data/<client_session_id>/`. Removes empty directories.
 
+#### `POST /cleanup_all`
+Deletes **all** stored telemetry/setup/chunk/temp-analysis artifacts under `data/`.
+Used by the frontend ephemeral-session mode at page load to guarantee no stale data survives.
+
 ## AI Agent Pipeline
 
 The `AIAngineer.analyze()` method runs this sequence:
@@ -366,11 +422,15 @@ All hardcoded values (ports, paths, thresholds, parameter lists, telemetry chann
 
 **Frontend reasoning alignment**: the frontend reasoning panel should consume `setup_agent_reports` (fallback to `agent_reports` only for backward compatibility). This avoids mismatches where specialist raw reports differ from the final setup after chief corrections.
 
-**Frontend re-analysis path**: The Streamlit UI now re-runs analysis using local temp files via `POST /analyze` whenever local files are available, instead of always calling `POST /analyze_session`. This avoids `404 Session not found` after a successful prior analysis consumed stored backend session files.
+**Frontend ephemeral session policy**: the UI now treats uploads as session-local only. No cookie/query-param persistence is used for client session IDs.
 
-**Frontend session load without forced rerun**: after clicking `Cargar sesión`, the UI should keep the newly loaded local temp file paths in `st.session_state` and continue the same render cycle instead of forcing an immediate `st.rerun()`. In production, an eager rerun can race with websocket reconnection and return the app to the initial state even though the backend file downloads succeeded.
+**Frontend page-load cleanup**: at startup, frontend calls `POST /cleanup_all` once to purge stale data from previous sessions.
 
-**Frontend auto-load latest uploaded session**: the sidebar no longer requires manual `Selecciona sesión subida` + `Cargar sesión`. When complete sessions exist in backend storage for the current client session, the frontend auto-loads the most recent one and renders telemetry directly after upload.
+**Frontend unload cleanup hook**: browser-side `beforeunload` sends a keepalive cleanup request (`POST /cleanup` with `X-Client-Session-Id`) so data is removed when reloading or leaving the page.
+
+**Frontend local-only analysis flow**: analysis requests are executed from local temporary files via `POST /analyze`; fallback to `POST /analyze_session` was removed to enforce strict ephemeral behavior.
+
+**Frontend Ollama model selector persistence**: the model dropdown in `frontend/views/analysis_view.py` now normalizes, de-duplicates, and sorts model names deterministically, then stores the selected model in `st.session_state['selected_ollama_model']`. This prevents random model jumps across Streamlit reruns.
 
 **Prompt benchmark tooling removed from repo**: legacy benchmark/grid-search helper scripts and `docs/benchmark` artifacts were removed to keep the runtime repository lightweight for deployment. Runtime behavior now depends on the committed values inside `app/core/jimmy_runtime_config.v1.json`.
 
@@ -556,7 +616,7 @@ ollama pull llama3.2:latest
 
 | File | Purpose |
 |------|---------|
-| `Dockerfile` | Multi-stage build (targets: `backend`, `frontend`) |
+| `Dockerfile` | Multi-stage build (targets: `backend`, `frontend`); frontend image also copies `app/` because `frontend/setup_parser.py` imports `app.core.telemetry_parser` |
 | `docker-compose.yml` | Orchestrates backend/frontend/test containers; uses host Ollama |
 | `.dockerignore` | Excludes data/, tests/, dist/, .git/ from build context |
 | `deploy/docker-compose.gcp.yml` | GCP host override: localhost-only port binds + host-gateway mapping |
