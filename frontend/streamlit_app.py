@@ -533,6 +533,469 @@ def _build_lap_data(lap_df):
     return data
 
 
+def _build_cockpit_data(lap_df):
+    """Extract telemetry arrays for the 3D cockpit replay component.
+
+    Returns a dict of equal-length lists keyed by channel name,
+    or None if the required Lap_Distance column is missing.
+    """
+    x_col = 'Lap_Distance'
+    if x_col not in lap_df.columns:
+        return None
+
+    n = len(lap_df)
+
+    def _safe_col(col_name, scale=1.0):
+        """Extract a column as a plain list, replacing NaN with 0.0."""
+        if col_name not in lap_df.columns:
+            return [0.0] * n
+        out = []
+        for v in lap_df[col_name].values:
+            try:
+                fv = float(v)
+                out.append(0.0 if np.isnan(fv) else fv * scale)
+            except (TypeError, ValueError):
+                out.append(0.0)
+        return out
+
+    # Compute average ride height from the four wheel channels
+    rh_cols = [f'Ride_Height_{w}' for w in ['FL', 'FR', 'RL', 'RR']]
+    available_rh = [c for c in rh_cols if c in lap_df.columns]
+    if available_rh:
+        rh_avg = lap_df[available_rh].mean(axis=1)
+        ride_height_avg = []
+        for v in rh_avg.values:
+            try:
+                fv = float(v)
+                ride_height_avg.append(0.0 if np.isnan(fv) else fv)
+            except (TypeError, ValueError):
+                ride_height_avg.append(0.0)
+    else:
+        ride_height_avg = [0.0] * n
+
+    # Gear as integers
+    gear_raw = _safe_col('Gear')
+    gear = [int(round(v)) for v in gear_raw]
+
+    return {
+        'lap_distance': _safe_col(x_col),
+        'speed': _safe_col('Ground_Speed'),
+        'throttle': _safe_col('Throttle_Pos'),
+        'brake': _safe_col('Brake_Pos'),
+        'gear': gear,
+        'rpm': _safe_col('Engine_RPM'),
+        'body_pitch': _safe_col('Body_Pitch'),
+        'body_roll': _safe_col('Body_Roll'),
+        'g_force_lat': _safe_col('G_Force_Lat'),
+        'g_force_long': _safe_col('G_Force_Long'),
+        'ride_height_avg': ride_height_avg,
+        'steering': _safe_col('Steering_Wheel_Position'),
+    }
+
+
+def render_3d_cockpit(lap_data, track_json):
+    """Return an HTML string containing a self-contained Three.js cockpit replay.
+
+    Parameters
+    ----------
+    lap_data : dict or None
+        Output of ``_build_cockpit_data()``.  May be ``None`` (track-only mode).
+    track_json : dict or None
+        Track geometry ``{name, source, points: [{x, y, z, width_left, width_right}]}``.
+        If ``None`` the component shows a placeholder message.
+
+    The HTML is designed to be embedded via ``st.components.html(html, height=…)``.
+    """
+    import json as _j
+
+    if track_json is None:
+        return "<div style='padding:40px;font-family:sans-serif;color:#888;text-align:center;'>No track data loaded</div>"
+
+    track_js = _j.dumps(track_json)
+    telem_js = _j.dumps(lap_data) if lap_data else "null"
+
+    # ── Inline Three.js cockpit HTML ──────────────────────────────────────
+    html = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<style>
+  * {{ margin:0; padding:0; box-sizing:border-box; }}
+  body {{ background:#111; overflow:hidden; font-family:monospace; }}
+  #c {{ display:block; width:100%; height:100%; }}
+  #hud {{
+    position:absolute; top:8px; left:12px; color:#0f0;
+    font-size:13px; line-height:1.5; pointer-events:none;
+    text-shadow:0 0 4px rgba(0,255,0,0.5);
+  }}
+  #controls {{
+    position:absolute; bottom:8px; left:12px; right:12px;
+    display:flex; align-items:center; gap:8px;
+    color:#ccc; font-size:12px;
+  }}
+  #controls button {{
+    background:#333; color:#eee; border:1px solid #555;
+    padding:4px 10px; cursor:pointer; border-radius:3px;
+    font-family:monospace;
+  }}
+  #controls button:hover {{ background:#555; }}
+  #scrub {{
+    flex:1; accent-color:#0f0; cursor:pointer;
+  }}
+  #controls select {{
+    background:#333; color:#eee; border:1px solid #555;
+    padding:2px 6px; border-radius:3px; font-family:monospace;
+  }}
+  #dist-label {{ min-width:90px; text-align:right; }}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="hud">
+  <div id="hud-speed">--- km/h</div>
+  <div id="hud-gear">N</div>
+  <div id="hud-rpm">---- RPM</div>
+  <div id="hud-dist">0 m</div>
+</div>
+<div id="controls">
+  <button id="btn-play">&#9654;</button>
+  <select id="speed-sel">
+    <option value="0.5">0.5x</option>
+    <option value="1" selected>1x</option>
+    <option value="2">2x</option>
+    <option value="4">4x</option>
+  </select>
+  <input id="scrub" type="range" min="0" max="1000" value="0" step="1"/>
+  <span id="dist-label">0 m</span>
+</div>
+
+<script src="https://unpkg.com/three@0.168.0/build/three.module.js" type="module"></script>
+<script type="module">
+import * as THREE from 'https://unpkg.com/three@0.168.0/build/three.module.js';
+
+// ─── Data injection ──────────────────────────────────────────────────
+window.TRACK_DATA  = {track_js};
+window.TELEMETRY_DATA = {telem_js};
+
+const TRACK  = window.TRACK_DATA;
+const TELEM  = window.TELEMETRY_DATA;
+
+// ─── Scene setup ─────────────────────────────────────────────────────
+const canvas = document.getElementById('c');
+window.cockpitCanvas = canvas;
+const renderer = new THREE.WebGLRenderer({{ canvas, antialias: true }});
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setSize(canvas.clientWidth, canvas.clientHeight);
+
+const scene  = new THREE.Scene();
+scene.background = new THREE.Color(0x222233);
+scene.fog = new THREE.Fog(0x222233, 200, 1500);
+
+const camera = new THREE.PerspectiveCamera(75, canvas.clientWidth / canvas.clientHeight, 0.5, 3000);
+scene.add(camera);
+
+// Lighting
+const amb = new THREE.AmbientLight(0xffffff, 0.6);
+scene.add(amb);
+const dir = new THREE.DirectionalLight(0xffffff, 0.8);
+dir.position.set(100, 200, 50);
+scene.add(dir);
+
+// ─── Track spline ────────────────────────────────────────────────────
+const pts = TRACK.points || [];
+const splinePoints = pts.map(p => new THREE.Vector3(p.x, p.y, p.z));
+const curve = new THREE.CatmullRomCurve3(splinePoints, false, 'catmullrom', 0.5);
+
+// ─── Track road mesh ─────────────────────────────────────────────────
+const SPLINE_DIVISIONS = Math.max(pts.length * 4, 500);
+const sampledPts = curve.getSpacedPoints(SPLINE_DIVISIONS);
+const sampledTangents = [];
+for (let i = 0; i <= SPLINE_DIVISIONS; i++) {{
+  sampledTangents.push(curve.getTangentAt(i / SPLINE_DIVISIONS));
+}}
+
+// Interpolate width_left / width_right along sampled points
+function lerpWidth(arr, idx) {{
+  // arr = pts array, idx = index in SPLINE_DIVISIONS range
+  const t = idx / SPLINE_DIVISIONS;
+  const fi = t * (pts.length - 1);
+  const lo = Math.floor(fi);
+  const hi = Math.min(lo + 1, pts.length - 1);
+  const frac = fi - lo;
+  const wl = (pts[lo].width_left  || 5) * (1 - frac) + (pts[hi].width_left  || 5) * frac;
+  const wr = (pts[lo].width_right || 5) * (1 - frac) + (pts[hi].width_right || 5) * frac;
+  return {{ wl, wr }};
+}}
+
+// Build road ribbon geometry
+const roadVerts = [];
+const roadUVs   = [];
+const roadIdx   = [];
+const UP = new THREE.Vector3(0, 1, 0);
+const _perp = new THREE.Vector3();
+
+for (let i = 0; i <= SPLINE_DIVISIONS; i++) {{
+  const p = sampledPts[i];
+  const t = sampledTangents[i];
+  _perp.crossVectors(t, UP).normalize();
+  const {{ wl, wr }} = lerpWidth(pts, i);
+
+  // left edge
+  roadVerts.push(p.x - _perp.x * wl, p.y, p.z - _perp.z * wl);
+  // right edge
+  roadVerts.push(p.x + _perp.x * wr, p.y, p.z + _perp.z * wr);
+
+  const v = i / SPLINE_DIVISIONS;
+  roadUVs.push(0, v);
+  roadUVs.push(1, v);
+}}
+
+for (let i = 0; i < SPLINE_DIVISIONS; i++) {{
+  const a = i * 2, b = i * 2 + 1, c = (i + 1) * 2, d = (i + 1) * 2 + 1;
+  roadIdx.push(a, c, b);
+  roadIdx.push(b, c, d);
+}}
+
+const roadGeo = new THREE.BufferGeometry();
+roadGeo.setAttribute('position', new THREE.Float32BufferAttribute(roadVerts, 3));
+roadGeo.setAttribute('uv', new THREE.Float32BufferAttribute(roadUVs, 2));
+roadGeo.setIndex(roadIdx);
+roadGeo.computeVertexNormals();
+
+const roadMat = new THREE.MeshLambertMaterial({{ color: 0x444444, side: THREE.DoubleSide }});
+const roadMesh = new THREE.Mesh(roadGeo, roadMat);
+scene.add(roadMesh);
+
+// Kerb edges (thin lighter strips)
+function buildKerbStrip(side) {{
+  const verts = [];
+  const idx   = [];
+  const kerbW = 0.5; // meters
+
+  for (let i = 0; i <= SPLINE_DIVISIONS; i++) {{
+    const p = sampledPts[i];
+    const t = sampledTangents[i];
+    _perp.crossVectors(t, UP).normalize();
+    const {{ wl, wr }} = lerpWidth(pts, i);
+    const w = side === 'left' ? wl : wr;
+    const sign = side === 'left' ? -1 : 1;
+    const outerW = w + kerbW;
+
+    verts.push(
+      p.x + sign * _perp.x * w,       p.y + 0.01, p.z + sign * _perp.z * w,
+      p.x + sign * _perp.x * outerW,  p.y + 0.01, p.z + sign * _perp.z * outerW
+    );
+  }}
+  for (let i = 0; i < SPLINE_DIVISIONS; i++) {{
+    const a = i * 2, b = i * 2 + 1, c = (i + 1) * 2, d = (i + 1) * 2 + 1;
+    idx.push(a, c, b);
+    idx.push(b, c, d);
+  }}
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
+  geo.setIndex(idx);
+  geo.computeVertexNormals();
+  const mat = new THREE.MeshLambertMaterial({{ color: 0xcc2222, side: THREE.DoubleSide }});
+  return new THREE.Mesh(geo, mat);
+}}
+scene.add(buildKerbStrip('left'));
+scene.add(buildKerbStrip('right'));
+
+// Ground plane
+const ground = new THREE.Mesh(
+  new THREE.PlaneGeometry(5000, 5000),
+  new THREE.MeshLambertMaterial({{ color: 0x2a3a2a }})
+);
+ground.rotation.x = -Math.PI / 2;
+ground.position.y = -0.1;
+scene.add(ground);
+
+// ─── Telemetry helpers ───────────────────────────────────────────────
+const maxDist = TELEM ? TELEM.lap_distance[TELEM.lap_distance.length - 1] : curve.getLength();
+const totalLength = curve.getLength();
+
+function telemAt(arr, dist) {{
+  if (!TELEM || !arr || arr.length === 0) return 0;
+  const ld = TELEM.lap_distance;
+  // binary search
+  let lo = 0, hi = ld.length - 1;
+  while (lo < hi) {{
+    const mid = (lo + hi) >> 1;
+    if (ld[mid] < dist) lo = mid + 1; else hi = mid;
+  }}
+  if (lo === 0) return arr[0];
+  if (lo >= ld.length) return arr[ld.length - 1];
+  const t = (dist - ld[lo - 1]) / (ld[lo] - ld[lo - 1] || 1);
+  return arr[lo - 1] + (arr[lo] - arr[lo - 1]) * t;
+}}
+
+// ─── Camera system ───────────────────────────────────────────────────
+const COCKPIT_HEIGHT = 1.5;
+let currentPitch = 0;
+let currentRoll  = 0;
+let currentHeave = 0;
+
+function updateCamera(dist) {{
+  const t = Math.max(0, Math.min(1, dist / totalLength));
+  const pos = curve.getPointAt(t);
+  const tan = curve.getTangentAt(t);
+
+  // Base camera position (cockpit height above road)
+  camera.position.set(pos.x, pos.y + COCKPIT_HEIGHT, pos.z);
+
+  // Look direction
+  const lookTarget = new THREE.Vector3(
+    pos.x + tan.x * 10,
+    pos.y + COCKPIT_HEIGHT + tan.y * 10,
+    pos.z + tan.z * 10
+  );
+  camera.lookAt(lookTarget);
+
+  if (TELEM) {{
+    // Target physics offsets
+    const targetPitch = telemAt(TELEM.body_pitch, dist)
+                      + telemAt(TELEM.g_force_long, dist) * -0.02;
+    const targetRoll  = telemAt(TELEM.body_roll, dist)
+                      + telemAt(TELEM.g_force_lat, dist) * 0.03;
+    const targetHeave = telemAt(TELEM.ride_height_avg, dist);
+
+    // Smooth with lerp
+    currentPitch = currentPitch + (targetPitch - currentPitch) * 0.1;
+    currentRoll  = currentRoll  + (targetRoll  - currentRoll)  * 0.1;
+    currentHeave = currentHeave + (targetHeave - currentHeave) * 0.1;
+
+    camera.rotation.x += currentPitch;
+    camera.rotation.z += currentRoll;
+    camera.position.y += currentHeave;
+  }}
+}}
+
+// ─── HUD ─────────────────────────────────────────────────────────────
+const hudSpeed = document.getElementById('hud-speed');
+const hudGear  = document.getElementById('hud-gear');
+const hudRpm   = document.getElementById('hud-rpm');
+const hudDist  = document.getElementById('hud-dist');
+
+function updateHUD(dist) {{
+  if (TELEM) {{
+    const spd = telemAt(TELEM.speed, dist);
+    const gear = Math.round(telemAt(TELEM.gear, dist));
+    const rpm  = Math.round(telemAt(TELEM.rpm, dist));
+    hudSpeed.textContent = spd.toFixed(0) + ' km/h';
+    hudGear.textContent  = gear <= 0 ? 'N' : gear.toString();
+    hudRpm.textContent   = rpm + ' RPM';
+  }} else {{
+    hudSpeed.textContent = '--- km/h';
+    hudGear.textContent  = '-';
+    hudRpm.textContent   = '---- RPM';
+  }}
+  hudDist.textContent = Math.round(dist) + ' m';
+}}
+
+// ─── Playback system ─────────────────────────────────────────────────
+let playing = false;
+let currentDist = 0;
+let playbackSpeed = 1.0;
+let lastTime = 0;
+
+const btnPlay  = document.getElementById('btn-play');
+const scrub    = document.getElementById('scrub');
+const speedSel = document.getElementById('speed-sel');
+const distLbl  = document.getElementById('dist-label');
+
+btnPlay.addEventListener('click', () => {{
+  playing = !playing;
+  btnPlay.innerHTML = playing ? '&#9646;&#9646;' : '&#9654;';
+  if (playing) lastTime = performance.now();
+}});
+
+speedSel.addEventListener('change', () => {{
+  playbackSpeed = parseFloat(speedSel.value);
+}});
+
+scrub.addEventListener('input', () => {{
+  currentDist = (parseFloat(scrub.value) / 1000) * maxDist;
+  updateCamera(currentDist);
+  updateHUD(currentDist);
+  // T6: emit position to parent for 2D chart sync
+  if (!window._syncInProgress) {{
+    window.parent.postMessage({{type: 'cockpitSync', lapDistance: currentDist}}, '*');
+  }}
+}});
+
+// External API for T6 sync
+window.setCockpitPosition = function(lapDistance) {{
+  window._syncInProgress = true;
+  currentDist = Math.max(0, Math.min(lapDistance, maxDist));
+  scrub.value = Math.round((currentDist / maxDist) * 1000);
+  distLbl.textContent = Math.round(currentDist) + ' m';
+  updateCamera(currentDist);
+  updateHUD(currentDist);
+  window._syncInProgress = false;
+}};
+
+// T6: Listen for sync messages from 2D charts (via parent postMessage)
+window.addEventListener('message', function(evt) {{
+  if (evt.data && evt.data.type === 'chartSync' && typeof evt.data.lapDistance === 'number') {{
+    window.setCockpitPosition(evt.data.lapDistance);
+  }}
+}});
+
+// ─── Animation loop ──────────────────────────────────────────────────
+function animate(time) {{
+  requestAnimationFrame(animate);
+
+  if (playing) {{
+    const dt = (time - lastTime) / 1000; // seconds
+    lastTime = time;
+
+    // Advance based on speed at current position (or fixed rate)
+    let advance;
+    if (TELEM) {{
+      const spd = telemAt(TELEM.speed, currentDist); // km/h
+      advance = (spd / 3.6) * dt * playbackSpeed;    // m/s * s * multiplier
+    }} else {{
+      advance = 50 * dt * playbackSpeed; // 50 m/s default
+    }}
+    currentDist += advance;
+    if (currentDist >= maxDist) {{
+      currentDist = 0; // loop
+    }}
+
+    scrub.value = Math.round((currentDist / maxDist) * 1000);
+    distLbl.textContent = Math.round(currentDist) + ' m';
+    // T6: emit position to parent for 2D chart sync during playback
+    window.parent.postMessage({{type: 'cockpitSync', lapDistance: currentDist}}, '*');
+  }}
+
+  updateCamera(currentDist);
+  updateHUD(currentDist);
+  renderer.render(scene, camera);
+}}
+
+// ─── Resize handling ─────────────────────────────────────────────────
+function onResize() {{
+  const w = canvas.clientWidth;
+  const h = canvas.clientHeight;
+  if (canvas.width !== w || canvas.height !== h) {{
+    renderer.setSize(w, h, false);
+    camera.aspect = w / h;
+    camera.updateProjectionMatrix();
+  }}
+}}
+window.addEventListener('resize', onResize);
+onResize();
+
+// Start
+requestAnimationFrame(animate);
+
+</script>
+</body>
+</html>"""
+
+    return html
+
+
 @st.cache_resource(show_spinner=False)
 def precompute_all_laps(df, laps):
     """
@@ -640,6 +1103,7 @@ def plot_all_laps_interactive(all_lap_figs, laps, lap_options, fastest_lap):
         let pendingX = null;
         let rafId = null;
         let lastX = 0;
+        let _syncInProgress = false;
 
         // Build lap sidebar buttons
         const sidebar = document.getElementById('lap-sidebar');
@@ -969,6 +1433,13 @@ def plot_all_laps_interactive(all_lap_figs, laps, lap_options, fastest_lap):
                     y: [[posLat]]
                 }}, [2]);
             }}
+
+            // T6: forward position to 3D cockpit iframe(s) via parent
+            if (!_syncInProgress) {{
+                try {{
+                    window.parent.postMessage({{type: 'chartSync', lapDistance: x}}, '*');
+                }} catch(e) {{}}
+            }}
         }}
         // Keep lap sidebar visible by tracking parent scroll
         function updateSidebarPosition() {{
@@ -1004,6 +1475,15 @@ def plot_all_laps_interactive(all_lap_figs, laps, lap_options, fastest_lap):
             }}
         }} catch(e) {{}}
         setInterval(updateSidebarPosition, 100);
+
+        // T6: Listen for cockpitSync messages from the 3D cockpit iframe
+        window.addEventListener('message', function(evt) {{
+            if (evt.data && evt.data.type === 'cockpitSync' && typeof evt.data.lapDistance === 'number') {{
+                _syncInProgress = true;
+                sync(evt.data.lapDistance);
+                _syncInProgress = false;
+            }}
+        }});
     </script>
     """
     import streamlit.components.v1 as components
@@ -1014,6 +1494,31 @@ def plot_all_laps_interactive(all_lap_figs, laps, lap_options, fastest_lap):
     </style>
     """, unsafe_allow_html=True)
     components.html(html_code, height=total_height, scrolling=False)
+
+    # T6: Inject parent-level message relay for bidirectional 3D/2D sync.
+    # Both cockpit and charts live in separate iframes. When one posts a
+    # message to the parent, this relay forwards it to all sibling iframes.
+    st.markdown("""
+    <script>
+    (function() {
+        if (window._t6SyncRelayInstalled) return;
+        window._t6SyncRelayInstalled = true;
+        window.addEventListener('message', function(evt) {
+            if (!evt.data || !evt.data.type) return;
+            if (evt.data.type !== 'cockpitSync' && evt.data.type !== 'chartSync') return;
+            // Relay to all iframes except the sender
+            var iframes = document.querySelectorAll('iframe');
+            for (var i = 0; i < iframes.length; i++) {
+                try {
+                    if (iframes[i].contentWindow !== evt.source) {
+                        iframes[i].contentWindow.postMessage(evt.data, '*');
+                    }
+                } catch(e) {}
+            }
+        });
+    })();
+    </script>
+    """, unsafe_allow_html=True)
 
 
 def parse_svm_content(file_path):
