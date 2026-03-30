@@ -610,22 +610,16 @@ def _build_lap_data(lap_df):
     return data
 
 
-@st.cache_resource(show_spinner=False)
 def precompute_all_laps(df, laps):
     """
     Pre-genera los datos de todas las vueltas y los devuelve.
-    Se cachea como recurso para que no se re-calcule al interactuar con la UI.
+    Se cachea en session_state usando (tele_path, laps) como clave para evitar
+    hashear el DataFrame entero en cada rerun (causa principal de lentitud).
     """
     all_data = {}
-    progress_container = st.empty()
-    total_laps = len(laps)
-    for i, lap in enumerate(laps):
+    for lap in laps:
         lap_df = df[df['Lap_Number'] == lap].copy()
         all_data[lap] = _build_lap_data(lap_df)
-        with progress_container.container():
-            st.progress((i + 1) / total_laps, text=f"Procesando Vuelta {lap} de {laps[-1]}...")
-
-    progress_container.empty()
     return all_data
 
 
@@ -1242,11 +1236,16 @@ with st.sidebar:
         svm_name = st.session_state.get('svm_name')
 
         # Recuperación defensiva: en entornos productivos el directorio temporal
-        # puede faltar tras un rerun. Reintentar descarga local desde la sesión backend.
-        if (
-            (not tele_path or not os.path.exists(tele_path))
-            or (not svm_path or not os.path.exists(svm_path))
-        ):
+        # puede faltar tras un rerun. Solo se ejecuta si los archivos realmente faltan,
+        # evitando llamadas al backend en cada rerun cuando los archivos ya están presentes.
+        _files_ok = bool(
+            tele_path and os.path.exists(tele_path)
+            and svm_path and os.path.exists(svm_path)
+        )
+        if not _files_ok:
+            # Invalidar cache de vueltas porque los archivos han cambiado
+            st.session_state.pop('_lap_cache', None)
+            st.session_state.pop('_lap_cache_key', None)
             selected_id = st.session_state.get('selected_session_id')
             if selected_id:
                 try:
@@ -1286,9 +1285,13 @@ if tele_path and svm_path:
             laps = sorted([int(l) for l in df_local['Lap_Number'].unique() if l > 0])
 
             if laps:
-                # 2. Pre-generar gráficos (cacheado como recurso)
-                # La clave del cache es el hash del contenido del archivo y la lista de vueltas
-                all_lap_figs = precompute_all_laps(df_local, tuple(laps))
+                # 2. Pre-generar gráficos (cacheado en session_state por path+vueltas)
+                _cache_key = (tele_path, tuple(laps))
+                if st.session_state.get('_lap_cache_key') != _cache_key:
+                    with st.spinner("Procesando telemetría..."):
+                        st.session_state['_lap_cache'] = precompute_all_laps(df_local, tuple(laps))
+                        st.session_state['_lap_cache_key'] = _cache_key
+                all_lap_figs = st.session_state['_lap_cache']
 
                 # Detectar vuelta rápida
                 fastest_lap = None
@@ -1455,16 +1458,48 @@ if tele_path and svm_path:
                     st.header("Análisis de Ingeniero Virtual")
 
                     provider_options = {
-                        "Ollama (local)": "ollama",
+                        "Ollama (local/remoto)": "ollama",
                         "Jimmy API": "jimmy",
                     }
                     provider_label = st.selectbox("Proveedor LLM", list(provider_options.keys()))
                     sel_provider = provider_options[provider_label]
 
                     sel_model = None
+                    sel_ollama_url = ""
+                    sel_ollama_api_key = ""
+
                     if sel_provider == "ollama":
+                        sel_ollama_url = st.text_input(
+                            "URL de Ollama",
+                            value="",
+                            placeholder="http://localhost:11434  (vacío = Ollama local del backend)",
+                            help=(
+                                "Deja vacío para usar el Ollama local del servidor backend. "
+                                "Para usar Ollama Cloud pon https://ollama.com y añade tu API Key. "
+                                "Para un túnel/ngrok pon la URL completa (ej: https://xxx.ngrok.io)."
+                            ),
+                        )
+                        sel_ollama_api_key = st.text_input(
+                            "API Key de Ollama (opcional)",
+                            value="",
+                            type="password",
+                            help="Necesaria para Ollama Cloud (obtén tu clave en https://ollama.com/settings/keys).",
+                        )
+
+                        # Parámetros para la llamada a /models
+                        _models_params = {}
+                        if sel_ollama_url.strip():
+                            _models_params["ollama_base_url"] = sel_ollama_url.strip()
+                        if sel_ollama_api_key.strip():
+                            _models_params["ollama_api_key"] = sel_ollama_api_key.strip()
+
                         try:
-                            models_resp = requests.get(f"{API_BASE_URL}/models", headers=_api_headers(), timeout=2)
+                            models_resp = requests.get(
+                                f"{API_BASE_URL}/models",
+                                headers=_api_headers(),
+                                params=_models_params,
+                                timeout=5,
+                            )
                             available_models = (
                                 models_resp.json().get("models", [])
                                 if models_resp.status_code == 200 else []
@@ -1491,6 +1526,10 @@ if tele_path and svm_path:
                             data_form["provider"] = sel_provider
                             if sel_model:
                                 data_form["model"] = sel_model
+                            if sel_provider == "ollama" and sel_ollama_url.strip():
+                                data_form["ollama_base_url"] = sel_ollama_url.strip()
+                            if sel_provider == "ollama" and sel_ollama_api_key.strip():
+                                data_form["ollama_api_key"] = sel_ollama_api_key.strip()
 
                             # Enviar lista de parámetros fijados
                             if 'fixed_params' in st.session_state and st.session_state['fixed_params']:

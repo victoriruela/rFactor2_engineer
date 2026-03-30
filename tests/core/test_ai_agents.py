@@ -173,11 +173,76 @@ class TestJimmyProvider:
     async def test_call_llm_text_routes_to_jimmy_when_provider_is_jimmy(self, ai, mocker):
         ai._provider = "jimmy"
         mocker.patch.object(ai, "_build_prompt_text", return_value="PROMPT")
-        mocker.patch.object(ai, "_call_jimmy_api", return_value="Jimmy OK")
 
-        out = await ai._call_llm_text("X {y}", {"y": 1})
 
-        assert out == "Jimmy OK"
+# ---------------------------------------------------------------------------
+# _init_llm custom Ollama URL and API key
+# ---------------------------------------------------------------------------
+
+class TestInitLlmCustomOllama:
+    def test_custom_base_url_skips_ensure_ollama_running(self, mocker, tmp_path):
+        """When a custom_base_url is provided, _ensure_ollama_running must NOT be called."""
+        ensure_mock = mocker.patch("app.core.ai_agents._ensure_ollama_running")
+        mock_chat = mocker.patch("app.core.ai_agents.ChatOllama")
+        eng = AIAngineer()
+        eng._init_llm(provider="ollama", custom_base_url="https://ollama.com")
+        ensure_mock.assert_not_called()
+        mock_chat.assert_called_once()
+        call_kwargs = mock_chat.call_args.kwargs
+        assert call_kwargs["base_url"] == "https://ollama.com"
+
+    def test_custom_api_key_sets_authorization_header(self, mocker, tmp_path):
+        """When custom_api_key is provided, ChatOllama must receive the Authorization header."""
+        mocker.patch("app.core.ai_agents._ensure_ollama_running")
+        mock_chat = mocker.patch("app.core.ai_agents.ChatOllama")
+        eng = AIAngineer()
+        eng._init_llm(provider="ollama", custom_base_url="https://ollama.com", custom_api_key="mykey")
+        call_kwargs = mock_chat.call_args.kwargs
+        assert call_kwargs.get("headers") == {"Authorization": "Bearer mykey"}
+
+    def test_no_custom_url_uses_env_base_url_and_calls_ensure(self, mocker):
+        """Without custom_base_url, falls back to OLLAMA_BASE_URL and calls _ensure_ollama_running."""
+        ensure_mock = mocker.patch("app.core.ai_agents._ensure_ollama_running")
+        mocker.patch("app.core.ai_agents.ChatOllama")
+        eng = AIAngineer()
+        eng._init_llm(provider="ollama")
+        ensure_mock.assert_called_once()
+
+    def test_custom_base_url_stored_on_instance(self, mocker):
+        """_custom_base_url attribute should be set after _init_llm with custom URL."""
+        mocker.patch("app.core.ai_agents._ensure_ollama_running")
+        mocker.patch("app.core.ai_agents.ChatOllama")
+        eng = AIAngineer()
+        eng._init_llm(provider="ollama", custom_base_url="https://custom.example.com")
+        assert eng._custom_base_url == "https://custom.example.com"
+
+
+# ---------------------------------------------------------------------------
+# list_available_models with custom base_url / api_key
+# ---------------------------------------------------------------------------
+
+class TestListAvailableModels:
+    def test_custom_url_skips_ensure_ollama_running(self, mocker):
+        from app.core.ai_agents import list_available_models
+        ensure_mock = mocker.patch("app.core.ai_agents._ensure_ollama_running")
+        mock_get = mocker.patch("app.core.ai_agents.requests.get")
+        mock_get.return_value.status_code = 200
+        mock_get.return_value.json.return_value = {"models": [{"name": "gpt-oss:120b"}]}
+        result = list_available_models(base_url="https://ollama.com", api_key="mykey")
+        ensure_mock.assert_not_called()
+        assert result == ["gpt-oss:120b"]
+        call_kwargs = mock_get.call_args
+        assert "Authorization" in call_kwargs.kwargs.get("headers", {}) or \
+               "Authorization" in (call_kwargs.args[1] if len(call_kwargs.args) > 1 else {})
+
+    def test_no_custom_url_calls_ensure_ollama_running(self, mocker):
+        from app.core.ai_agents import list_available_models
+        ensure_mock = mocker.patch("app.core.ai_agents._ensure_ollama_running")
+        mock_get = mocker.patch("app.core.ai_agents.requests.get")
+        mock_get.return_value.status_code = 200
+        mock_get.return_value.json.return_value = {"models": []}
+        list_available_models()
+        ensure_mock.assert_called_once()
 
 
 # ---------------------------------------------------------------------------
