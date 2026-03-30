@@ -380,7 +380,7 @@ st.subheader("Análisis de Telemetría y Setup mediante IA")
 # Utilidades
 # ─────────────────────────────────────────────────────────────────────────────
 
-@st.cache_data(show_spinner=False)
+@st.cache_data(show_spinner=False, max_entries=1, ttl=7200)
 def get_mat_dataframe(file_path):
     """Carga el .mat y devuelve un DataFrame ordenado por tiempo."""
     try:
