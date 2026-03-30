@@ -51,6 +51,8 @@ rFactor2_engineer/
 │       ├── param_mapping.json     # Internal→friendly name translation (116 entries)
 │       └── fixed_params.json      # Parameters locked from AI modification (28 entries)
 ├── frontend/
+│   ├── js/
+│   │   └── mas_extractor.js       # MAS 2.90 archive extractor (browser JS, extracts .AIW)
 │   └── streamlit_app.py           # Streamlit UI; chunked uploader; session isolation
 ├── .streamlit/
 │   └── config.toml                # maxUploadSize = 20000
@@ -60,6 +62,7 @@ rFactor2_engineer/
 │   │   ├── test_telemetry_parser.py  # CSV, SVM, .mat parsing; _filter_incomplete_laps
 │   │   └── test_ai_agents.py         # Pure functions + AIAngineer unit tests (mocked LLM)
 │   ├── frontend/
+│   │   ├── test_mas_extractor.py    # MAS 2.90 extractor: format, TOC, AIW extraction tests
 │   │   └── test_upload_temp_files.py # Chunked upload helper functions
 │   ├── integration/
 │   │   ├── conftest.py            # Auto-skip guard if Ollama/llama3.2 unavailable
