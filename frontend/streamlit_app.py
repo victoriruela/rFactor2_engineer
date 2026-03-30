@@ -1194,56 +1194,12 @@ def _render_track_selection_ui(df=None):
             if loaded_track_json:
                 st.session_state["loaded_track_json"] = loaded_track_json
 
-    # ── 2. AIW upload ─────────────────────────────────────────────────────
-    st.subheader("Subir archivo AIW")
+    # ── 2. AIW/MAS upload (browser-side, via drop zone below) ──────────────
+    st.subheader("Subir archivo de pista (.aiw / .mas)")
     st.caption(
-        "Sube un archivo .aiw para parsear la pista. "
-        "Para archivos .mas, extrae primero el .aiw con MAS2Extract."
+        "Arrastra un archivo .aiw o .mas en la zona de abajo. "
+        "Los .mas se extraen automáticamente en el navegador."
     )
-    aiw_file = st.file_uploader(
-        "Archivo AIW",
-        type=["aiw"],
-        key="aiw_uploader",
-    )
-
-    if aiw_file is not None:
-        aiw_bytes = aiw_file.read()
-        aiw_file.seek(0)
-        with st.spinner("Parseando AIW..."):
-            try:
-                resp = requests.post(
-                    f"{API_BASE_URL}/tracks/parse-aiw-text",
-                    files={"file": (aiw_file.name, aiw_bytes)},
-                    headers=_api_headers(),
-                    timeout=30,
-                )
-                if resp.status_code == 200:
-                    parsed_track = resp.json()
-                    loaded_track_json = parsed_track
-                    st.session_state["loaded_track_json"] = parsed_track
-                    st.success("AIW parseado correctamente.")
-
-                    # Upload to community storage
-                    if _upload_track_to_community(aiw_bytes, parsed_track):
-                        st.success(
-                            "Pista subida y disponible para todos los usuarios."
-                        )
-                    else:
-                        st.warning(
-                            "No se pudo subir la pista al almacenamiento compartido."
-                        )
-                else:
-                    st.error(
-                        f"Error al parsear AIW ({resp.status_code}): "
-                        f"{resp.text[:200]}"
-                    )
-            except requests.exceptions.ConnectionError:
-                st.error(
-                    "No se pudo conectar al backend. "
-                    "Asegurate de que el servidor esta corriendo."
-                )
-            except Exception as exc:
-                st.error(f"Error inesperado: {exc}")
 
     # ── 3. Track preview ──────────────────────────────────────────────────
     final_track = loaded_track_json or st.session_state.get("loaded_track_json")
@@ -1571,7 +1527,7 @@ def _build_cockpit_data(lap_df):
     gear_raw = _safe_col('Gear')
     gear = [int(round(v)) for v in gear_raw]
 
-    return {
+    result = {
         'lap_distance': _safe_col(x_col),
         'speed': _safe_col('Ground_Speed'),
         'throttle': _safe_col('Throttle_Pos'),
@@ -1585,6 +1541,15 @@ def _build_cockpit_data(lap_df):
         'ride_height_avg': ride_height_avg,
         'steering': _safe_col('Steering_Wheel_Position'),
     }
+
+    # Sort all arrays by lap_distance (binary search in JS requires monotonic order)
+    ld = result['lap_distance']
+    sort_idx = sorted(range(len(ld)), key=lambda i: ld[i])
+    for key in result:
+        arr = result[key]
+        result[key] = [arr[i] for i in sort_idx]
+
+    return result
 
 
 def render_3d_cockpit(lap_data, track_json):
@@ -3018,9 +2983,8 @@ with st.sidebar:
             and svm_path and os.path.exists(svm_path)
         )
         if not _files_ok:
-            # Invalidar cache de vueltas porque los archivos han cambiado
-            st.session_state.pop('_lap_cache', None)
-            st.session_state.pop('_lap_cache_key', None)
+            # Files missing (e.g. after page reload) — re-download but DON'T nuke lap cache
+            # The cache key uses filename (not path) so it will still hit after re-download
             selected_id = st.session_state.get('selected_session_id')
             if selected_id:
                 try:
@@ -3060,8 +3024,9 @@ if tele_path and svm_path:
             laps = sorted([int(l) for l in df_local['Lap_Number'].unique() if l > 0])
 
             if laps:
-                # 2. Pre-generar gráficos (cacheado en session_state por path+vueltas)
-                _cache_key = (tele_path, tuple(laps))
+                # 2. Pre-generar gráficos (cacheado en session_state por nombre+vueltas)
+                # Use filename (not full path) as cache key to survive temp dir changes
+                _cache_key = (os.path.basename(tele_path), tuple(laps))
                 if st.session_state.get('_lap_cache_key') != _cache_key:
                     with st.spinner("Procesando telemetría..."):
                         st.session_state['_lap_cache'] = precompute_all_laps(df_local, tuple(laps))
@@ -3087,20 +3052,36 @@ if tele_path and svm_path:
                 if lap_times:
                     fastest_lap = min(lap_times, key=lap_times.get)
 
-                # Pre-load track data before tabs so it's available for the PIP
-                if "loaded_track_json" not in st.session_state:
-                    _preload_tracks = _fetch_track_list()
-                    if _preload_tracks:
-                        _first = _preload_tracks[0]
-                        _preloaded = _download_track_json(_first)
-                        if _preloaded and _preloaded.get("points"):
-                            st.session_state["loaded_track_json"] = _preloaded
-
                 main_tab_tele, main_tab_setup, main_tab_ai, main_tab_track = st.tabs(
                     ["📊 Telemetría", "🔧 Setup", "🤖 Análisis AI", "🏁 Pista 3D"]
                 )
 
                 with main_tab_tele:
+                    # Track selector (inline, right here in Telemetría)
+                    _all_tracks = _fetch_track_list()
+                    if _all_tracks:
+                        _track_names = ["(ninguna)"] + [t.get("name", "?") for t in _all_tracks]
+                        # Restore selection from query param (survives page reload)
+                        _saved_track = st.query_params.get("track")
+                        _current_track = st.session_state.get("loaded_track_json")
+                        _current_name = _current_track.get("name") if _current_track else (_saved_track or "(ninguna)")
+                        _default_idx = _track_names.index(_current_name) if _current_name in _track_names else 0
+                        _selected = st.selectbox(
+                            "🏁 Pista 3D",
+                            _track_names,
+                            index=_default_idx,
+                            key="inline_track_selector",
+                        )
+                        if _selected != "(ninguna)":
+                            _entry = next((t for t in _all_tracks if t.get("name") == _selected), None)
+                            if _entry:
+                                _tj = _download_track_json(_entry)
+                                if _tj and _tj.get("points"):
+                                    st.session_state["loaded_track_json"] = _tj
+                                    st.query_params["track"] = _selected
+                        elif _selected == "(ninguna)" and "track" in st.query_params:
+                            del st.query_params["track"]
+
                     # Formatear tiempos de vuelta
                     def _fmt_lap_time(seconds):
                         m = int(seconds // 60)
