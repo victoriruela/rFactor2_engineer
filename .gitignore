@@ -220,3 +220,6 @@ data/
 # Generated files
 * - * - * - *.mat
 * - * - * - *.svm
+
+# Generated track data (output of scripts/generate_track_data.py)
+tracks/*.json
