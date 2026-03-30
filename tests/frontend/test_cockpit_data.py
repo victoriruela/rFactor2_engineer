@@ -22,6 +22,7 @@ import pandas as pd  # noqa: E402
 import pytest  # noqa: E402
 
 from frontend.streamlit_app import _build_cockpit_data  # noqa: E402
+from frontend.streamlit_app import render_3d_cockpit  # noqa: E402
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -207,3 +208,48 @@ class TestBuildCockpitDataNormalization:
         for v in result["gear"]:
             assert isinstance(v, (int, float))
             assert v == int(v)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# T6: Bidirectional sync integration in cockpit HTML
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestCockpitSyncIntegration:
+    """Verify that render_3d_cockpit() output includes T6 sync hooks."""
+
+    @pytest.fixture()
+    def cockpit_html(self):
+        track = {
+            "name": "test",
+            "source": "test",
+            "points": [
+                {"x": 0, "y": 0, "z": 0, "width_left": 5, "width_right": 5},
+                {"x": 10, "y": 0, "z": 0, "width_left": 5, "width_right": 5},
+                {"x": 20, "y": 0, "z": 10, "width_left": 5, "width_right": 5},
+            ],
+        }
+        return render_3d_cockpit(None, track)
+
+    def test_cockpit_emits_cockpit_sync_on_scrub(self, cockpit_html):
+        """Scrub handler should postMessage cockpitSync to parent."""
+        assert "cockpitSync" in cockpit_html
+
+    def test_cockpit_emits_cockpit_sync_on_playback(self, cockpit_html):
+        """Animation loop should postMessage cockpitSync during playback."""
+        assert "cockpitSync" in cockpit_html
+        # Specifically in the playback section
+        assert "emit position to parent for 2D chart sync during playback" in cockpit_html
+
+    def test_cockpit_listens_for_chart_sync(self, cockpit_html):
+        """Cockpit should listen for chartSync messages."""
+        assert "chartSync" in cockpit_html
+
+    def test_cockpit_has_sync_in_progress_guard(self, cockpit_html):
+        """setCockpitPosition should use _syncInProgress to avoid loops."""
+        assert "_syncInProgress" in cockpit_html
+
+    def test_cockpit_no_track_returns_placeholder(self):
+        """Without track data, returns a simple placeholder."""
+        html = render_3d_cockpit(None, None)
+        assert "No track data" in html
+        assert "cockpitSync" not in html

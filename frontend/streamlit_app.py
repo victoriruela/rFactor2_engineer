@@ -1320,16 +1320,31 @@ scrub.addEventListener('input', () => {{
   currentDist = (parseFloat(scrub.value) / 1000) * maxDist;
   updateCamera(currentDist);
   updateHUD(currentDist);
+  // T6: emit position to parent for 2D chart sync
+  if (!window._syncInProgress) {{
+    window.parent.postMessage({{type: 'cockpitSync', lapDistance: currentDist}}, '*');
+  }}
 }});
 
 // External API for T6 sync
 window.setCockpitPosition = function(lapDistance) {{
+  window._syncInProgress = true;
   currentDist = Math.max(0, Math.min(lapDistance, maxDist));
   scrub.value = Math.round((currentDist / maxDist) * 1000);
   distLbl.textContent = Math.round(currentDist) + ' m';
   updateCamera(currentDist);
   updateHUD(currentDist);
 }};
+
+  window._syncInProgress = false;
+}};
+
+// T6: Listen for sync messages from 2D charts (via parent postMessage)
+window.addEventListener('message', function(evt) {{
+  if (evt.data && evt.data.type === 'chartSync' && typeof evt.data.lapDistance === 'number') {{
+    window.setCockpitPosition(evt.data.lapDistance);
+  }}
+}});
 
 // ─── Animation loop ──────────────────────────────────────────────────
 function animate(time) {{
@@ -1354,6 +1369,8 @@ function animate(time) {{
 
     scrub.value = Math.round((currentDist / maxDist) * 1000);
     distLbl.textContent = Math.round(currentDist) + ' m';
+    // T6: emit position to parent for 2D chart sync during playback
+    window.parent.postMessage({{type: 'cockpitSync', lapDistance: currentDist}}, '*');
   }}
 
   updateCamera(currentDist);
@@ -1486,6 +1503,7 @@ def plot_all_laps_interactive(all_lap_figs, laps, lap_options, fastest_lap):
         let pendingX = null;
         let rafId = null;
         let lastX = 0;
+        let _syncInProgress = false;
 
         // Build lap sidebar buttons
         const sidebar = document.getElementById('lap-sidebar');
@@ -1815,6 +1833,13 @@ def plot_all_laps_interactive(all_lap_figs, laps, lap_options, fastest_lap):
                     y: [[posLat]]
                 }}, [2]);
             }}
+
+            // T6: forward position to 3D cockpit iframe(s) via parent
+            if (!_syncInProgress) {{
+                try {{
+                    window.parent.postMessage({{type: 'chartSync', lapDistance: x}}, '*');
+                }} catch(e) {{}}
+            }}
         }}
         // Keep lap sidebar visible by tracking parent scroll
         function updateSidebarPosition() {{
@@ -1850,6 +1875,15 @@ def plot_all_laps_interactive(all_lap_figs, laps, lap_options, fastest_lap):
             }}
         }} catch(e) {{}}
         setInterval(updateSidebarPosition, 100);
+
+        // T6: Listen for cockpitSync messages from the 3D cockpit iframe
+        window.addEventListener('message', function(evt) {{
+            if (evt.data && evt.data.type === 'cockpitSync' && typeof evt.data.lapDistance === 'number') {{
+                _syncInProgress = true;
+                sync(evt.data.lapDistance);
+                _syncInProgress = false;
+            }}
+        }});
     </script>
     """
     import streamlit.components.v1 as components
@@ -1860,6 +1894,31 @@ def plot_all_laps_interactive(all_lap_figs, laps, lap_options, fastest_lap):
     </style>
     """, unsafe_allow_html=True)
     components.html(html_code, height=total_height, scrolling=False)
+
+    # T6: Inject parent-level message relay for bidirectional 3D/2D sync.
+    # Both cockpit and charts live in separate iframes. When one posts a
+    # message to the parent, this relay forwards it to all sibling iframes.
+    st.markdown("""
+    <script>
+    (function() {
+        if (window._t6SyncRelayInstalled) return;
+        window._t6SyncRelayInstalled = true;
+        window.addEventListener('message', function(evt) {
+            if (!evt.data || !evt.data.type) return;
+            if (evt.data.type !== 'cockpitSync' && evt.data.type !== 'chartSync') return;
+            // Relay to all iframes except the sender
+            var iframes = document.querySelectorAll('iframe');
+            for (var i = 0; i < iframes.length; i++) {
+                try {
+                    if (iframes[i].contentWindow !== evt.source) {
+                        iframes[i].contentWindow.postMessage(evt.data, '*');
+                    }
+                } catch(e) {}
+            }
+        });
+    })();
+    </script>
+    """, unsafe_allow_html=True)
 
 
 def parse_svm_content(file_path):
