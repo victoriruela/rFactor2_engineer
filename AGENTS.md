@@ -48,17 +48,22 @@ rFactor2_engineer/
 │   └── core/
 │       ├── ai_agents.py           # AIAngineer class, prompts, LLM orchestration
 │       ├── telemetry_parser.py    # .mat, .csv, .svm parsers
+│       ├── track_parser.py        # .aiw (AI Waypoint) parser; extracts track centreline
 │       ├── param_mapping.json     # Internal→friendly name translation (116 entries)
 │       └── fixed_params.json      # Parameters locked from AI modification (28 entries)
 ├── frontend/
-│   └── streamlit_app.py           # Streamlit UI; chunked uploader; session isolation
+│   ├── streamlit_app.py           # Streamlit UI; chunked uploader; session isolation
+│   └── js/
+│       ├── aiw_parser.js          # Client-side AIW parser (inlined into drop zone component)
+│       └── mas_extractor.js       # Client-side MAS archive extractor (inlined into drop zone)
 ├── .streamlit/
 │   └── config.toml                # maxUploadSize = 20000
 ├── tests/                         # Unit + integration test suite (pytest)
 │   ├── conftest.py                # Shared fixtures (DataFrames, SVM content, setup dicts)
 │   ├── core/
 │   │   ├── test_telemetry_parser.py  # CSV, SVM, .mat parsing; _filter_incomplete_laps
-│   │   └── test_ai_agents.py         # Pure functions + AIAngineer unit tests (mocked LLM)
+│   │   ├── test_ai_agents.py         # Pure functions + AIAngineer unit tests (mocked LLM)
+│   │   └── test_track_parser.py      # AIW parser unit tests
 │   ├── frontend/
 │   │   └── test_upload_temp_files.py # Chunked upload helper functions
 │   ├── integration/
@@ -199,6 +204,10 @@ Returns available Ollama models via `GET /api/tags` on Ollama.
 #### `POST /cleanup`
 Deletes the current client session's telemetry/setup files and in-progress chunk files from
 `data/<client_session_id>/`. Removes empty directories.
+
+#### `POST /tracks/parse-aiw`
+Accepts `{"aiw_text": "<raw AIW content>"}`. Returns parsed track data with `track_name`,
+`points` (list of `{x, y, z}`), and `point_count`. Returns 422 if no waypoints found.
 
 ## AI Agent Pipeline
 

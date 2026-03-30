@@ -391,3 +391,25 @@ class TestAnalyze:
         assert not svm_path.exists()
 
 
+# ---------------------------------------------------------------------------
+# POST /tracks/parse-aiw
+# ---------------------------------------------------------------------------
+
+class TestParseAIWEndpoint:
+    def test_valid_aiw_text(self):
+        aiw = "trackName = Monza\n[Waypoint]\npos=(1.0, 2.0, 3.0)\npos=(4.0, 5.0, 6.0)\n"
+        r = client.post("/tracks/parse-aiw", json={"aiw_text": aiw})
+        assert r.status_code == 200
+        data = r.json()
+        assert data["track_name"] == "Monza"
+        assert data["point_count"] == 2
+        assert len(data["points"]) == 2
+
+    def test_empty_aiw_returns_422(self):
+        r = client.post("/tracks/parse-aiw", json={"aiw_text": "no waypoints here"})
+        assert r.status_code == 422
+
+    def test_missing_body(self):
+        r = client.post("/tracks/parse-aiw", json={})
+        assert r.status_code == 422
+
