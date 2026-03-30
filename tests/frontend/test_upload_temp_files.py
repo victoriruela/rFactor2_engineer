@@ -1,7 +1,7 @@
 import io
 import sys
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 from unittest.mock import sentinel
 
 import pytest
@@ -143,3 +143,58 @@ def test_post_analysis_with_local_files_raises_if_missing_files(mocker):
 
     with pytest.raises(FileNotFoundError):
         streamlit_app._post_analysis_with_local_files({})
+
+
+# ---------------------------------------------------------------------------
+# download_session_file
+# ---------------------------------------------------------------------------
+
+
+def test_download_session_file_writes_streamed_bytes(tmp_path):
+    """download_session_file streams backend response and writes it to disk."""
+    from frontend import api_client
+
+    content = b"mat-binary-content" * 500
+
+    mock_resp = MagicMock()
+    mock_resp.__enter__ = lambda s: s
+    mock_resp.__exit__ = lambda *a: False
+    mock_resp.raise_for_status = MagicMock()
+    mock_resp.iter_content = MagicMock(return_value=iter([content]))
+
+    target = tmp_path / "session.mat"
+    with patch("frontend.api_client.requests.get", return_value=mock_resp) as mock_get:
+        api_client.download_session_file(
+            "http://backend:8000",
+            "abc123session",
+            "session.mat",
+            str(target),
+        )
+
+    mock_get.assert_called_once()
+    call_url = mock_get.call_args[0][0]
+    assert "/sessions/abc123session/file/session.mat" in call_url
+    assert target.read_bytes() == content
+
+
+def test_download_session_file_passes_session_header(tmp_path):
+    """download_session_file includes X-Client-Session-Id header."""
+    from frontend import api_client
+
+    mock_resp = MagicMock()
+    mock_resp.__enter__ = lambda s: s
+    mock_resp.__exit__ = lambda *a: False
+    mock_resp.raise_for_status = MagicMock()
+    mock_resp.iter_content = MagicMock(return_value=iter([b"data"]))
+
+    target = tmp_path / "out.mat"
+    with patch("frontend.api_client.requests.get", return_value=mock_resp) as mock_get:
+        api_client.download_session_file(
+            "http://backend:8000",
+            "my-session-id",
+            "out.mat",
+            str(target),
+        )
+
+    headers = mock_get.call_args[1]["headers"]
+    assert headers.get("X-Client-Session-Id") == "my-session-id"

@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      padding: 6px 0;
+      background: transparent;
+      font-family: "Source Sans Pro", sans-serif;
+      font-size: 14px;
+      color: #fafafa;
+    }
+    #drop-zone {
+      border: 1px dashed rgba(255,255,255,0.25);
+      border-radius: 4px;
+      padding: 16px 12px;
+      text-align: center;
+      cursor: pointer;
+      background: rgba(255,255,255,0.03);
+      transition: border-color 0.2s, background 0.2s;
+      user-select: none;
+    }
+    #drop-zone.hovering {
+      border-color: rgba(255,255,255,0.5);
+      background: rgba(255,255,255,0.07);
+    }
+    #drop-zone.done {
+      border-color: #21c354;
+    }
+    #drop-zone.error-state {
+      border-color: #ff4b4b;
+    }
+    #label {
+      color: rgba(250,250,250,0.6);
+      font-size: 13px;
+      margin: 0 0 6px 0;
+    }
+    #browse-btn {
+      display: inline-block;
+      padding: 4px 14px;
+      border: 1px solid rgba(250,250,250,0.2);
+      border-radius: 4px;
+      font-size: 13px;
+      cursor: pointer;
+      background: rgba(255,255,255,0.06);
+      color: #fafafa;
+      margin-top: 4px;
+    }
+    #browse-btn:hover { background: rgba(255,255,255,0.12); }
+    #filename-row {
+      display: none;
+      align-items: center;
+      gap: 6px;
+      margin-top: 6px;
+      font-size: 13px;
+      color: #fafafa;
+      word-break: break-all;
+    }
+    #filename-row .ic { font-size: 16px; }
+    #progress-wrap {
+      display: none;
+      margin-top: 10px;
+    }
+    progress {
+      width: 100%;
+      height: 6px;
+      border-radius: 3px;
+      appearance: none;
+      -webkit-appearance: none;
+      background: rgba(255,255,255,0.1);
+    }
+    progress::-webkit-progress-bar  { background: rgba(255,255,255,0.1); border-radius: 3px; }
+    progress::-webkit-progress-value { background: #21c354; border-radius: 3px; }
+    progress::-moz-progress-bar     { background: #21c354; border-radius: 3px; }
+    #status-msg {
+      font-size: 12px;
+      margin-top: 4px;
+      color: rgba(250,250,250,0.55);
+    }
+    #status-msg.ok  { color: #21c354; }
+    #status-msg.err { color: #ff4b4b; }
+  </style>
+</head>
+<body>
+  <div id="drop-zone">
+    <p id="label">Arrastra tu archivo aquí</p>
+    <div id="browse-btn">Seleccionar archivo</div>
+    <input type="file" id="file-input" style="display:none">
+    <div id="filename-row"><span class="ic">📄</span><span id="filename-text"></span></div>
+  </div>
+  <div id="progress-wrap">
+    <progress id="pgbar" value="0" max="100"></progress>
+    <div id="status-msg"></div>
+  </div>
+
+  <script>
+    /* ------------------------------------------------------------------ *
+     * Streamlit bi-directional component protocol
+     * ------------------------------------------------------------------ */
+    let _props = {};
+    let _uploadResult = null;   // {filename, upload_id, bytes_received}
+
+    function _sendReady() {
+      window.parent.postMessage(
+        { isStreamlitMessage: true, type: "streamlit:componentReady", apiVersion: 1 },
+        "*"
+      );
+    }
+
+    function _sendValue(value) {
+      window.parent.postMessage(
+        { isStreamlitMessage: true, type: "streamlit:setComponentValue", value: value },
+        "*"
+      );
+    }
+
+    window.addEventListener("message", function (evt) {
+      if (!evt.data || evt.data.type !== "streamlit:render") return;
+      _props = evt.data.args || {};
+
+      // Update label / accepted types from props
+      if (_props.label) document.getElementById("label").textContent = _props.label;
+      if (_props.file_types) {
+        document.getElementById("file-input").accept =
+          _props.file_types.map(function (t) { return "." + t; }).join(",");
+      }
+
+      // Restore previously uploaded file state on re-render
+      if (_uploadResult) {
+        _showDone(_uploadResult.filename);
+      }
+    });
+
+    _sendReady();
+
+    /* ------------------------------------------------------------------ *
+     * UI interactions
+     * ------------------------------------------------------------------ */
+    var dropZone  = document.getElementById("drop-zone");
+    var fileInput = document.getElementById("file-input");
+
+    dropZone.addEventListener("click", function (e) {
+      if (e.target !== document.getElementById("browse-btn") && e.target.closest("#browse-btn") === null) return;
+      fileInput.click();
+    });
+    document.getElementById("browse-btn").addEventListener("click", function (e) {
+      e.stopPropagation();
+      fileInput.click();
+    });
+    dropZone.addEventListener("dragover", function (e) {
+      e.preventDefault();
+      dropZone.classList.add("hovering");
+    });
+    dropZone.addEventListener("dragleave", function () {
+      dropZone.classList.remove("hovering");
+    });
+    dropZone.addEventListener("drop", function (e) {
+      e.preventDefault();
+      dropZone.classList.remove("hovering");
+      if (e.dataTransfer.files.length > 0) _handleFile(e.dataTransfer.files[0]);
+    });
+    fileInput.addEventListener("change", function () {
+      if (this.files.length > 0) _handleFile(this.files[0]);
+    });
+
+    /* ------------------------------------------------------------------ *
+     * Chunked upload logic
+     * ------------------------------------------------------------------ */
+    async function _handleFile(file) {
+      var chunkSize  = (_props.chunk_size  || 0) > 0 ? _props.chunk_size  : 16 * 1024 * 1024;
+      var baseUrl    = _props.browser_api_base_url || "";
+      var sessionId  = _props.client_session_id   || "";
+
+      _setStatus("", false);
+      _showProgress(true);
+      document.getElementById("pgbar").value = 0;
+      dropZone.className = "";
+
+      // --- 1. Init ---------------------------------------------------------
+      _setStatus("Iniciando subida…");
+      var initResp;
+      try {
+        initResp = await fetch(baseUrl + "/uploads/init", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "X-Client-Session-Id": sessionId },
+          credentials: "include",
+          body: JSON.stringify({ filename: file.name }),
+        });
+      } catch (err) {
+        return _showError("Error de red al iniciar: " + err.message);
+      }
+      if (!initResp.ok) return _showError("Error al iniciar subida (" + initResp.status + ")");
+      var initData = await initResp.json();
+      var uploadId = initData.upload_id;
+      var serverChunkSize = initData.chunk_size || chunkSize;
+
+      // --- 2. Upload chunks ------------------------------------------------
+      var totalChunks = Math.ceil(file.size / serverChunkSize);
+      for (var i = 0; i < totalChunks; i++) {
+        var start = i * serverChunkSize;
+        var chunk = file.slice(start, start + serverChunkSize);
+        document.getElementById("pgbar").value = Math.round((i / totalChunks) * 95);
+        _setStatus("Subiendo… " + (i + 1) + " / " + totalChunks + " fragmentos");
+        var chunkResp;
+        try {
+          chunkResp = await fetch(
+            baseUrl + "/uploads/" + uploadId + "/chunk?chunk_index=" + i,
+            {
+              method: "PUT",
+              headers: { "Content-Type": "application/octet-stream", "X-Client-Session-Id": sessionId },
+              credentials: "include",
+              body: chunk,
+            }
+          );
+        } catch (err) {
+          return _showError("Error de red en fragmento " + i + ": " + err.message);
+        }
+        if (!chunkResp.ok) return _showError("Error en fragmento " + i + " (" + chunkResp.status + ")");
+      }
+
+      // --- 3. Complete -----------------------------------------------------
+      _setStatus("Finalizando…");
+      var complResp;
+      try {
+        complResp = await fetch(baseUrl + "/uploads/" + uploadId + "/complete", {
+          method: "POST",
+          headers: { "X-Client-Session-Id": sessionId },
+          credentials: "include",
+        });
+      } catch (err) {
+        return _showError("Error al finalizar: " + err.message);
+      }
+      if (!complResp.ok) return _showError("Error al finalizar (" + complResp.status + ")");
+      var complData = await complResp.json();
+
+      document.getElementById("pgbar").value = 100;
+      _uploadResult = {
+        filename: file.name,
+        upload_id: uploadId,
+        bytes_received: complData.bytes_received || file.size,
+      };
+      _showDone(file.name);
+      _sendValue(_uploadResult);
+    }
+
+    /* ------------------------------------------------------------------ *
+     * UI helpers
+     * ------------------------------------------------------------------ */
+    function _showProgress(visible) {
+      document.getElementById("progress-wrap").style.display = visible ? "block" : "none";
+    }
+
+    function _setStatus(msg, isErr) {
+      var el = document.getElementById("status-msg");
+      el.textContent = msg;
+      el.className = isErr ? "err" : "";
+    }
+
+    function _showDone(filename) {
+      dropZone.classList.remove("hovering", "error-state");
+      dropZone.classList.add("done");
+      document.getElementById("filename-row").style.display = "flex";
+      document.getElementById("filename-text").textContent = filename;
+      _showProgress(false);
+    }
+
+    function _showError(msg) {
+      dropZone.classList.add("error-state");
+      _setStatus(msg, true);
+      _showProgress(false);
+    }
+  </script>
+</body>
+</html>

@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import os
+import tempfile
 
 import streamlit as st
 
 from frontend import api_client, session_manager
 from frontend.components import browser_hooks
+from frontend.components.chunked_uploader import chunked_uploader
 from frontend.config import (
     API_BASE_URL,
     BROWSER_API_BASE_URL,
@@ -47,28 +49,65 @@ def render_sidebar() -> dict:
 
         if not st.session_state["selected_session_name"]:
             st.caption("Modo efímero: los datos se mantienen solo durante esta sesión de navegador.")
-            telemetry_file = st.file_uploader(
-                "Archivo de telemetría (.mat/.csv)", type=["mat", "csv"], key="telemetry_upload"
+
+            # Telemetry: chunked JS uploader (handles files > 100 MB through Cloudflare)
+            client_session_id = st.session_state.get("client_session_id", "")
+            tele_result = chunked_uploader(
+                label="Arrastra el archivo de telemetría (.mat/.csv) aquí o pulsa Seleccionar",
+                browser_api_base_url=BROWSER_API_BASE_URL,
+                client_session_id=client_session_id,
+                chunk_size=UPLOAD_CHUNK_SIZE,
+                file_types=["mat", "csv"],
+                height=120,
+                key="chunked_tele_upload",
             )
+            # Persist the component result in session_state so it survives reruns
+            if tele_result:
+                st.session_state["_chunked_tele_result"] = tele_result
+
             svm_file = st.file_uploader("Archivo setup (.svm)", type=["svm"], key="svm_upload")
+
+            tele_ready = bool(st.session_state.get("_chunked_tele_result"))
+            if tele_ready:
+                fn = st.session_state["_chunked_tele_result"]["filename"]
+                st.caption(f"📄 {fn}")
 
             if st.button(
                 "Cargar sesión local",
                 use_container_width=True,
-                disabled=not (telemetry_file and svm_file),
+                disabled=not (tele_ready and svm_file),
             ):
                 try:
                     session_manager.cleanup_temp_session_files(st.session_state)
-                    persisted = session_manager.persist_uploaded_session(
-                        telemetry_file,
-                        svm_file,
-                        temp_upload_root=TEMP_UPLOAD_ROOT,
-                        chunk_size=UPLOAD_CHUNK_SIZE,
-                    )
-                    st.session_state.update(persisted)
-                    st.session_state["selected_session_name"] = os.path.splitext(
-                        persisted.get("tele_name", "sesion")
-                    )[0]
+                    tele_info = st.session_state.pop("_chunked_tele_result")
+
+                    # Download the telemetry file from backend temporary storage
+                    # (it was already uploaded there by the browser JS chunked uploader).
+                    temp_root = session_manager.ensure_temp_upload_root(TEMP_UPLOAD_ROOT)
+                    session_dir = tempfile.mkdtemp(prefix="rf2-session-", dir=temp_root)
+                    tele_name = os.path.basename(tele_info["filename"])
+                    svm_name  = os.path.basename(svm_file.name)
+                    tele_path = os.path.join(session_dir, tele_name)
+                    svm_path  = os.path.join(session_dir, svm_name)
+
+                    with st.spinner("Descargando archivo de telemetría del servidor…"):
+                        api_client.download_session_file(
+                            API_BASE_URL,
+                            client_session_id,
+                            tele_name,
+                            tele_path,
+                        )
+
+                    session_manager.write_uploaded_file_in_chunks(svm_file, svm_path, UPLOAD_CHUNK_SIZE)
+
+                    st.session_state.update({
+                        "temp_upload_dir": session_dir,
+                        "telemetry_temp_path": tele_path,
+                        "svm_temp_path": svm_path,
+                        "tele_name": tele_name,
+                        "svm_name": svm_name,
+                    })
+                    st.session_state["selected_session_name"] = os.path.splitext(tele_name)[0]
                     st.success("Archivos cargados en memoria local de sesión")
                 except Exception as exc:
                     st.error(f"No se pudo cargar la sesión local: {exc}")

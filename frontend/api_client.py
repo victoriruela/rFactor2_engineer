@@ -53,3 +53,25 @@ def post_analyze_with_files(
         headers=headers_for_session(session_id),
         timeout=timeout,
     )
+
+
+def download_session_file(
+    api_base_url: str,
+    session_id: str,
+    filename: str,
+    target_path: str,
+    chunk_bytes: int = 4 * 1024 * 1024,
+    timeout: int = 300,
+) -> None:
+    """Download a stored session file from the backend and save it locally.
+
+    Uses streaming to avoid loading the full file into memory at once.
+    The file is downloaded from ``GET /sessions/{session_id}/file/{filename}``.
+    """
+    url = f"{api_base_url}/sessions/{session_id}/file/{filename}"
+    with requests.get(url, headers=headers_for_session(session_id), stream=True, timeout=timeout) as resp:
+        resp.raise_for_status()
+        with open(target_path, "wb") as f:
+            for chunk in resp.iter_content(chunk_size=chunk_bytes):
+                if chunk:
+                    f.write(chunk)
