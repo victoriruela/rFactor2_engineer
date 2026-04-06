@@ -220,3 +220,7 @@ data/
 # Generated files
 * - * - * - *.mat
 * - * - * - *.svm
+
+# Go build artifacts
+rfactor2-engineer-*
+services/backend_go/rfactor2-engineer*
