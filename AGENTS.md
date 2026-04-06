@@ -22,254 +22,249 @@ Complete context for any AI agent working on this project. Read this file first 
 > **DOCUMENTATION MAINTENANCE MANDATE — MANDATORY FOR ALL AGENTS**
 >
 > Any agent that modifies **implementation** (API endpoints, data pipeline, AI agents, parsers, tests)
-> or **infrastructure / deployment** (Docker, Nginx, GCP scripts, release flow, environment variables)
+> or **infrastructure / deployment** (Nginx, GCP scripts, release flow, environment variables)
 > **must** update this file in the same commit that introduces the change. Sections to keep current:
 > - `File Map` — add / rename / remove entries when files change
 > - `API Endpoints` — reflect any new, changed, or removed route
 > - `GCP Deployment` — reflect any change to topology, scripts, credentials, or release procedure
-> - `Development Environment` — reflect changes to test commands or Docker services
+> - `Development Environment` — reflect changes to test commands or build steps
 > - `Architecture` / `Data Flow` — reflect structural changes to the pipeline
 >
-> Stale documentation is treated as a bug. The pre-commit hook does not enforce this automatically,
-> so agents are the last line of defence.
+> Stale documentation is treated as a bug.
 
 ## Project Summary
 
 rFactor2 Engineer analyzes sim-racing telemetry (MoTeC `.mat`/`.csv`) and vehicle setup files (`.svm`) using a multi-agent LLM pipeline to produce driving technique feedback and setup change recommendations. All output is in Spanish (Castellano).
+
+**Technology stack**: Go backend (Gin) + Expo web frontend (React Native Web) embedded via `go:embed`. Deployed as a single Linux amd64 binary.
 
 ## Architecture
 
 ```
 User (Browser)
     |
-Streamlit Frontend (:8501)        ← frontend/streamlit_app.py
-    |  HTTP calls to localhost:8000
-FastAPI API Layer (:8000)         ← app/main.py + app/api/schemas.py
+Expo Web Frontend (embedded)       ← apps/expo_app/ (served via go:embed at /)
+    |  HTTP calls to /api/*
+Go API Layer (Gin, :8080)          ← services/backend_go/
     |
-  ├── Service Layer             ← app/services/
-  │     session_service.py, upload_service.py, analysis_service.py
+  ├── Handlers                   ← services/backend_go/internal/handlers/
+  │     upload.go, session.go, analysis.go, models.go, tracks.go
     |
-  ├── Core Parsing              ← app/core/telemetry_parser.py
-  │     parse_mat_file(), parse_csv_file(), parse_svm_file()
+  ├── Parsers                    ← services/backend_go/internal/parsers/
+  │     mat.go, csv.go, svm.go
   |
-  └── AI Agent Pipeline         ← app/core/ai_agents.py (class AIAngineer)
-          |  LangChain → ChatOllama
+  ├── AI Agent Pipeline          ← services/backend_go/internal/agents/
+  │     pipeline.go, translator.go, driving.go, specialist.go, chief.go
+  |
+  └── Ollama HTTP Client         ← services/backend_go/internal/ollama/
+          client.go (direct HTTP, no LangChain)
+          |
           Ollama LLM Server (:11434)
 ```
 
-**Startup sequence**: Backend (`uvicorn app.main:app --reload`) + Frontend (`streamlit run frontend/streamlit_app.py`). Ollama is auto-started by the backend on first analysis if not running.
+**Startup**: `go run ./services/backend_go/cmd/server` starts the Gin server on `:8080`, serves the embedded Expo web build at `/` and the API at `/api/*`. Ollama is auto-started on first analysis if not running.
+
+**Build**: `go build -o rfactor2-engineer ./services/backend_go/cmd/server` produces a single Linux binary. The Expo web build is embedded via `go:embed` directive pointing to `apps/expo_app/dist/`.
 
 ## File Map
 
 ```
 rFactor2_engineer/
-├── app/
-│   ├── main.py                    # FastAPI API layer; lightweight endpoint orchestration
-│   ├── AGENTS.md                  # Backend layer guidance
-│   ├── api/
-│   │   ├── __init__.py
-│   │   └── schemas.py             # Pydantic request/response schemas
-│   ├── config/
-│   │   ├── __init__.py
-│   │   ├── AGENTS.md              # Config-layer guidance
-│   │   └── settings.py            # Centralized runtime settings/constants
+├── services/backend_go/
+│   ├── cmd/
+│   │   └── server/
+│   │       └── main.go              # Entry point: Gin setup, routes, go:embed, graceful shutdown
+│   ├── internal/
+│   │   ├── handlers/
+│   │   │   ├── upload.go            # Chunked upload: init, chunk, complete
+│   │   │   ├── session.go           # Session listing, file download, cleanup
+│   │   │   ├── analysis.go          # /api/analyze, /api/analyze_session
+│   │   │   ├── models.go            # /api/models (proxy to Ollama /api/tags)
+│   │   │   └── tracks.go            # /api/tracks (known circuit metadata)
+│   │   ├── parsers/
+│   │   │   ├── mat.go               # MATLAB Level 5 .mat parser (pure Go, no CGo)
+│   │   │   ├── csv.go               # MoTeC CSV parser (14-line header skip, data from line 17)
+│   │   │   ├── svm.go               # rFactor2 .svm INI-like parser (UTF-16/UTF-8 fallback)
+│   │   │   ├── gps.go               # GPS smoothing (1.5×std outlier, 11-sample rolling window)
+│   │   │   └── laps.go              # Lap filtering (exclude lap 0, exclude >110% median)
+│   │   ├── agents/
+│   │   │   ├── pipeline.go          # Orchestrates the 4-agent analysis pipeline
+│   │   │   ├── translator.go        # Translation Agent: new param names → Spanish
+│   │   │   ├── driving.go           # Driving Analysis Agent
+│   │   │   ├── specialist.go        # Section Specialist Agents (concurrent goroutines)
+│   │   │   ├── chief.go             # Chief Engineer Agent: consolidation + axle symmetry
+│   │   │   └── prompts.go           # All LLM prompt templates
+│   │   ├── ollama/
+│   │   │   └── client.go            # HTTP client for Ollama API (generate, tags, health)
+│   │   ├── domain/
+│   │   │   ├── telemetry.go         # Telemetry data structures
+│   │   │   ├── setup.go             # Setup data structures (sections, params, fixed params)
+│   │   │   └── analysis.go          # Analysis request/response types
+│   │   ├── config/
+│   │   │   └── config.go            # Runtime settings from env vars
+│   │   └── middleware/
+│   │       ├── session.go           # X-Client-Session-Id header/cookie resolution
+│   │       └── cors.go              # CORS configuration
+│   ├── data/
+│   │   └── param_mapping.json       # Internal→friendly name translation (116 entries)
+│   │   └── fixed_params.json        # Parameters locked from AI modification (28 entries)
+│   ├── go.mod
+│   ├── go.sum
+│   ├── AGENTS.md                    # Backend-specific agent guidance
+│   ├── SUBAGENT.md
+│   ├── SUPERVISOR.md
+│   ├── ROADMAP.md
+│   └── README.md
+├── apps/expo_app/
+│   ├── app/
+│   │   ├── _layout.tsx              # Root layout (React Navigation)
+│   │   ├── index.tsx                # Home / session list screen
+│   │   ├── upload.tsx               # File upload screen (chunked)
+│   │   ├── analysis.tsx             # Analysis results screen
+│   │   └── tracks.tsx               # Track gallery screen
+│   ├── components/
+│   │   ├── CircuitMap.tsx           # SVG circuit map with issue markers
+│   │   ├── SetupTable.tsx           # Setup recommendations table with change %
+│   │   ├── DrivingAnalysis.tsx      # Driving feedback card
+│   │   ├── FileUploader.tsx         # Chunked upload component
+│   │   └── ModelSelector.tsx        # Ollama model dropdown
 │   ├── services/
-│   │   ├── __init__.py
-│   │   ├── AGENTS.md              # Service-layer contracts and rules
-│   │   ├── session_service.py     # Session id handling, listing, cleanup
-│   │   ├── upload_service.py      # Chunked upload orchestration
-│   │   └── analysis_service.py    # Telemetry + setup + AI orchestration
-│   └── core/
-│       ├── ai_agents.py           # AIAngineer class only; re-exports helpers from llm_utils
-│       ├── ai_prompts.py          # LLM prompt template strings (DRIVING, SECTION, CHIEF, TRANSLATOR)
-│       ├── llm_utils.py           # LLM constants, _ensure_ollama_running, list_available_models, numeric helpers
-│       ├── telemetry_parser.py    # .mat, .csv, .svm parsers
-│       ├── param_mapping.json     # Internal→friendly name translation (116 entries)
-│       └── fixed_params.json      # Parameters locked from AI modification (28 entries)
-├── frontend/
-│   ├── AGENTS.md                  # Frontend-layer guidance
-│   ├── streamlit_app.py           # Streamlit UI orchestrator (~120 lines); delegates to views/
-│   ├── config.py                  # Frontend runtime constants (URLs, timeouts, paths)
-│   ├── api_client.py              # Frontend HTTP wrapper for backend endpoints
-│   ├── session_manager.py         # Session-local temp file lifecycle and validation helpers
-│   ├── setup_parser.py            # Frontend helper for setup file parsing/reuse
-│   ├── telemetry_processing.py    # Frontend telemetry prep (MAT load, lap filtering, channel extraction)
-│   ├── views/
-│   │   ├── __init__.py
-│   │   ├── sidebar_view.py        # Sidebar UI: file upload, ephemeral session controls
-│   │   ├── setup_view.py          # Setup tab: fixed-params editor backed by .svm file
-│   │   ├── telemetry_view.py      # Telemetry tab: lap times + interactive charts
-│   │   └── analysis_view.py       # AI analysis tab: provider selector, trigger, results display
-│   └── components/
-│       ├── __init__.py
-│       ├── browser_hooks.py       # Browser-side unload cleanup hook injection
-│       └── telemetry_embed.py     # Plotly/JS embed renderer for interactive lap telemetry
-├── .streamlit/
-│   └── config.toml                # maxUploadSize = 20000
-├── tests/                         # Unit + integration test suite (pytest)
-│   ├── conftest.py                # Shared fixtures (DataFrames, SVM content, setup dicts)
-│   ├── core/
-│   │   ├── test_telemetry_parser.py  # CSV, SVM, .mat parsing; _filter_incomplete_laps
-│   │   └── test_ai_agents.py         # Pure functions + AIAngineer unit tests (mocked LLM)
-│   ├── frontend/
-│   │   └── test_upload_temp_files.py # Chunked upload helper functions
-│   ├── integration/
-│   │   ├── conftest.py            # Auto-skip guard if Ollama/llama3.2 unavailable
-│   │   └── test_ai_pipeline.py    # 3 tests: full AI pipeline with real LLM (opt-in)
-│   ├── test_main.py               # FastAPI endpoints: real parsers, mocked AI
-│   └── fixtures/
-│       ├── sample.csv             # 2-lap MoTeC CSV with GPS + telemetry columns
-│       └── sample.svm             # Minimal rFactor2 setup file
-├── e2e/
-│   ├── api/
-│   │   ├── conftest.py            # httpx async client, auto-skip if server offline
-│   │   └── test_endpoints.py      # Smoke tests against live backend (:8000)
-│   └── web/
-│       ├── upload_telemetry.yaml  # Maestro Web flow: file upload → telemetry tab
-│       └── ai_analysis.yaml       # Maestro Web flow: AI analysis → results visible
+│   │   └── api.ts                   # Axios HTTP client for /api/* endpoints
+│   ├── store/
+│   │   └── analysisStore.ts         # Zustand state management
+│   ├── app.json                     # Expo config
+│   ├── package.json
+│   ├── tsconfig.json
+│   ├── AGENTS.md                    # Frontend-specific agent guidance
+│   ├── SUBAGENT.md
+│   ├── SUPERVISOR.md
+│   ├── ROADMAP.md
+│   └── README.md
+├── docs/
+│   ├── asana-workflow.md            # Full Asana workflow with DoD templates
+│   ├── git-setup.md                 # Git hooks for Go/Expo
+│   ├── product-spec.md             # Complete product specification
+│   ├── openapi.yaml                 # OpenAPI 3.0 spec for all endpoints
+│   └── release_checklist.md         # QA checklist for Go binary + Expo web release
 ├── scripts/
-│   ├── release_and_deploy.ps1     # Master release orchestration (RC → tag → publish → deploy)
-│   ├── deploy_gcp.ps1             # Deploy tagged artifact to GCP host (requires -ReleaseTag)
-│   ├── run_docker_test.ps1        # Wrapper: docker compose test run with container cleanup
-│   └── cleanup_docker_test_artifacts.ps1  # Remove exited test containers/images
+│   ├── run-local-tests.ps1          # Runs go test + jest
+│   ├── setup-hooks.ps1              # Sets core.hooksPath=.githooks
+│   └── stop-local-tests.ps1         # Kills processes on ports 8080/8081
 ├── deploy/
-│   ├── docker-compose.gcp.yml     # GCP host override (loopback port binds + host-gateway)
-│   ├── nginx-rfactor2_engineer.conf  # Nginx reverse-proxy config (TLS, Basic Auth, proxy)
-│   └── .htpasswd                  # Basic Auth credentials (hashed) for host Nginx
-├── scripts/
-│   ├── release_and_deploy.ps1     # Master release orchestration (RC → tag → publish → deploy)
-│   ├── deploy_gcp.ps1             # Deploy tagged artifact to GCP host (requires -ReleaseTag)
-│   ├── run_docker_test.ps1        # Wrapper: docker compose test run with container cleanup
-│   └── cleanup_docker_test_artifacts.ps1  # Remove exited test containers/images
-├── dist/                          # Local deploy artifacts (git-archived tarballs)
-├── data/                          # Runtime: per-client session uploads (Docker-owned, not in git)
-├── models/                        # Optional: local .gguf model files
-├── pytest.ini                     # asyncio_mode=auto, testpaths=tests, markers
-├── requirements.txt               # Python runtime dependencies
-├── requirements-dev.txt           # Test dependencies (pytest, httpx, pytest-mock, etc.)
-├── AGENTS.md                      # THIS FILE — complete context for AI agents (keep current)
-├── ASANA.md                       # Asana MCP plugin docs
-├── asana-mcp-plugin.zip           # Asana MCP plugin (install to ~/.claude/asana-mcp/)
-├── CONSTANTS.md                   # Index of domain constant files
-├── SPECIFICATION.md               # Original project spec
-├── README.md                      # User-facing docs (Spanish)
-├── Dockerfile                     # Multi-stage build (backend + frontend targets)
-├── docker-compose.yml             # Container orchestration (backend, frontend, test) using host Ollama
-├── .dockerignore                  # Excludes data/, tests/, dist/, .git/ from build context
-├── GIT.md                         # Git workflow, hooks, commit conventions, linting
-├── pyproject.toml                 # Ruff linter configuration
-├── package.json                   # Node devDeps (husky + commitlint)
-├── commitlint.config.js           # Conventional commits rule config
-└── .husky/                        # Git hooks (pre-commit, commit-msg)
+│   ├── nginx-rfactor2_engineer.conf # Nginx reverse-proxy config (TLS, Basic Auth, proxy)
+│   └── .htpasswd                    # Basic Auth credentials (hashed) for host Nginx
+├── data/                            # Runtime: per-client session uploads (not in git)
+├── AGENTS.md                        # THIS FILE — complete context for AI agents (keep current)
+├── ASANA.md                         # Asana MCP plugin docs
+├── ASANA_CONSTANTS.md               # Asana GIDs and constants
+├── CONSTANTS.md                     # Index of domain constant files
+├── GIT.md                           # Git workflow, hooks, commit conventions
+├── SUPERVISOR.md                    # Root supervisor protocol
+├── SUBAGENT.md                      # Root subagent protocol
+└── README.md                        # User-facing docs (Spanish)
 ```
 
 ## Dependencies
 
+### Go Backend
+
 ```
-fastapi                    # API server
-uvicorn                    # ASGI runner
-streamlit                  # Frontend UI
-python-multipart           # File upload support for FastAPI
-pandas                     # DataFrame operations
-numpy                      # Numeric/stats
-scipy                      # .mat file parsing (scipy.io.loadmat)
-langchain>=1.2.0           # LLM framework
-langchain-core>=0.3.0      # PromptTemplate, StrOutputParser
-langchain-ollama           # ChatOllama integration
-python-dotenv              # .env loading
-plotly                     # Interactive circuit map
-matplotlib                 # Listed but unused
-requests                   # HTTP calls (Ollama API, frontend→backend)
+github.com/gin-gonic/gin          # HTTP router + middleware
+github.com/rs/zerolog              # Structured JSON logging
+modernc.org/sqlite                 # Pure-Go SQLite (session/metadata storage, optional)
+golang.org/x/text/encoding/unicode # UTF-16 decoding for .svm files
 ```
 
-**System dependency**: [Ollama](https://ollama.com/) must be installed. The app auto-starts it and auto-detects its binary on Windows (`LOCALAPPDATA/Programs/Ollama/ollama.exe`, `ProgramFiles/Ollama/ollama.exe`) and PATH.
+**System dependency**: [Ollama](https://ollama.com/) must be installed. The backend auto-starts it and auto-detects the binary on the current OS PATH.
 
-**Python**: 3.9+ (no 3.10+ syntax used).
+**Go version**: 1.22+
+
+### Expo Frontend
+
+```
+expo ~52                           # Expo SDK
+react-native-web                   # Web rendering
+@react-navigation/native           # Navigation
+axios                              # HTTP client
+zustand                            # State management
+react-native-svg                   # Circuit map SVG rendering
+```
+
+**Node version**: 20+
 
 ## Environment Variables
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
 | `OLLAMA_BASE_URL` | `http://localhost:11434` | Ollama API endpoint |
-| `OLLAMA_MODEL` | `llama3.2:latest` | Model tag passed to ChatOllama |
-| `RF2_API_URL` | `http://localhost:8000` | Backend URL used by Streamlit Python code (server-side requests) |
-| `RF2_BROWSER_API_BASE_URL` | `/api` | Base URL injected into the browser-side JS chunked uploader. `/api` in production (Nginx prefix); `http://localhost:8000` for local dev without Nginx. |
-| `RF2_PROD_URL` | *(unset)* | Production API base URL for prod-circuit E2E tests, e.g. `https://car-setup.com/api`. Not used at runtime. |
-| `RF2_PROD_BASIC_AUTH` | *(unset)* | Nginx BasicAuth credentials for prod-circuit E2E tests, format `user:password`. Not used at runtime. |
-
-Set in `.env` at project root (loaded by python-dotenv). In Docker, backend points to host Ollama via `OLLAMA_BASE_URL=http://host.docker.internal:11434`.
-For local Docker validation, the `frontend` service must set `RF2_BROWSER_API_BASE_URL=http://localhost:8000`
-so the browser talks directly to the backend; Streamlit on `:8501` does not proxy `/api` locally.
+| `OLLAMA_MODEL` | `llama3.2:latest` | Model tag for LLM calls |
+| `OLLAMA_API_KEY` | *(unset)* | Bearer token for remote/cloud Ollama |
+| `RF2_PORT` | `8080` | Gin server listen port |
+| `RF2_DATA_DIR` | `./data` | Session uploads directory |
+| `RF2_LOG_LEVEL` | `info` | zerolog level (debug, info, warn, error) |
 
 ## API Endpoints
 
-All endpoints that touch the `data/` directory are **session-scoped**: the caller's identity is
-resolved from the `X-Client-Session-Id` request header or the `rf2_session_id` cookie.
-Each client sees only its own uploads and sessions.
+All endpoints under `/api/` that touch the `data/` directory are **session-scoped**: the caller's identity is resolved from the `X-Client-Session-Id` request header or the `rf2_session_id` cookie. Each client sees only its own uploads and sessions.
 
 ### Chunked file upload flow
 
-#### `POST /uploads/init`
+#### `POST /api/uploads/init`
 Initiates a resumable file upload. Body: `{"filename": "<name>"}` (JSON).
 Returns `{"upload_id", "chunk_size", "filename"}`.
 
-#### `PUT /uploads/{upload_id}/chunk?chunk_index=N`
+#### `PUT /api/uploads/{upload_id}/chunk?chunk_index=N`
 Uploads one raw-body chunk (max `chunk_size` bytes). Must be sent in order (409 if out of sequence).
-Current default `chunk_size` is **16 MiB** (tuned for Cloudflare/Nginx stability).
+Default `chunk_size` is **16 MiB**.
 Returns `{"upload_id", "chunk_index", "bytes_received"}`.
 
-#### `POST /uploads/{upload_id}/complete`
+#### `POST /api/uploads/{upload_id}/complete`
 Assembles all chunks into the final file under `data/<client_session_id>/`.
 Returns `{"filename", "bytes_received"}`.
 
 ### Session management
 
-#### `GET /sessions`
-Lists complete sessions (directories in `data/<client_session_id>/` with both a telemetry file
-and a `.svm` file). Returns `{"sessions": [{"id", "telemetry", "svm"}]}`.
+#### `GET /api/sessions`
+Lists complete sessions (directories in `data/<client_session_id>/` with both a telemetry file and a `.svm` file). Returns `{"sessions": [{"id", "telemetry", "svm"}]}`.
 
-#### `GET /sessions/{session_id}/file/{filename}`
-Downloads a stored session file. Only the telemetry and SVM filenames belonging to that session
-are accessible (path-traversal guard).
+#### `GET /api/sessions/{session_id}/file/{filename}`
+Downloads a stored session file. Only the telemetry and SVM filenames belonging to that session are accessible (path-traversal guard).
 
 ### Analysis
 
-#### `POST /analyze`
+#### `POST /api/analyze`
 Direct-upload analysis (no prior chunking required). Accepts multipart form:
 - `telemetry_file`: `.mat` or `.csv` (MoTeC export)
 - `svm_file`: `.svm` (rFactor 2 setup)
 - `model` (optional): Ollama model tag override
 - `provider` (optional): LLM provider (default `ollama`)
 - `fixed_params` (optional): JSON string array of locked parameter names
-- `ollama_base_url` (optional): Override Ollama endpoint (e.g. `https://ollama.com` for Ollama Cloud)
+- `ollama_base_url` (optional): Override Ollama endpoint
 - `ollama_api_key` (optional): Bearer token for remote/cloud Ollama
 
-Temp files are written to `data/_analysis_tmp/{uuid}/` and deleted in `finally`. Returns
-`AnalysisResponse` with: `circuit_data`, `issues_on_map`, `driving_analysis`, `setup_analysis`,
-`full_setup`, `session_stats`, `laps_data`, `agent_reports`, `telemetry_summary_sent`, `chief_reasoning`.
+Returns `AnalysisResponse` with: `circuit_data`, `issues_on_map`, `driving_analysis`, `setup_analysis`, `full_setup`, `session_stats`, `laps_data`, `agent_reports`, `telemetry_summary_sent`, `chief_reasoning`.
 
-#### `POST /analyze_session`
-Analyzes a previously uploaded stored session (via chunked upload). Form params:
-`session_id` (required), `model`, `provider`, `fixed_params`, `ollama_base_url` (optional), `ollama_api_key` (optional). Deletes the session files
-after a successful analysis. Same `AnalysisResponse` shape as `POST /analyze`.
+#### `POST /api/analyze_session`
+Analyzes a previously uploaded stored session (via chunked upload). Form params: `session_id` (required), `model`, `provider`, `fixed_params`, `ollama_base_url` (optional), `ollama_api_key` (optional). Deletes session files after successful analysis. Same `AnalysisResponse` shape.
 
 ### Other
 
-#### `GET /models`
+#### `GET /api/models`
 Returns available Ollama models via `GET /api/tags` on Ollama.
-Optional query params: `ollama_base_url` (override Ollama endpoint, e.g. `https://ollama.com`) and `ollama_api_key` (Bearer token for remote/cloud Ollama).
+Optional query params: `ollama_base_url`, `ollama_api_key`.
 
-#### `POST /cleanup`
-Deletes the current client session's telemetry/setup files and in-progress chunk files from
-`data/<client_session_id>/`. Removes empty directories.
+#### `GET /api/tracks`
+Returns known circuit metadata (name, country, length, map SVG path).
 
-#### `POST /cleanup_all`
-Deletes **all** stored telemetry/setup/chunk/temp-analysis artifacts under `data/`.
-Used by the frontend ephemeral-session mode at page load to guarantee no stale data survives.
+#### `POST /api/cleanup`
+Deletes the current client session's telemetry/setup files and in-progress chunk files.
+
+#### `POST /api/cleanup_all`
+Deletes **all** stored artifacts under `data/`. Used by the frontend at startup to guarantee no stale data survives.
 
 ## AI Agent Pipeline
 
-The `AIAngineer.analyze()` method runs this sequence:
+The analysis pipeline (`services/backend_go/internal/agents/pipeline.go`) runs this sequence:
 
 ### 1. Translation Agent (once, cached)
 **Prompt**: `TRANSLATOR_PROMPT`
@@ -278,58 +273,57 @@ Translates any new section/parameter names to Spanish-friendly names. Results sa
 ### 2. Driving Analysis Agent
 **Prompt**: `DRIVING_PROMPT`
 Input: telemetry summary + session stats.
-Output: 5 driving improvement points with real numeric values, organized by **numbered curves** ("Curva 1", "Curva 2"...) with curve type description (horquilla, chicane, ese rápida...). Each point compares the same curve across multiple laps, citing real telemetry values. Strictly forbidden from suggesting setup changes. Distance ranges from Lap Distance are used internally but not shown in output headers.
+Output: 5 driving improvement points with real numeric values, organized by **numbered curves** ("Curva 1", "Curva 2"...) with curve type description (horquilla, chicane, ese rápida...). Each point compares the same curve across multiple laps, citing real telemetry values. Strictly forbidden from suggesting setup changes.
 
-### 3. Section Specialist Agents (one per setup section)
+### 3. Section Specialist Agents (concurrent goroutines)
 **Prompt**: `SECTION_AGENT_PROMPT`
-Runs once per section (GENERAL, FRONTWING, REARWING, BODYAERO, SUSPENSION, CONTROLS, ENGINE, DRIVELINE, FRONTLEFT, FRONTRIGHT, REARLEFT, REARRIGHT, etc.). Skips BASIC, LEFTFENDER, RIGHTFENDER. Also skips Gear*Setting parameters.
+Runs once per section (GENERAL, FRONTWING, REARWING, BODYAERO, SUSPENSION, CONTROLS, ENGINE, DRIVELINE, FRONTLEFT, FRONTRIGHT, REARLEFT, REARRIGHT, etc.) via `sync.WaitGroup`. Skips BASIC, LEFTFENDER, RIGHTFENDER. Also skips Gear*Setting parameters.
 Input: full telemetry + section's current parameters + fixed params list.
 Output: JSON with `items` array (parameter, new_value, reason) and `summary`.
-Specialists explicitly acknowledge parameters that are already well-configured and reason about why no change is needed in the `summary` field.
+Specialists explicitly acknowledge parameters that are already well-configured.
 
 ### 4. Chief Engineer Agent
 **Prompt**: `CHIEF_ENGINEER_PROMPT`
 Consolidates all specialist reports into a coherent setup via **holistic review**. Rules:
 - Reviews ALL specialist proposals against full telemetry + setup context
 - Approves changes with technical merit; rejects redundant or contradictory changes
-- Detects and corrects physical incoherencies (e.g. "lower rear wing to reduce understeer" is wrong)
+- Detects and corrects physical incoherencies
 - **Reason ownership**: if accepting a specialist proposal unchanged → copies specialist reason verbatim; if modifying → writes own detailed reason
 - Enforces axle symmetry (FL≈FR, RL≈RR) unless telemetry justifies asymmetry
-- Acknowledges parameters that are already correct and need no changes
+- Acknowledges parameters that are already correct
 - Respects fixed params absolutely
-- `chief_reasoning` is **mandatory always** — must explain overall strategy and each proposal acceptance/modification/rejection
+- `chief_reasoning` is **mandatory always**
 Output: JSON with `full_setup.sections[]` and `chief_reasoning`.
 
 ### Response formatting
-`_format_full_setup()` merges chief's recommendations with the original setup data, computing change percentages for display. Sections with zero proposed changes are **excluded** from the output (only sections with at least one changed parameter are included).
-Additionally, `setup_agent_reports` is built from the final consolidated map (after chief + deterministic post-processing) so frontend reasoning values match the final setup table. Specialist summaries from the original reports are propagated into `setup_agent_reports`.
+Merges chief's recommendations with the original setup data, computing change percentages for display. Sections with zero proposed changes are **excluded** from the output.
 
 ## File Parsing
 
-### `.mat` files (`parse_mat_file`)
-MoTeC i2 MATLAB export. Uses `scipy.io.loadmat(struct_as_record=False, squeeze_me=True)`. Extracts channels from struct `.Value` fields. Aligns all channels to the length of `Session_Elapsed_Time`. Applies GPS smoothing and incomplete lap filtering.
+### `.mat` files (pure Go parser)
+MoTeC i2 MATLAB Level 5 export. Parses the binary MATLAB format directly without CGo. Extracts channels from struct fields. Aligns all channels to the length of `Session_Elapsed_Time`. Applies GPS smoothing and incomplete lap filtering.
 
-### `.csv` files (`parse_csv_file`)
-MoTeC CSV export. First 14 lines are metadata, line 15 is headers, line 16 is units, data starts line 17. All columns converted to numeric. GPS smoothing applied.
+### `.csv` files
+MoTeC CSV export. First 14 lines are metadata, line 15 is headers, line 16 is units, data starts line 17. All columns converted to float64. GPS smoothing applied.
 
-### `.svm` files (`parse_svm_file`)
-rFactor 2 setup. INI-like format with `[Section]` headers and `key=value` pairs. Tries UTF-16 first (common for rF2), falls back to UTF-8. Values often contain `//` comments: `223//N/mm` means value is `N/mm` part (cleaned by `_clean_value`).
+### `.svm` files
+rFactor 2 setup. INI-like format with `[Section]` headers and `key=value` pairs. Tries UTF-16 first (common for rF2), falls back to UTF-8. Values often contain `//` comments: `223//N/mm` means value is `N/mm` part (cleaned by `cleanValue()`).
 
 ## Data Flow Through Analysis
 
-1. Files uploaded → saved to `data/{uuid}/`
-2. Telemetry parsed → DataFrame with all channels
+1. Files uploaded → saved to `data/{session_id}/`
+2. Telemetry parsed → channel map (`map[string][]float64`)
 3. GPS extracted for circuit map (subsampled to 5000 points max)
 4. Per-lap stats computed (speed, throttle, brake, RPM, fuel, wear, temps)
 5. Telemetry subsampled (~50 points/lap, top 100 columns) → CSV string for AI
 6. Summary built: circuit name + session stats + lap summaries + detailed CSV
-7. Summary + setup dict → `AIAngineer.analyze()`
-8. Multi-agent pipeline runs (driving → specialists → chief)
+7. Summary + setup map → `pipeline.Analyze()`
+8. Multi-agent pipeline runs (driving → specialists [goroutines] → chief)
 9. Results formatted with friendly names + change percentages → JSON response
 
 ## Param Mapping System
 
-`app/core/param_mapping.json` maps internal names → Spanish friendly names:
+`services/backend_go/data/param_mapping.json` maps internal names → Spanish friendly names:
 - Sections: `FRONTLEFT` → `"Neumático Delantero Izquierdo"`
 - Parameters: `CamberSetting` → `"Caída (Camber)"`
 
@@ -337,11 +331,11 @@ Auto-extended by the Translation Agent when new parameters are encountered. The 
 
 ## Fixed Parameters System
 
-`app/core/fixed_params.json` is a JSON array of parameter names that AI agents must not modify. Managed by the Streamlit UI. Passed to every specialist and chief prompt as a constraint. See `CONSTANTS.md` for the current default list.
+`services/backend_go/data/fixed_params.json` is a JSON array of parameter names that AI agents must not modify. Managed by the Expo UI. Passed to every specialist and chief prompt as a constraint. See `CONSTANTS.md` for the current default list.
 
 ## Asana MCP Integration
 
-See [`ASANA.md`](ASANA.md) for full details. Plugin zip at `asana-mcp-plugin.zip`. Manages OAuth2 auth and token injection into Claude Desktop, Claude CLI, VS Code Copilot, and JetBrains Copilot configs.
+See [`ASANA.md`](ASANA.md) for full details.
 
 ### Canonical project
 
@@ -360,11 +354,9 @@ The project uses **Board layout** with four fixed sections. These must exist bef
 
 When creating tasks, always supply `section_id` pointing to the `To Do` section GID. Retrieve section GIDs with `get_project(project_id, include_sections=True)`.
 
-Task status transitions use `update_tasks` with `add_projects` containing the target section GID, or a dedicated move-to-section call.
-
 ### MCP tool failure protocol — MANDATORY
 
-The `mcp_asana-mcp_*` tools authenticate via a token stored in the JetBrains IDE config file. That token **expires every hour**. The IDE **caches it at startup** and does not reload it mid-session.
+The `mcp_asana-mcp_*` tools authenticate via a token stored in the IDE config file. That token **expires every hour**. The IDE **caches it at startup** and does not reload it mid-session.
 
 When any `mcp_asana-mcp_*` call fails with `invalid_token`:
 
@@ -379,18 +371,17 @@ Step 2 — Retry the MCP tool immediately (the token in the config file is
 Step 3 — If the tool still fails:
     ► STOP. Tell the user:
       "The Asana MCP token has been refreshed and written to the IDE
-       config, but JetBrains has cached the old token. Please restart
-       the IDE (File → Invalidate Caches / Restart, or close and reopen
-       the project), then ask me to continue."
+       config, but the IDE has cached the old token. Please restart
+       the IDE, then ask me to continue."
     ► Wait for the user to confirm restart before doing anything else.
 
-NEVER create a workaround Python script that calls the Asana API or MCP
-endpoint directly. NEVER silently bypass the MCP tools.
+NEVER create a workaround script that calls the Asana API directly.
+NEVER silently bypass the MCP tools.
 ```
 
 ### Creating the board sections (one-time setup)
 
-If `get_project(project_id, include_sections=True)` returns fewer than four sections, create the missing ones using `create_project` with the `sections` array, or via the Asana web UI. The four required section names are exactly: `To Do`, `In Progress`, `In Review`, `Done`.
+If `get_project(project_id, include_sections=True)` returns fewer than four sections, create the missing ones. The four required section names are exactly: `To Do`, `In Progress`, `In Review`, `Done`.
 
 ## Constants
 
@@ -398,49 +389,31 @@ All hardcoded values (ports, paths, thresholds, parameter lists, telemetry chann
 
 ## Key Patterns
 
-**Value cleaning**: Setup values like `223//N/mm` → cleaned to `N/mm` via `_clean_value()` which splits on `//` and takes the right side.
+**Value cleaning**: Setup values like `223//N/mm` → cleaned by `cleanValue()` which splits on `//` and takes the right side.
 
-**Numeric extraction**: `_extract_numeric("223 N/mm")` → `223.0`. Used for computing change percentages.
+**Numeric extraction**: `extractNumeric("223 N/mm")` → `223.0`. Used for computing change percentages.
 
-**LLM JSON extraction**: `_get_json_from_llm()` parses JSON from potentially messy LLM output using brace-depth counting and trailing-comma cleanup.
+**LLM JSON extraction**: `extractJSON()` parses JSON from potentially messy LLM output using brace-depth counting and trailing-comma cleanup.
 
-**Section name resolution**: LLM may return friendly names instead of internal names. Both `AIAngineer.analyze()` and `_format_full_setup()` use reverse-mapping dicts to handle this.
+**Section name resolution**: LLM may return friendly names instead of internal names. Both the pipeline and formatting use reverse-mapping maps to handle this.
 
-**Ollama auto-start**: `_ensure_ollama_running()` checks health via `GET /api/tags`, starts `ollama serve` as background process if needed, waits up to 15s. Skipped automatically when a `custom_base_url` is passed to `_init_llm()` or `list_available_models()` (i.e. remote/cloud Ollama).
+**Ollama auto-start**: `ensureOllamaRunning()` checks health via `GET /api/tags`, starts `ollama serve` as background process if needed, waits up to 15s. Skipped when a custom base URL is provided (remote/cloud Ollama).
 
-**Ollama remote/cloud API**: `list_available_models(base_url, api_key)`, `_init_llm(..., custom_base_url, custom_api_key)`, and `AIAngineer.analyze(..., ollama_base_url, ollama_api_key)` all support targeting a remote Ollama server (e.g. Ollama Cloud at `https://ollama.com`). When `api_key` is provided, `Authorization: Bearer <key>` is injected into `ChatOllama` headers. API keys for Ollama Cloud are obtained from `https://ollama.com/settings/keys` (distinct from SSH keys used for model registry push/pull).
+**Ollama remote/cloud API**: The Ollama client supports targeting a remote server (e.g. Ollama Cloud at `https://ollama.com`). When `apiKey` is provided, `Authorization: Bearer <key>` is injected into requests.
 
-**Jimmy specialist normalization**: `AIAngineer._normalize_specialist_report()` accepts alternate JSON keys from Jimmy responses (`recomendaciones`, `parametro`, `nuevo_valor`, `motivo`, etc.) and maps them to the canonical `items[{parameter,new_value,reason}]` shape. Specialist `summary` is preserved and passed to the chief engineer context.
+**Jimmy specialist normalization**: `normalizeSpecialistReport()` accepts alternate JSON keys from Jimmy responses (`recomendaciones`, `parametro`, `nuevo_valor`, `motivo`, etc.) and maps them to the canonical `items[{parameter,new_value,reason}]` shape.
 
-**Jimmy chief-item normalization**: Chief engineer section items are now normalized through the same canonical shape (`parameter`, `new_value`, `reason`) and accept alternate keys such as `newValue`, `nuevoValor`, `parametro`, and `motivo`. This prevents false "no setup changes" outcomes when Jimmy returns variant field names.
+**Jimmy chief-item normalization**: Chief engineer section items are normalized through the same canonical shape and accept alternate keys such as `newValue`, `nuevoValor`, `parametro`, and `motivo`.
 
-**Reason sanitization against prompt leakage**: the backend sanitizes `reason` and `chief_reasoning` fields to strip internal/template artifacts (e.g. "COPIA AQUI...", "OBLIGATORIO:", `chartInstance`). If a chief item reason is invalid, it falls back to the specialist reason for that same section/parameter; if no specialist reason exists, it uses a safe generic fallback in Spanish.
+**Reason sanitization against prompt leakage**: The backend sanitizes `reason` and `chief_reasoning` fields to strip internal/template artifacts. If a chief item reason is invalid, it falls back to the specialist reason; if no specialist reason exists, it uses a safe generic fallback in Spanish.
 
-**Specialist-first consolidation merge**: the final recommendation map is built from specialist proposals first, then chief proposals are applied as overrides for parameters explicitly returned by the chief. This avoids accidental loss of valid specialist changes when the chief response is partial or noisy.
+**Specialist-first consolidation merge**: The final recommendation map is built from specialist proposals first, then chief proposals are applied as overrides for parameters explicitly returned by the chief.
 
-**Deterministic axle symmetry post-processing**: after chief consolidation, the backend enforces symmetry for `FRONTLEFT/FRONTRIGHT` and `REARLEFT/REARRIGHT` when asymmetric values are not explicitly justified by telemetry in the item reasons. If needed, it harmonizes to the more conservative value (smaller absolute delta from current setup) and annotates the reason.
+**Deterministic axle symmetry post-processing**: After chief consolidation, the backend enforces symmetry for `FRONTLEFT/FRONTRIGHT` and `REARLEFT/REARRIGHT` when asymmetric values are not explicitly justified by telemetry. Harmonizes to the more conservative value and annotates the reason.
 
-**Frontend reasoning alignment**: the frontend reasoning panel should consume `setup_agent_reports` (fallback to `agent_reports` only for backward compatibility). This avoids mismatches where specialist raw reports differ from the final setup after chief corrections.
+**Frontend ephemeral session policy**: The Expo UI treats uploads as session-local only. No persistent cookie/query-param for client session IDs.
 
-**Frontend ephemeral session policy**: the UI now treats uploads as session-local only. No cookie/query-param persistence is used for client session IDs.
-
-**Frontend page-load cleanup**: at startup, frontend calls `POST /cleanup_all` once to purge stale data from previous sessions.
-
-**Frontend unload cleanup hook**: browser-side `beforeunload` sends a keepalive cleanup request (`POST /cleanup` with `X-Client-Session-Id`) so data is removed when reloading or leaving the page.
-
-**Frontend local-only analysis flow**: analysis requests are executed from local temporary files via `POST /analyze`; fallback to `POST /analyze_session` was removed to enforce strict ephemeral behavior.
-
-**Frontend Ollama model selector persistence**: the model dropdown in `frontend/views/analysis_view.py` now normalizes, de-duplicates, and sorts model names deterministically, then stores the selected model in `st.session_state['selected_ollama_model']`. This prevents random model jumps across Streamlit reruns.
-
-**Prompt benchmark tooling removed from repo**: legacy benchmark/grid-search helper scripts and `docs/benchmark` artifacts were removed to keep the runtime repository lightweight for deployment. Runtime behavior now depends on the committed values inside `app/core/jimmy_runtime_config.v1.json`.
-
-**Frontend session analysis timeout**: `frontend/streamlit_app.py` posts stored sessions to `/analyze_session` with a long-running Requests timeout tuple `(10, 1800)`. Never use `timeout=0` with `requests`; urllib3 rejects non-positive timeouts before the backend call is made.
-
-**Frontend large-.mat safeguard**: when a local `.mat` file exceeds `RF2_FRONTEND_MAX_PREVIEW_MAT_MB` (default `800` MB), the frontend skips detailed telemetry preview parsing to avoid Streamlit OOM/restarts on low-memory hosts. AI analysis remains available through backend endpoints. The default was raised from 120 MB to 800 MB after a 2 GiB persistent swap was added to the GCP host, making files up to ~700 MB safe to render.
-
-**Frontend lap-figure cache (session_state)**: `precompute_all_laps()` is a plain function (no `@st.cache_resource`). The caller caches its result in `st.session_state['_lap_cache']` under key `st.session_state['_lap_cache_key'] = (tele_path, tuple(laps))`. Key is a tuple of strings (cheap equality check), avoiding the costly DataFrame hash that `@st.cache_resource` performed on every Streamlit rerun.
-
-**Frontend defensive re-download gate**: the block that re-downloads temp files from the backend is guarded by a `_files_ok` check (all expected local paths exist and are non-empty). It only fires when a file is genuinely missing, and it invalidates `_lap_cache_key` so the cache is rebuilt from the fresh download.
+**Frontend page-load cleanup**: At startup, the frontend calls `POST /api/cleanup_all` once to purge stale data.
 
 ## Language
 
@@ -448,182 +421,109 @@ All user-facing output (driving analysis, setup recommendations, parameter names
 
 ## Development Environment
 
-**Docker is the canonical development environment for this project.** Do NOT use the host Python installation for running tests or lint — the host may have incompatible package versions (e.g. Python 3.13 + pandas).
-
-### Quick start (first time)
+### Quick start
 
 ```bash
-# Build the test image (one-time, or after requirements changes)
-docker compose --profile test build test
+# Backend (from repo root)
+cd services/backend_go
+go run ./cmd/server
 
-# Start the full app stack
-docker compose up --build
+# Frontend (from repo root, separate terminal)
+cd apps/expo_app
+npm install
+npx expo start --web
 
-# Ensure host Ollama has the required model (one-time)
+# Ensure Ollama has the required model
 ollama pull llama3.2:latest
 ```
 
-### Running tests (always use Docker)
+### Running tests
 
 ```bash
-# Preferred wrapper (auto-cleans exited one-off test containers for this project)
-powershell -ExecutionPolicy Bypass -NoProfile -File scripts/run_docker_test.ps1
+# Go unit tests (from services/backend_go/)
+go test ./... -v -count=1
 
-# Unit tests — fast, no Ollama required (~3s in container)
-docker compose --profile test run --rm test
+# Go integration tests (requires Ollama running with llama3.2:latest)
+go test ./... -v -tags=integration -count=1
 
-# Unit tests with extra args (e.g. -k filter, -x stop-on-first-fail)
-docker compose --profile test run --rm test pytest tests/ --ignore=tests/integration -v -k "my_test"
+# Expo unit tests (from apps/expo_app/)
+npm test
 
-# Lint
-docker compose --profile test run --rm test ruff check app/ frontend/ tests/
-
-# Integration tests — real LLM, requires host Ollama running with llama3.2:latest (~3min)
-docker compose --profile test run --rm test pytest -m integration -v
-
-# E2E API tests — requires backend container running at :8000
-docker compose --profile test run --rm test pytest e2e/api/test_endpoints.py -v
-
-# Prod-circuit E2E tests — hit the real domain through Cloudflare + Nginx + BasicAuth
-# These are NEVER run inside Docker (they target a live external URL); run from the host:
-# RF2_PROD_URL=https://car-setup.com/api RF2_PROD_BASIC_AUTH=racef1:secret pytest e2e/api/test_prod_upload.py -v
+# Full suite (from repo root)
+powershell -ExecutionPolicy Bypass -NoProfile -File scripts/run-local-tests.ps1
 ```
 
-To pass custom arguments through the wrapper, append them after the script path:
+### Building the artifact
 
 ```bash
-powershell -ExecutionPolicy Bypass -NoProfile -File scripts/run_docker_test.ps1 pytest tests/test_main.py -q
+# Build Expo web first
+cd apps/expo_app
+npx expo export --platform web
+# Output goes to apps/expo_app/dist/
+
+# Build Go binary with embedded web
+cd services/backend_go
+GOOS=linux GOARCH=amd64 go build -o ../../rfactor2-engineer ./cmd/server
 ```
 
-If stale containers exist from interrupted runs, clean exited test containers for both:
-- this project (`rfactor2_engineer`), and
-- temporary benchmark projects (`t1-*`, `t2-*`, ...):
+The `cmd/server/main.go` uses `//go:embed ../../apps/expo_app/dist` to embed the entire Expo web build into the binary.
 
-```bash
-powershell -ExecutionPolicy Bypass -NoProfile -File scripts/cleanup_docker_test_artifacts.ps1
-```
-
-After a benchmark/temporary task is completed, those temporary test containers must be purged. If you also want to remove temporary benchmark test images (e.g. `t1-...-test`), run:
-
-```bash
-powershell -ExecutionPolicy Bypass -NoProfile -File scripts/cleanup_docker_test_artifacts.ps1 -RemoveTemporaryTestImages
-```
-
-The `test` service bind-mounts the full source tree at `/app`, so **code changes are reflected immediately without rebuilding** the image. Only rebuild (`docker compose --profile test build test`) when `requirements.txt` or `requirements-dev.txt` change.
-
-### App services
+### Services (development)
 
 | Service | URL | Start command |
 |---------|-----|---------------|
-| Backend | http://localhost:8000 | `docker compose up backend` |
-| Frontend | http://localhost:8501 | `docker compose up frontend` |
-| Host Ollama (external dependency) | http://localhost:11434 | `ollama serve` (host) |
-| All | — | `docker compose up --build` |
+| Backend (Go) | http://localhost:8080 | `go run ./services/backend_go/cmd/server` |
+| Frontend (Expo) | http://localhost:8081 | `cd apps/expo_app && npx expo start --web` |
+| Ollama | http://localhost:11434 | `ollama serve` |
 
 ## Test Infrastructure
 
 ### System requirement
 
-`llama3.2:latest` (= 3b, 2.0 GB) is a **hard project requirement** — the same model the app uses in production. Pull it once:
+`llama3.2:latest` (3B, ~2.0 GB) is a **hard project requirement** — the same model the app uses in production. Pull it once:
 
 ```bash
 ollama pull llama3.2:latest
 ```
 
-Note: `llama3.2:3b` and `llama3.2:latest` are the same weights (`:latest` is the canonical alias). Always use `:latest` as the tag to avoid 404 errors on machines that only pulled via the default alias.
+### Test layout
+
+```
+services/backend_go/
+├── internal/parsers/
+│   ├── mat_test.go                 # .mat parsing tests
+│   ├── csv_test.go                 # CSV parsing tests
+│   ├── svm_test.go                 # .svm parsing tests
+│   ├── gps_test.go                 # GPS smoothing tests
+│   └── laps_test.go                # Lap filtering tests
+├── internal/agents/
+│   ├── pipeline_test.go            # Full pipeline tests (mocked Ollama)
+│   ├── specialist_test.go          # Specialist agent tests
+│   └── chief_test.go              # Chief engineer tests
+├── internal/handlers/
+│   ├── upload_test.go              # Upload endpoint tests
+│   ├── session_test.go             # Session endpoint tests
+│   └── analysis_test.go            # Analysis endpoint tests (mocked agents)
+└── internal/ollama/
+    └── client_test.go              # Ollama HTTP client tests
+
+apps/expo_app/
+├── __tests__/
+│   ├── CircuitMap.test.tsx         # Circuit map component tests
+│   ├── SetupTable.test.tsx         # Setup table component tests
+│   ├── api.test.ts                 # API client tests (mocked)
+│   └── analysisStore.test.ts       # Zustand store tests
+```
 
 ### Mocking strategy
 
 | Layer | Approach | Reason |
 |---|---|---|
-| `scipy.io.loadmat` | Mocked in unit tests | Real MoTeC `.mat` binary format cannot be reproduced with `scipy.io.savemat`; mock accurately mirrors `mat_struct.Value` interface |
-| `ChatOllama` / LLM | Mocked in unit tests | Non-deterministic, slow, requires Ollama; covered by `tests/integration/` with real model |
-| `parse_csv_file` / `parse_svm_file` in endpoint tests | **Real files** — not mocked | Mocking parsers hides ~200 lines of GPS/lap/subsampling logic in `app/main.py` |
-| `ai_engineer.analyze` in endpoint tests | Mocked | Only the LLM boundary; all data pipeline before it runs for real |
-
-### Test layout
-
-```
-tests/
-├── core/test_telemetry_parser.py   # CSV, SVM, .mat parsing; _filter_incomplete_laps
-├── core/test_ai_agents.py          # Pure functions + AIAngineer unit tests
-├── test_main.py                    # All endpoints (real parsers, mocked AI)
-└── integration/test_ai_pipeline.py # Full AI pipeline with real Ollama (opt-in)
-
-e2e/
-├── api/test_endpoints.py           # Live backend smoke tests (localhost:8000, no Nginx)
-├── api/test_prod_upload.py         # Prod-circuit: Cloudflare→Nginx BasicAuth→backend
-│                                   # Opt-in via RF2_PROD_URL + RF2_PROD_BASIC_AUTH
-└── web/*.yaml                      # Maestro Web flows (Streamlit UI)
-
-**Why prod-circuit tests exist**: unit and local E2E tests bypass Nginx and BasicAuth entirely.
-Bugs that only manifest through Nginx (e.g. `credentials: 'omit'` in the browser JS dropping
-stored BasicAuth → 401) are invisible without testing the full stack.
-`test_prod_upload.py` specifically verifies unauthenticated requests return 401 and that the
-full chunked upload cycle works end-to-end through Cloudflare and Nginx.
-
-**Complementary local-browser topology**: local RC validation exercises a different path:
-browser on `http://localhost:8501` → backend on `http://localhost:8000`.
-That path requires:
-- `RF2_BROWSER_API_BASE_URL=http://localhost:8000` in local Docker frontend runs
-- FastAPI CORS enabled for `http://localhost:8501`
-
-Without those two pieces, the browser would incorrectly call `http://localhost:8501/api/...`
-(no proxy there) or hit cross-origin failures even though production works.
-```
-
-## Docker
-
-### Quick start
-
-```bash
-docker compose up --build
-```
-
-Services:
-- **Frontend**: http://localhost:8501
-- **Backend**: http://localhost:8000
-- **Host Ollama**: http://localhost:11434 (runs outside Docker)
-
-### First run — pull the model
-
-On the host machine, pull the required model:
-
-```bash
-ollama pull llama3.2:latest
-```
-
-### Architecture
-
-```
-┌─────────────┐    ┌──────────┐    ┌──────────────────────┐
-│  Frontend   │───▶│ Backend  │───▶│ Host Ollama          │
-│  :8501      │    │  :8000   │    │ localhost:11434      │
-└─────────────┘    └──────────┘    └──────────────────────┘
-  RF2_API_URL       OLLAMA_BASE_URL=http://host.docker.internal:11434
-```
-
-### Volumes
-
-| Mount | Purpose |
-|-------|---------|
-| `./data` → `/app/data` | Session uploads (persist across restarts) |
-| `./app/core/param_mapping.json` | Translation cache (generated at runtime) |
-| `./app/core/fixed_params.json` | User-locked parameters |
-
-
-### Files
-
-| File | Purpose |
-|------|---------|
-| `Dockerfile` | Multi-stage build (targets: `backend`, `frontend`); frontend image also copies `app/` because `frontend/setup_parser.py` imports `app.core.telemetry_parser` |
-| `docker-compose.yml` | Orchestrates backend/frontend/test containers; uses host Ollama |
-| `.dockerignore` | Excludes data/, tests/, dist/, .git/ from build context |
-| `deploy/docker-compose.gcp.yml` | GCP host override: localhost-only port binds + host-gateway mapping |
-| `deploy/nginx-rfactor2_engineer.conf` | HTTP reverse-proxy config (Nginx -> frontend/backend, TLS, Basic Auth) |
-| `deploy/.htpasswd` | Basic Auth credentials file (hashed) copied to host Nginx |
-| `scripts/release_and_deploy.ps1` | Master release orchestration: RC → tag → GitHub Release → deploy |
-| `scripts/deploy_gcp.ps1` | Deploy a specific tagged artifact to the GCP host (requires `-ReleaseTag`) |
+| `.mat` binary parsing | Test with fixture files | Pure Go parser tested with known binary inputs |
+| Ollama HTTP calls | `httptest.NewServer` mock | Non-deterministic, slow, requires Ollama; covered by integration tests |
+| CSV/SVM parsers in handler tests | **Real files** — not mocked | Mocking hides parser logic |
+| Agent pipeline in handler tests | Mocked | Only the LLM boundary; all data pipeline runs for real |
+| Expo API client | `jest.mock('axios')` | Isolates UI tests from backend |
 
 ## GCP Deployment
 
@@ -631,23 +531,20 @@ ollama pull llama3.2:latest
 
 - SSH target: `bitor@34.175.126.128`
 - Auth: default SSH keypair already configured for current user.
-- Docker access: use `sudo -n docker ...` (user is not in `docker` group).
 - Nginx binary path: `/usr/sbin/nginx`
 
 ### Runtime topology
 
-- `frontend` container bound to `127.0.0.1:18501`
-- `backend` container bound to `127.0.0.1:18000`
+- Single Go binary running on host, listening on `127.0.0.1:8080`
 - Public domains: `telemetria.bot.nu`, `car-setup.com`
 - Nginx listens on `:80` and `:443`
-- `http://telemetria.bot.nu` redirects to `https://telemetria.bot.nu`
-- `http://car-setup.com` redirects to `https://car-setup.com`
+- HTTP redirects to HTTPS for both domains
 - HTTPS proxy routes:
-  - `/` -> `http://127.0.0.1:18501`
-  - `/api/` -> `http://127.0.0.1:18000`
-- Nginx enforces HTTP Basic Auth on **all routes** (`/` and `/api/*`).
-- Nginx upload limit is set to `client_max_body_size 20000M` (aligned with Streamlit `maxUploadSize=20000`) and includes an explicit `/_stcore/upload_file/` route to avoid `413 Request Entity Too Large` on telemetry uploads.
-- TLS is terminated at host Nginx using Let's Encrypt certs from `/etc/letsencrypt/live/telemetria.bot.nu/` and `/etc/letsencrypt/live/car-setup.com/`.
+  - `/` → `http://127.0.0.1:8080` (serves embedded Expo web + API)
+  - `/api/*` → `http://127.0.0.1:8080/api/*`
+- Nginx enforces HTTP Basic Auth on **all routes**.
+- Nginx upload limit: `client_max_body_size 20000M`.
+- TLS terminated at host Nginx using Let's Encrypt certs.
 
 ### HTTP Basic Auth (current)
 
@@ -656,106 +553,31 @@ ollama pull llama3.2:latest
 - Credential file deployed to host: `/etc/nginx/.htpasswd_rfactor2_engineer`
 - Source file in repo: `deploy/.htpasswd` (hashed value)
 
-Quick verify commands on host:
-
-```bash
-curl -I http://127.0.0.1/                          # expected 401
-curl -u racef1:100fuchupabien -I http://127.0.0.1/ # expected 200
-curl -u racef1:100fuchupabien -I http://127.0.0.1/api/models # expected 200
-```
-
-If credentials must rotate:
-1. Update `deploy/.htpasswd` with the new hashed credential.
-2. Redeploy with `scripts/deploy_gcp.ps1`.
-3. Validate with authenticated `curl` checks.
-
 ### TLS / Certbot
 
-- Certbot and the Nginx plugin are installed on the host via apt (`certbot`, `python3-certbot-nginx`).
 - Active certificate names: `telemetria.bot.nu`, `car-setup.com`
-- Live cert paths:
-  - `/etc/letsencrypt/live/telemetria.bot.nu/fullchain.pem`
-  - `/etc/letsencrypt/live/car-setup.com/fullchain.pem`
-- Live key paths:
-  - `/etc/letsencrypt/live/telemetria.bot.nu/privkey.pem`
-  - `/etc/letsencrypt/live/car-setup.com/privkey.pem`
-- Automatic renewal is handled by `certbot.timer`.
-
-Quick verify commands on host:
-
-```bash
-curl -I http://telemetria.bot.nu/                                  # expected 301 to https://telemetria.bot.nu/
-curl -u racef1:100fuchupabien -I https://telemetria.bot.nu/        # expected 200
-curl -u racef1:100fuchupabien https://telemetria.bot.nu/api/models # expected JSON response
-curl -I http://car-setup.com/                                      # expected 301 to https://car-setup.com/
-curl -u racef1:100fuchupabien -I https://car-setup.com/            # expected 200
-curl -u racef1:100fuchupabien https://car-setup.com/api/models     # expected JSON response
-```
+- Automatic renewal handled by `certbot.timer`.
 
 ### Release and deploy procedure
 
-**All production deploys must go through the formal release pipeline — never deploy from a dirty tree or an untagged commit.**
+The single binary simplifies deployment:
 
-The canonical entry point is `scripts/release_and_deploy.ps1`. It enforces:
-1. Abort if working tree is dirty.
-2. Merge one or more source branches into `develop`.
-3. Run Docker unit tests on `develop`; tag RC (`vX.Y.Z-rc.N`) and push.
-4. **MANDATORY GATE**: ask the human owner to validate that RC locally.
-   - "Validate locally" means the agent must start the local Docker stack from `develop`/RC:
-     `docker compose up -d --build`
-   - The agent must provide the user the exact URLs to visit:
-     - Frontend: `http://localhost:8501`
-     - Backend API: `http://localhost:8000` (sanity check: `/models`)
-   - The agent must wait for explicit user approval after the user tests those local URLs.
-5. Only after explicit human approval: merge `develop` into `main`; run Docker unit tests again.
-6. Tag release (`vX.Y.Z`) on `main` and push.
-7. Create `dist/rfactor2_engineer-vX.Y.Z.tar.gz` via `git archive <tag>`.
-8. Publish a GitHub Release with that artifact.
-9. Call `deploy_gcp.ps1 -ReleaseTag vX.Y.Z -UseGithubReleaseArtifact`.
-
-**Mandatory policy for all agents**: never continue automatically from RC to `main`/deploy.
-After RC push, start local Docker for RC validation, provide local URLs, and wait for user confirmation before proceeding.
-
-```powershell
-# Full release from a feature branch
-powershell -ExecutionPolicy Bypass -NoProfile -File scripts/release_and_deploy.ps1 `
-    -VersionBump patch `
-    -SourceBranches feat/your-branch
-
-# Release with no pending merges (develop is already current)
-powershell -ExecutionPolicy Bypass -NoProfile -File scripts/release_and_deploy.ps1 -VersionBump minor
-```
-
-**Emergency redeploy from an existing tag** (no new release):
-
-```powershell
-powershell -ExecutionPolicy Bypass -NoProfile -File scripts/deploy_gcp.ps1 `
-    -ReleaseTag v1.0.1 -UseGithubReleaseArtifact
-```
-
-What `deploy_gcp.ps1` does:
-1. Asserts clean working tree.
-2. Downloads the artifact from the GitHub Release (or uses `git archive <tag>` if not using GitHub artifact).
-3. Uploads the tarball to the remote host via `scp`.
-4. Extracts on remote: removes app-code files (non-`data/`), then runs `tar -xzf`.
-   - `data/` is **intentionally preserved** — it contains Docker-owned session uploads.
-   - Plain `rm -rf` handles bitor-owned files; `sudo` is used only as a fallback for any
-     Docker-owned files that exist outside `data/` (edge case).
-5. Copies `deploy/` config files and starts services with `docker compose ... up -d --build`.
-6. Installs and reloads Nginx config.
-7. Runs health checks for frontend/backend/nginx endpoints.
+1. Build the Expo web bundle: `npx expo export --platform web`
+2. Build the Go binary: `GOOS=linux GOARCH=amd64 go build -o rfactor2-engineer ./services/backend_go/cmd/server`
+3. Tag release: `git tag vX.Y.Z && git push --tags`
+4. Upload binary to GCP host via `scp`
+5. On host: stop old process, replace binary, start new process
+6. Verify health: `curl -u racef1:100fuchupabien https://car-setup.com/api/models`
 
 ### Operational notes
 
-- Do not expose backend/frontend directly to public interfaces; keep loopback bindings and route through Nginx.
-- Do not replace `deploy/nginx-rfactor2_engineer.conf` with a non-TLS variant; future deploys copy that file directly onto the host.
-- The `data/` directory on the remote host is owned by the Docker container user (root). Never run `sudo rm -rf $RemoteDir` or a broad sweep; use `find ... -not -name data` patterns when clearing old code.
-- Host memory safeguard: configure persistent swap on the GCP host (`/swapfile`, 2 GiB, `vm.swappiness=10`) to reduce OOM kills of the Streamlit process during peak telemetry workloads.
-- After benchmark/temporary tasks, purge temporary Docker test artifacts (see cleanup scripts in this document).
+- Do not expose the Go binary directly to public interfaces; keep loopback binding and route through Nginx.
+- Host memory safeguard: configure persistent swap on the GCP host (`/swapfile`, 2 GiB, `vm.swappiness=10`).
+- The `data/` directory on the remote host persists across deploys.
 
 ## Git Workflow
 
-All commit conventions, hooks (husky + commitlint), linting (ruff), and branching rules are documented in [`GIT.md`](GIT.md). **Read that file before any git operation.**
+All commit conventions, hooks, and branching rules are documented in [`GIT.md`](GIT.md). **Read that file before any git operation.**
 
 Key points:
 - **Pre-commit hook** runs lint → build → unit tests (blocks commit on failure)
@@ -770,7 +592,7 @@ Rules and operational playbook for all agentic (multi-subagent) development work
 
 ### Phase Specification Format
 
-All work is organized in **phases**. A phase is a coherent unit of work (e.g., "Add .ld file support", "Refactor AI pipeline to streaming") that produces one Release Candidate when merged to `develop`. The supervisor receives a phase spec as input — either from the user or from a higher-level planning step.
+All work is organized in **phases**. A phase is a coherent unit of work that produces one Release Candidate when merged to `develop`.
 
 A phase spec must contain:
 
@@ -798,12 +620,6 @@ Tasks:
 
   (tasks 2 and 3 can run in parallel; task 1 must finish first)
 ```
-
-The supervisor uses this spec to:
-- Create Asana tasks with the correct dependency graph
-- Determine which tasks can be parallelized (those with no pending upstream dependencies)
-- Write subagent prompts scoped to each task
-- Resolve merge conflicts in the context of the phase goal
 
 ---
 
@@ -848,11 +664,11 @@ EXECUTION_LOOP:
   7. Go to EXECUTION_LOOP (new tasks may now be unblocked)
 
 PHASE_COMPLETE:
-  8. Run full test suite on develop (unit + integration + E2E)
+  8. Run full test suite on develop (go test + npm test)
   9. If tests fail → fix on develop, commit fix
   10. Tag Release Candidate: vX.Y.Z-rc.N
   11. Ask user to validate RC locally and WAIT for explicit approval
-  12. After approval: merge develop → main, create release tag, publish artifact, deploy
+  12. After approval: merge develop → main, create release tag, deploy binary
   13. Update Asana project status: "Phase complete — RC validated and released"
 ```
 
@@ -865,47 +681,28 @@ Tasks are created and managed via the **`mcp_asana-mcp_*` tools only** — never
 #### Pre-flight checklist
 
 Before creating any task:
-1. Call `get_project("1213839935179235", include_sections=True)` to retrieve the four section GIDs (`To Do`, `In Progress`, `In Review`, `Done`).
-2. If a section is missing, stop and create it (or ask the user to create it in the Asana web UI).
+1. Call `get_project("1213839935179235", include_sections=True)` to retrieve the four section GIDs.
+2. If a section is missing, stop and create it.
 3. Confirm the token is valid (if the previous step failed, follow the **MCP tool failure protocol** above).
 
 #### Creating tasks
 
 Use `create_tasks` with `default_project` as a **top-level tool parameter** (NOT inside the task objects) and `section_id` inside each task pointing to `To Do`:
 
-> ⚠️ **CRITICAL**: `default_project` is a separate top-level argument to the `create_tasks` tool, not a field inside each task object. If placed inside the task, the tool silently ignores it and creates the task with no project.
-
-Call signature:
-
-```
-mcp_asana-mcp_create_tasks(
-  default_project = "1213839935179235",   ← TOP-LEVEL, not inside tasks[]
-  tasks = [
-    {
-      "name": "[Phase Name] Task: <task name>",
-      "notes": "<description>\n\nFiles: <files>\nPhase: <phase>",
-      "section_id": "<to_do_section_gid>"   ← inside each task object
-    }
-  ]
-)
-```
-
-**Dependency ordering**: Tasks without dependencies are created first. Then tasks with dependencies pass `add_dependencies` referencing the GIDs returned by the first batch.
+> ⚠️ **CRITICAL**: `default_project` is a separate top-level argument to the `create_tasks` tool, not a field inside each task object. If placed inside the task, the tool silently ignores it.
 
 #### Moving tasks between sections
-
-Use `update_tasks` with `add_projects` to move a task into a new section:
 
 | Transition | Action |
 |------------|--------|
 | Created → To Do | supply `section_id` in `create_tasks` |
-| → In Progress | `update_tasks` → `add_projects: [{project_id, section_id: in_progress_gid}]` + `add_comment`: "Assigned to subagent" |
-| → In Review | `add_comment`: "Subagent committed. Reviewing and merging." |
-| → Done | `update_tasks` → `completed: true` + `add_comment`: "Merged in \<sha\>" |
+| → In Progress | `update_tasks` → `add_projects: [{project_id, section_id: in_progress_gid}]` + comment |
+| → In Review | comment: "Subagent committed. Reviewing and merging." |
+| → Done | `update_tasks` → `completed: true` + comment with merge SHA |
 
 #### Querying tasks
 
-Use `get_tasks(project="1213839935179235")` to list all tasks. Check `completed` and `memberships[].section.name` to identify the current state and compute the ready frontier.
+Use `get_tasks(project="1213839935179235")` to list all tasks. Check `completed` and `memberships[].section.name` to identify current state and compute the ready frontier.
 
 ---
 
@@ -926,12 +723,11 @@ Your branch: {{branch_name}}
 
 ## Rules (mandatory)
 1. READ `AGENTS.md` and `GIT.md` before starting.
-2. Follow TDD: write unit tests FIRST (in tests/), verify they fail,
+2. Follow TDD: write unit tests FIRST, verify they fail,
    then implement. Commit tests before implementation.
 3. Write E2E tests at the end if your task adds/changes an endpoint
-   or UI behavior. E2E tests must pass before you stop.
+   or UI behavior.
 4. All commits must use Conventional Commit format (see GIT.md).
-   The pre-commit hook will enforce lint + build + test.
 5. Do NOT merge, push, or modify any branch other than your own.
 6. When done, commit all work and stop. Report back with:
    - List of commits (SHAs + messages)
@@ -943,9 +739,6 @@ Phase: {{phase_name}}
 Phase goal: {{phase_goal}}
 Your task depends on: {{dependency_descriptions_or_none}}
 Other parallel tasks in this phase: {{sibling_task_names}}
-(Be aware of potential overlap with sibling tasks — the supervisor
-will handle merge conflicts, but minimize unnecessary changes to
-shared files.)
 ```
 
 ---
@@ -955,63 +748,45 @@ shared files.)
 #### Simple merge (no conflicts)
 
 ```bash
-cd /path/to/repo                          # main working directory
 git checkout develop
-git merge .worktrees/<task-slug>          # fast-forward or clean merge
+git merge .worktrees/<task-slug>
 git worktree remove .worktrees/<task-slug>
 ```
 
 #### Conflict merge
 
-When two parallel subagents touched the same files:
-
 1. **Attempt merge**: `git merge <branch>` — git marks conflict markers
 2. **Read the phase spec** to understand the intended behavior of both tasks
-3. **Read both diffs**: `git diff develop...<branch-A>` and `git diff develop...<branch-B>`
-4. **Reconcile**: produce a version that includes both implementations:
-   - If both modified the same function differently → combine both behaviors
-   - If both added code to the same location → include both additions in logical order
-   - If one renamed/moved code the other modified → apply the modification to the new location
-   - **Never discard one side** — both tasks were approved in the phase spec
-5. **Test**: run `python -m pytest tests/ --ignore=tests/integration -q` on the reconciled code
-6. **Commit** the merge resolution with message: `chore: merge <task-A> and <task-B> (conflict reconciled)`
+3. **Read both diffs**
+4. **Reconcile**: produce a version that includes both implementations — **never discard one side**
+5. **Test**: run `go test ./services/backend_go/...` and `cd apps/expo_app && npm test`
+6. **Commit** the merge resolution
 
 #### Post-merge validation
 
 After every merge into develop:
-- Run `python -m ruff check app/ frontend/ tests/ e2e/` (lint)
-- Run `python -m pytest tests/ --ignore=tests/integration -q` (unit tests)
-- If either fails, fix immediately on develop before proceeding to the next task
-
----
-
-### Semantic Release
-
-- **`develop`**: every completed phase creates a Release Candidate tag (`vX.Y.Z-rc.N`)
-- **`main`**: every merge from develop creates a full version tag (`vX.Y.Z`) following [SemVer](https://semver.org/):
-  - **Patch** (`Z`): bug fixes, no API changes
-  - **Minor** (`Y`): new features, backward-compatible
-  - **Major** (`X`): breaking changes
-- Tags are created with `git tag` and the corresponding GitHub Release via `gh release create`
-- The version bump type is specified in the phase spec
+- Run `go vet ./services/backend_go/...` (lint)
+- Run `go test ./services/backend_go/... -count=1` (unit tests)
+- Run `cd apps/expo_app && npm test` (frontend tests)
+- If any fail, fix immediately on develop before proceeding
 
 ---
 
 ### Test-Driven Development (TDD)
 
 - Subagents must write unit tests for every function/behavior they implement **before** writing the implementation
-- Tests live in `tests/` mirroring the `app/` structure (e.g., `tests/core/test_ai_agents.py`)
-- Implementation is written only after tests are in place and confirmed to fail (red → green)
+- Go tests live alongside source files (`*_test.go`)
+- Expo tests live in `__tests__/` directories
+- Implementation is written only after tests are confirmed to fail (red → green)
 - Subagent commits should be ordered: test commit first, then implementation commit
-- The pre-commit hook enforces that all unit tests pass before any commit is accepted
 
 ### End-to-End Testing
 
-- E2E tests are written at the **end** of the same task that delivers the feature — not deferred to a separate task
-- Subagents **cannot signal task completion** if any E2E test fails; the worktree must not be handed back until the suite is green
-- Two E2E topologies are supported for this project:
-  - **API**: pytest-based HTTP tests against `localhost:8000` (using `httpx` or `requests`); files in `e2e/api/`
-  - **Web**: [Maestro](https://maestro.mobile.dev/) flows against the Streamlit frontend at `localhost:8501`; files in `e2e/web/`
+- E2E tests are written at the **end** of the same task that delivers the feature
+- Subagents **cannot signal task completion** if any E2E test fails
+- Two E2E topologies:
+  - **API**: Go `httptest` or external HTTP tests against the Gin server
+  - **Web**: Playwright or Detox tests against the Expo web app
 
 ---
 
@@ -1026,13 +801,12 @@ After every merge into develop:
 [ ] Subagent commits received
 [ ] Asana status updated: In Review
 [ ] Worktree merged into develop (conflicts reconciled if needed)
-[ ] Post-merge lint + tests pass
+[ ] Post-merge go test + npm test pass
 [ ] Asana status updated: Done
 [ ] All tasks complete → full test suite green
 [ ] RC tagged on develop
 [ ] User asked to validate RC locally
-[ ] Local Docker stack for RC started (`docker compose up -d --build`)
-[ ] Local validation URLs shared (`http://localhost:8501`, `http://localhost:8000`)
+[ ] Binary built and started locally for RC validation
 [ ] Explicit user approval received
 [ ] Asana project status updated
 ```

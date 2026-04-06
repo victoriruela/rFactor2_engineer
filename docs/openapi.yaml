@@ -1,0 +1,344 @@
+openapi: 3.0.0
+info:
+  title: rFactor2 Engineer Backend API
+  version: 2.0.0
+  description: RESTful API for AI-powered sim-racing telemetry analysis and vehicle setup recommendations
+  license:
+    name: MIT
+
+servers:
+  - url: http://localhost:8080/api
+    description: Local development server
+  - url: https://telemetria.bot.nu/api
+    description: Production server
+
+tags:
+  - name: Health
+    description: Service health and readiness
+  - name: Sessions
+    description: Client session management
+  - name: Upload
+    description: Chunked file upload
+  - name: Analysis
+    description: AI-powered telemetry and setup analysis
+  - name: Models
+    description: Available LLM models
+  - name: Tracks
+    description: Track library (AIW-derived JSON)
+
+paths:
+  /health:
+    get:
+      tags: [Health]
+      summary: Health check
+      operationId: getHealth
+      responses:
+        '200':
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum: [healthy]
+                  uptime:
+                    type: integer
+
+  /sessions:
+    get:
+      tags: [Sessions]
+      summary: List sessions for current client
+      operationId: listSessions
+      parameters:
+        - name: X-Client-Session-Id
+          in: header
+          schema:
+            type: string
+      responses:
+        '200':
+          description: List of sessions
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  sessions:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id:
+                          type: string
+                        telemetry:
+                          type: string
+                        svm:
+                          type: string
+
+  /sessions/{sessionId}/file/{filename}:
+    get:
+      tags: [Sessions]
+      summary: Download a session file
+      operationId: getSessionFile
+      parameters:
+        - name: sessionId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: filename
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: File contents
+        '404':
+          description: File not found
+
+  /uploads/init:
+    post:
+      tags: [Upload]
+      summary: Initialize chunked upload
+      operationId: initUpload
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                filename:
+                  type: string
+              required: [filename]
+      responses:
+        '200':
+          description: Upload initialized
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  upload_id:
+                    type: string
+
+  /uploads/{uploadId}/chunk:
+    put:
+      tags: [Upload]
+      summary: Upload a chunk
+      operationId: uploadChunk
+      parameters:
+        - name: uploadId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: chunk_index
+          in: query
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+      responses:
+        '200':
+          description: Chunk received
+
+  /uploads/{uploadId}/complete:
+    post:
+      tags: [Upload]
+      summary: Complete chunked upload
+      operationId: completeUpload
+      parameters:
+        - name: uploadId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Upload finalized
+
+  /analyze:
+    post:
+      tags: [Analysis]
+      summary: Analyze telemetry and setup files
+      operationId: analyzeTelemetry
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                telemetry_file:
+                  type: string
+                  format: binary
+                svm_file:
+                  type: string
+                  format: binary
+                model:
+                  type: string
+                provider:
+                  type: string
+                  enum: [ollama, jimmy]
+                fixed_params:
+                  type: string
+                  description: JSON array of parameter names to lock
+                ollama_base_url:
+                  type: string
+                ollama_api_key:
+                  type: string
+              required: [telemetry_file, svm_file]
+      responses:
+        '200':
+          description: Analysis results
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AnalysisResponse'
+        '500':
+          description: Analysis error
+
+  /analyze_session:
+    post:
+      tags: [Analysis]
+      summary: Analyze a stored session
+      operationId: analyzeSession
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              properties:
+                session_id:
+                  type: string
+                model:
+                  type: string
+                provider:
+                  type: string
+              required: [session_id]
+      responses:
+        '200':
+          description: Analysis results
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AnalysisResponse'
+
+  /models:
+    get:
+      tags: [Models]
+      summary: List available LLM models
+      operationId: getModels
+      parameters:
+        - name: ollama_base_url
+          in: query
+          schema:
+            type: string
+        - name: ollama_api_key
+          in: query
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Available models
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  models:
+                    type: array
+                    items:
+                      type: string
+
+  /cleanup:
+    post:
+      tags: [Sessions]
+      summary: Cleanup current client session data
+      operationId: cleanupData
+      responses:
+        '200':
+          description: Cleaned up
+
+  /tracks:
+    get:
+      tags: [Tracks]
+      summary: List available tracks
+      operationId: listTracks
+      responses:
+        '200':
+          description: Track list
+
+    post:
+      tags: [Tracks]
+      summary: Upload a track (AIW-derived JSON)
+      operationId: uploadTrack
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '201':
+          description: Track stored (SHA256 deduplicated)
+
+components:
+  schemas:
+    AnalysisResponse:
+      type: object
+      properties:
+        driving_analysis:
+          type: string
+          description: 5 driving improvement points (Spanish)
+        setup_analysis:
+          type: string
+        full_setup:
+          type: object
+          properties:
+            sections:
+              type: array
+              items:
+                type: object
+                properties:
+                  name:
+                    type: string
+                  section_key:
+                    type: string
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        parameter:
+                          type: string
+                        current:
+                          type: string
+                        new:
+                          type: string
+                        reason:
+                          type: string
+        agent_reports:
+          type: array
+          items:
+            type: object
+        setup_agent_reports:
+          type: array
+          items:
+            type: object
+        chief_reasoning:
+          type: string
+        llm_provider:
+          type: string
+        llm_model:
+          type: string

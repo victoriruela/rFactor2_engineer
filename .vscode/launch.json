@@ -1,0 +1,94 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Docker: Python - Backend (FastAPI)",
+            "type": "docker",
+            "request": "launch",
+            "preLaunchTask": "docker-run: backend",
+            "python": {
+                "pathMappings": [
+                    {
+                        "localRoot": "${workspaceFolder}",
+                        "remoteRoot": "/app"
+                    }
+                ],
+                "projectType": "fastapi"
+            },
+            "dockerServerReadyAction": {
+                "action": "openExternally",
+                "pattern": "Uvicorn running on (http://0.0.0.0:8000)",
+                "uriFormat": "http://localhost:8000/docs"
+            }
+        },
+        {
+            "name": "Docker: Python - Frontend (Streamlit)",
+            "type": "docker",
+            "request": "launch",
+            "preLaunchTask": "docker-run: frontend",
+            "python": {
+                "pathMappings": [
+                    {
+                        "localRoot": "${workspaceFolder}",
+                        "remoteRoot": "/app"
+                    }
+                ],
+                "projectType": "general"
+            },
+            "dockerServerReadyAction": {
+                "action": "openExternally",
+                "pattern": "  - Network: (http://\\d+\\.\\d+\\.\\d+\\.\\d+:8501)",
+                "uriFormat": "http://localhost:8501"
+            }
+        },
+        {
+            "name": "Python: Remote Attach (Backend)",
+            "type": "python",
+            "request": "attach",
+            "connect": {
+                "host": "localhost",
+                "port": 5678
+            },
+            "pathMappings": [
+                {
+                    "localRoot": "${workspaceFolder}",
+                    "remoteRoot": "/app"
+                }
+            ],
+            "justMyCode": true
+         },
+         {
+             "name": "Compose: Run Backend (No Debug)",
+             "type": "node-terminal",
+             "request": "launch",
+             "command": "docker compose up backend"
+         },
+         {
+             "name": "Compose: Run Frontend (No Debug)",
+             "type": "node-terminal",
+             "request": "launch",
+             "command": "docker compose up frontend"
+         },
+         {
+             "name": "Compose: Run App (No Debug)",
+             "type": "node-terminal",
+             "request": "launch",
+             "command": "docker compose up backend frontend"
+        }
+    ],
+    "compounds": [
+        {
+            "name": "Docker: Both (Frontend + Backend)",
+            "configurations": [
+                "Docker: Python - Backend (FastAPI)",
+                "Docker: Python - Frontend (Streamlit)"
+            ]
+         },
+         {
+             "name": "Compose: Run App + Open Both (No Debug)",
+             "configurations": [
+                 "Compose: Run App (No Debug)"
+             ]
+        }
+    ]
+}

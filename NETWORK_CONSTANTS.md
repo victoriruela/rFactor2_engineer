@@ -2,17 +2,18 @@
 
 | Constant | Value | Source |
 |----------|-------|--------|
-| FastAPI host | `0.0.0.0` | `app/main.py:494` |
-| FastAPI port | `8000` | `app/main.py:494` |
-| Streamlit port | `8501` | Streamlit default |
-| Ollama API base URL | `http://localhost:11434` | `app/core/ai_agents.py:13` (env `OLLAMA_BASE_URL`) |
-| Streamlit → FastAPI base | `http://localhost:8000` | `frontend/streamlit_app.py:12` (env `RF2_API_URL`) |
+| Gin server host | `0.0.0.0` | `services/backend_go/cmd/server/main.go` |
+| Gin server port | `8080` | `services/backend_go/cmd/server/main.go` (env `RF2_PORT`) |
+| Ollama API base URL | `http://localhost:11434` | `services/backend_go/internal/ollama/client.go` (env `OLLAMA_BASE_URL`) |
+| Expo dev server port | `8081` | Expo default (`npx expo start --web`) |
 
-## Docker Networking
+## Production Networking
 
-When running via `docker compose`, services communicate using container DNS names instead of `localhost`:
+In production, the single Go binary serves both the API and the embedded Expo web build:
 
-| Connection | URL | Env var |
-|------------|-----|---------|
-| Frontend → Backend | `http://backend:8000` | `RF2_API_URL` |
-| Backend → Ollama | `http://ollama:11434` | `OLLAMA_BASE_URL` |
+| Connection | URL |
+|------------|-----|
+| Browser → Expo web | `https://car-setup.com/` (served by Go via go:embed) |
+| Browser → API | `https://car-setup.com/api/*` (Gin routes) |
+| Go → Ollama | `http://localhost:11434` (local Ollama on same host) |
+| Nginx → Go binary | `http://127.0.0.1:8080` |
