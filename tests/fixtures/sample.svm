@@ -1,7 +1,0 @@
-[GENERAL]
-FuelSetting=50//L
-[SUSPENSION]
-SpringSetting=100//N/mm
-CamberSetting=-3.0//deg
-[BASIC]
-Ignored=1
