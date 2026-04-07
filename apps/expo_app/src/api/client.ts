@@ -1,6 +1,11 @@
 import axios, { AxiosInstance } from 'axios';
+import { resolveApiBaseUrl } from './baseUrl';
 
-const API_URL = process.env.EXPO_PUBLIC_API_URL ?? 'http://localhost:8080/api';
+const API_URL = resolveApiBaseUrl({
+  envApiUrl: process.env.EXPO_PUBLIC_API_URL,
+  isWeb: typeof window !== 'undefined',
+  windowOrigin: typeof window !== 'undefined' ? window.location.origin : undefined,
+});
 
 let sessionId: string | null = null;
 
@@ -116,7 +121,7 @@ export interface SetupChange {
   old_value: string;
   new_value: string;
   reason: string;
-  change_pct: number;
+  change_pct: string; // e.g. "+5.3%" — returned as string by backend
 }
 
 export interface LapStats {
@@ -124,6 +129,18 @@ export interface LapStats {
   duration: number;
   avg_speed: number;
   max_speed: number;
+}
+
+export interface TelemetrySample {
+  t: number;
+  spd: number;
+  thr: number;
+  brk: number;
+  rpm: number;
+  gear: number;
+  lat: number;
+  lon: number;
+  lap: number;
 }
 
 export interface AnalysisResponse {
@@ -142,6 +159,7 @@ export interface AnalysisResponse {
   agent_reports: { section: string; raw: string }[];
   telemetry_summary_sent: string;
   chief_reasoning: string;
+  telemetry_series: TelemetrySample[];
 }
 
 export async function analyzeFiles(
@@ -162,12 +180,88 @@ export async function analyzeFiles(
   return data;
 }
 
-export async function analyzeSession(sessionId: string): Promise<AnalysisResponse> {
+export async function analyzeSession(
+  sessionId: string,
+  model?: string,
+  provider?: string,
+): Promise<AnalysisResponse> {
   const form = new FormData();
   form.append('session_id', sessionId);
+  if (model) form.append('model', model);
+  if (provider) form.append('provider', provider);
 
   const { data } = await api.post<AnalysisResponse>('/analyze_session', form);
   return data;
+}
+
+export interface ProgressEvent {
+  type: 'progress' | 'error';
+  agent: string;
+  section?: string;
+  message: string;
+}
+
+/**
+ * Starts analysis with SSE streaming. Calls onProgress for each agent event,
+ * then resolves with the final AnalysisResponse when the result event arrives.
+ */
+export async function analyzeSessionStream(
+  sessionId: string,
+  model: string | undefined,
+  provider: string | undefined,
+  onProgress: (ev: ProgressEvent) => void,
+): Promise<AnalysisResponse> {
+  const form = new FormData();
+  form.append('session_id', sessionId);
+  if (model) form.append('model', model);
+  if (provider) form.append('provider', provider);
+
+  const headers: Record<string, string> = {
+    'X-Client-Session-Id': getSessionId(),
+  };
+
+  const response = await fetch(`${API_URL}/analyze_stream`, {
+    method: 'POST',
+    headers,
+    body: form,
+  });
+
+  if (!response.ok || !response.body) {
+    const text = await response.text().catch(() => '');
+    throw new Error(`HTTP ${response.status}: ${text}`);
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+
+    // SSE messages are separated by double newlines
+    const parts = buffer.split('\n\n');
+    buffer = parts.pop() ?? '';
+
+    for (const part of parts) {
+      const eventMatch = part.match(/^event:\s*(\S+)/m);
+      const dataMatch = part.match(/^data:\s*(.+)/ms);
+      if (!dataMatch) continue;
+
+      const eventType = eventMatch?.[1] ?? 'message';
+      const payload = JSON.parse(dataMatch[1].trim());
+
+      if (eventType === 'progress' || eventType === 'error') {
+        onProgress(payload as ProgressEvent);
+      } else if (eventType === 'result') {
+        return payload as AnalysisResponse;
+      }
+      // 'done' event — loop will exit naturally
+    }
+  }
+
+  throw new Error('Stream ended without a result event');
 }
 
 // ── Tracks ──

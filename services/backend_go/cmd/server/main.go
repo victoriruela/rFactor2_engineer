@@ -83,6 +83,7 @@ func main() {
 		// Analysis
 		api.POST("/analyze", analysisH.Analyze)
 		api.POST("/analyze_session", analysisH.AnalyzeSession)
+		api.POST("/analyze_stream", analysisH.AnalyzeStream)
 
 		// Models
 		api.GET("/models", modelsH.ListModels)
@@ -134,6 +135,11 @@ func main() {
 func spaHandler(fsys http.FileSystem) http.Handler {
 	fileServer := http.FileServer(fsys)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet && r.Method != http.MethodHead {
+			http.NotFound(w, r)
+			return
+		}
+
 		path := r.URL.Path
 		// Try to open — if not found, serve index.html
 		f, err := fsys.Open(path)

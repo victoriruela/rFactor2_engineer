@@ -31,8 +31,8 @@ export default function SetupTable({ changes }: Props) {
                 <Text style={[styles.cell, { flex: 2 }]}>{change.parameter}</Text>
                 <Text style={styles.cell}>{change.old_value}</Text>
                 <Text style={[styles.cell, styles.newValue]}>{change.new_value}</Text>
-                <Text style={[styles.cell, change.change_pct > 0 ? styles.positive : styles.negative]}>
-                  {change.change_pct > 0 ? '+' : ''}{change.change_pct.toFixed(1)}%
+                <Text style={[styles.cell, change.change_pct?.startsWith('+') ? styles.positive : styles.negative]}>
+                  {change.change_pct || '—'}
                 </Text>
                 <Text style={[styles.cell, { flex: 3 }]}>{change.reason}</Text>
               </View>

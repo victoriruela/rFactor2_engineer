@@ -12,16 +12,17 @@ type AnalysisRequest struct {
 
 // AnalysisResponse is the full result returned to the frontend.
 type AnalysisResponse struct {
-	CircuitData      []GPSPoint               `json:"circuit_data"`
-	IssuesOnMap      []IssueMarker            `json:"issues_on_map"`
-	DrivingAnalysis  string                   `json:"driving_analysis"`
-	SetupAnalysis    map[string][]SetupChange `json:"setup_analysis"`
-	FullSetup        map[string][]SetupChange `json:"full_setup"`
-	SessionStats     *SessionStats            `json:"session_stats"`
-	LapsData         []LapStats               `json:"laps_data"`
-	AgentReports     []SectionReport          `json:"agent_reports"`
-	TelemetrySummary string                   `json:"telemetry_summary_sent"`
-	ChiefReasoning   string                   `json:"chief_reasoning"`
+	CircuitData         []GPSPoint               `json:"circuit_data"`
+	IssuesOnMap         []IssueMarker            `json:"issues_on_map"`
+	DrivingAnalysis     string                   `json:"driving_analysis"`
+	SetupAnalysis       map[string][]SetupChange `json:"setup_analysis"`
+	FullSetup           map[string][]SetupChange `json:"full_setup"`
+	SessionStats        *SessionStats            `json:"session_stats"`
+	LapsData            []LapStats               `json:"laps_data"`
+	AgentReports        []SectionReport          `json:"agent_reports"`
+	TelemetrySummary    string                   `json:"telemetry_summary_sent"`
+	ChiefReasoning      string                   `json:"chief_reasoning"`
+	TelemetryTimeSeries []TelemetrySample        `json:"telemetry_series"`
 }
 
 // IssueMarker is a point on the circuit map where a driving issue was detected.

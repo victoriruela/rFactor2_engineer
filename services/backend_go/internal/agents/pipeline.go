@@ -29,6 +29,17 @@ var AxlePairs = [][2]string{
 	{"REARLEFT", "REARRIGHT"},
 }
 
+// ProgressEvent reports pipeline progress to callers via the ProgressFn callback.
+type ProgressEvent struct {
+	Type    string `json:"type"`    // "progress" | "result" | "error"
+	Agent   string `json:"agent"`   // "driving" | "specialist" | "chief"
+	Section string `json:"section"` // specialist section name, if applicable
+	Message string `json:"message"`
+}
+
+// ProgressFn is an optional callback receiving real-time pipeline events.
+type ProgressFn func(ProgressEvent)
+
 // Pipeline orchestrates the 4-agent analysis pipeline.
 type Pipeline struct {
 	Client      *ollama.Client
@@ -41,7 +52,19 @@ func NewPipeline(client *ollama.Client, mappingPath string) *Pipeline {
 }
 
 // Analyze runs the full 4-agent pipeline and returns the analysis response.
+// progress is optional; pass nil to disable streaming events.
 func (p *Pipeline) Analyze(ctx context.Context, telemetrySummary string, sessionStats *domain.SessionStats, setup *domain.Setup, fixedParams []string) (*domain.AnalysisResponse, error) {
+	return p.AnalyzeWithProgress(ctx, telemetrySummary, sessionStats, setup, fixedParams, nil)
+}
+
+// AnalyzeWithProgress is like Analyze but calls progress for each pipeline milestone.
+func (p *Pipeline) AnalyzeWithProgress(ctx context.Context, telemetrySummary string, sessionStats *domain.SessionStats, setup *domain.Setup, fixedParams []string, progress ProgressFn) (*domain.AnalysisResponse, error) {
+	emit := func(ev ProgressEvent) {
+		if progress != nil {
+			progress(ev)
+		}
+	}
+
 	if err := p.Client.EnsureRunning(ctx); err != nil {
 		return nil, fmt.Errorf("ensuring ollama: %w", err)
 	}
@@ -49,23 +72,32 @@ func (p *Pipeline) Analyze(ctx context.Context, telemetrySummary string, session
 	fixedParamsJSON, _ := json.Marshal(fixedParams)
 
 	// 1. Driving analysis
+	emit(ProgressEvent{Type: "progress", Agent: "driving", Message: "Analizando datos de conducción con el agente de telemetría..."})
 	log.Info().Msg("Running driving analysis agent...")
 	drivingAnalysis, err := p.runDrivingAgent(ctx, telemetrySummary, sessionStats)
 	if err != nil {
 		log.Error().Err(err).Msg("Driving analysis failed")
 		drivingAnalysis = "Error en el análisis de conducción: " + err.Error()
+		emit(ProgressEvent{Type: "progress", Agent: "driving", Message: "Error en análisis de conducción: " + err.Error()})
+	} else {
+		emit(ProgressEvent{Type: "progress", Agent: "driving", Message: "Análisis de conducción completado."})
 	}
 
 	// 2. Section specialists (concurrent goroutines)
+	emit(ProgressEvent{Type: "progress", Agent: "specialist", Message: "Lanzando agentes especialistas de setup por secciones..."})
 	log.Info().Msg("Running section specialist agents...")
-	specialistReports := p.runSpecialists(ctx, telemetrySummary, setup, string(fixedParamsJSON))
+	specialistReports := p.runSpecialistsWithProgress(ctx, telemetrySummary, setup, string(fixedParamsJSON), emit)
 
 	// 3. Chief engineer consolidation
+	emit(ProgressEvent{Type: "progress", Agent: "chief", Message: "Ingeniero jefe consolidando propuestas de los especialistas..."})
 	log.Info().Msg("Running chief engineer agent...")
 	chiefResult, err := p.runChiefEngineer(ctx, telemetrySummary, setup, specialistReports, string(fixedParamsJSON))
 	if err != nil {
 		log.Error().Err(err).Msg("Chief engineer failed")
 		chiefResult = &chiefOutput{Reasoning: "Error en el ingeniero jefe: " + err.Error()}
+		emit(ProgressEvent{Type: "progress", Agent: "chief", Message: "Error en ingeniero jefe: " + err.Error()})
+	} else {
+		emit(ProgressEvent{Type: "progress", Agent: "chief", Message: "Ingeniero jefe: " + truncate(chiefResult.Reasoning, 300)})
 	}
 
 	// 4. Post-processing: axle symmetry
@@ -73,6 +105,14 @@ func (p *Pipeline) Analyze(ctx context.Context, telemetrySummary string, session
 
 	// 5. Format response
 	return p.formatResponse(drivingAnalysis, specialistReports, chiefResult, setup, sessionStats, telemetrySummary), nil
+}
+
+func truncate(s string, max int) string {
+	r := []rune(s)
+	if len(r) <= max {
+		return s
+	}
+	return string(r[:max]) + "…"
 }
 
 func (p *Pipeline) runDrivingAgent(ctx context.Context, summary string, stats *domain.SessionStats) (string, error) {
@@ -84,6 +124,10 @@ func (p *Pipeline) runDrivingAgent(ctx context.Context, summary string, stats *d
 }
 
 func (p *Pipeline) runSpecialists(ctx context.Context, summary string, setup *domain.Setup, fixedParams string) []domain.SectionReport {
+	return p.runSpecialistsWithProgress(ctx, summary, setup, fixedParams, nil)
+}
+
+func (p *Pipeline) runSpecialistsWithProgress(ctx context.Context, summary string, setup *domain.Setup, fixedParams string, emit ProgressFn) []domain.SectionReport {
 	var mu sync.Mutex
 	var wg sync.WaitGroup
 	var reports []domain.SectionReport
@@ -109,6 +153,10 @@ func (p *Pipeline) runSpecialists(ctx context.Context, summary string, setup *do
 		go func(secName string, sec *domain.SetupSection) {
 			defer wg.Done()
 
+			if emit != nil {
+				emit(ProgressEvent{Type: "progress", Agent: "specialist", Section: secName, Message: "Especialista analizando sección: " + secName})
+			}
+
 			report, err := p.runSingleSpecialist(ctx, summary, secName, sec, fixedParams)
 			if err != nil {
 				log.Error().Err(err).Str("section", secName).Msg("Specialist failed")
@@ -116,6 +164,14 @@ func (p *Pipeline) runSpecialists(ctx context.Context, summary string, setup *do
 					Section: secName,
 					Summary: "Error en el análisis: " + err.Error(),
 				}
+			} else if emit != nil {
+				msg := "Especialista " + secName + " completado"
+				if len(report.Items) > 0 {
+					msg += fmt.Sprintf(" (%d cambios propuestos)", len(report.Items))
+				} else {
+					msg += " (sin cambios)"
+				}
+				emit(ProgressEvent{Type: "progress", Agent: "specialist", Section: secName, Message: msg})
 			}
 
 			mu.Lock()
@@ -192,6 +248,31 @@ func (p *Pipeline) formatResponse(drivingAnalysis string, specialistReports []do
 			if len(changes) > 0 {
 				setupAnalysis[sec.Section] = changes
 				fullSetup[sec.Section] = changes
+			}
+		}
+	}
+
+	// Fallback: if chief produced no items, use specialist reports directly
+	if len(setupAnalysis) == 0 {
+		log.Warn().Msg("Chief produced no setup changes; falling back to specialist reports")
+		for _, rep := range specialistReports {
+			if len(rep.Items) == 0 {
+				continue
+			}
+			changes := make([]domain.SetupChange, 0, len(rep.Items))
+			for _, item := range rep.Items {
+				change := item
+				if origSec, ok := setup.Sections[rep.Section]; ok {
+					if origVal, ok := origSec.Params[item.Parameter]; ok {
+						change.OldValue = origVal
+						change.ChangePct = computeChangePct(origVal, item.NewValue)
+					}
+				}
+				changes = append(changes, change)
+			}
+			if len(changes) > 0 {
+				setupAnalysis[rep.Section] = changes
+				fullSetup[rep.Section] = changes
 			}
 		}
 	}
