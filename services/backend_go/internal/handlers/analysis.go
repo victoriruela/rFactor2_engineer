@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/gin-gonic/gin"
 	"github.com/rs/zerolog/log"
@@ -282,8 +283,12 @@ func (h *AnalysisHandler) AnalyzeStream(c *gin.Context) {
 	c.Status(http.StatusOK)
 
 	flusher, canFlush := c.Writer.(http.Flusher)
+	var streamMu sync.Mutex
 
 	sendSSE := func(eventType string, payload any) {
+		streamMu.Lock()
+		defer streamMu.Unlock()
+
 		data, _ := json.Marshal(payload)
 		fmt.Fprintf(c.Writer, "event: %s\ndata: %s\n\n", eventType, data)
 		if canFlush {

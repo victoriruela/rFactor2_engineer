@@ -86,7 +86,7 @@ export default function AnalysisScreen() {
 
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
-      <Text style={styles.title}>AnÃ¡lisis AI</Text>
+      <Text style={styles.title}>Analisis AI</Text>
 
       {/* Model selector */}
       {modelsLoaded && models.length > 0 && (
@@ -130,7 +130,7 @@ export default function AnalysisScreen() {
         {isAnalyzing ? (
           <ActivityIndicator color="#fff" />
         ) : (
-          <Text style={styles.analyzeBtnText}>Iniciar AnÃ¡lisis</Text>
+          <Text style={styles.analyzeBtnText}>Iniciar Analisis</Text>
         )}
       </Pressable>
 
@@ -139,13 +139,13 @@ export default function AnalysisScreen() {
       {/* Real-time progress log */}
       {(isAnalyzing || progressMessages.length > 0) && (
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Progreso del anÃ¡lisis</Text>
+          <Text style={styles.sectionTitle}>Progreso del analisis</Text>
           <View style={styles.progressBox}>
             {progressMessages.map((ev, i) => (
               <View key={i} style={styles.progressRow}>
                 <Text style={styles.progressAgent}>
                   {AGENT_LABELS[ev.agent] ?? ev.agent}
-                  {ev.section ? ` â€” ${ev.section}` : ''}
+                  {ev.section ? ` - ${ev.section}` : ''}
                 </Text>
                 <Text style={styles.progressMsg}>{ev.message}</Text>
               </View>
@@ -166,7 +166,7 @@ export default function AnalysisScreen() {
           {/* Session Stats */}
           {analysisResult.session_stats && (
             <View style={styles.section}>
-              <Text style={styles.sectionTitle}>EstadÃ­sticas</Text>
+              <Text style={styles.sectionTitle}>Estadisticas</Text>
               <Text style={styles.stat}>
                 Vueltas: {analysisResult.session_stats.total_laps}
               </Text>
@@ -182,7 +182,7 @@ export default function AnalysisScreen() {
           {/* Telemetry charts + synchronized circuit map */}
           {analysisResult.telemetry_series?.length > 0 && (
             <View style={styles.section}>
-              <Text style={styles.sectionTitle}>TelemetrÃ­a</Text>
+              <Text style={styles.sectionTitle}>Telemetria</Text>
               <TelemetryCharts
                 samples={analysisResult.telemetry_series}
                 onIndexChange={handleCursorIndex}
