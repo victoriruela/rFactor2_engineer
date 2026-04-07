@@ -15,19 +15,19 @@ import (
 
 // MATLAB Level 5 data type constants
 const (
-	miINT8    = 1
-	miUINT8   = 2
-	miINT16   = 3
-	miUINT16  = 4
-	miINT32   = 5
-	miUINT32  = 6
-	miSINGLE  = 7
-	miDOUBLE  = 9
-	miINT64   = 12
-	miUINT64  = 13
-	miMATRIX  = 14
+	miINT8       = 1
+	miUINT8      = 2
+	miINT16      = 3
+	miUINT16     = 4
+	miINT32      = 5
+	miUINT32     = 6
+	miSINGLE     = 7
+	miDOUBLE     = 9
+	miINT64      = 12
+	miUINT64     = 13
+	miMATRIX     = 14
 	miCOMPRESSED = 15
-	miUTF8    = 16
+	miUTF8       = 16
 
 	mxDOUBLE_CLASS = 6
 	mxSINGLE_CLASS = 7
@@ -146,13 +146,13 @@ func ParseMATFile(path string) (*domain.TelemetryData, error) {
 
 	// Apply column renames for consistency
 	renameMap := map[string]string{
-		"GPS_Latitude":              "GPS Latitude",
-		"GPS_Longitude":             "GPS Longitude",
-		"Throttle_Pos":              "Throttle",
-		"Brake_Pos":                 "Brake",
-		"Steering_Wheel_Position":   "Steering",
-		"Engine_RPM":                "RPM",
-		"Ground_Speed":              "Speed",
+		"GPS_Latitude":            "GPS Latitude",
+		"GPS_Longitude":           "GPS Longitude",
+		"Throttle_Pos":            "Throttle",
+		"Brake_Pos":               "Brake",
+		"Steering_Wheel_Position": "Steering",
+		"Engine_RPM":              "RPM",
+		"Ground_Speed":            "Speed",
 	}
 	for old, new := range renameMap {
 		if v, ok := aligned[old]; ok {
@@ -223,81 +223,237 @@ func parseMatrixElement(data []byte, order binary.ByteOrder) (string, []float64)
 	if tag.numBytes < 8 {
 		return "", nil
 	}
-	// Read array class from flags
-	// arrayClass := data[offset] & 0xFF
 	flagsEnd := offset + int(tag.numBytes)
-	if flagsEnd%8 != 0 {
-		flagsEnd += 8 - flagsEnd%8
+	if flagsEnd > len(data) {
+		return "", nil
 	}
-	offset = flagsEnd
+	arrayClass := data[offset] & 0xFF
+	offset = align8(flagsEnd)
 
 	// Dimensions subelement
 	if offset+8 > len(data) {
 		return "", nil
 	}
-	dimTag := readTag(data[offset:], order)
-	offset += 8
-	dimEnd := offset + int(dimTag.numBytes)
-	if dimEnd%8 != 0 {
-		dimEnd += 8 - dimEnd%8
-	}
-	if dimEnd > len(data) {
+	elementCount, nextOffset, ok := parseDimensions(data, order, offset)
+	if !ok {
 		return "", nil
 	}
-	offset = dimEnd
+	offset = nextOffset
 
 	// Name subelement
-	if offset+8 > len(data) {
+	name, nextOffset, ok := parseNameElement(data, order, offset)
+	if !ok || name == "" {
 		return "", nil
 	}
+	offset = nextOffset
 
-	nameTag := readTag(data[offset:], order)
-	var name string
-
-	// Check for SDE
-	if nameTag.dataType>>16 != 0 || (nameTag.numBytes <= 4 && nameTag.dataType != 0) {
-		// Small data element: name is in the tag itself or immediately after
-		rawDT := order.Uint32(data[offset : offset+4])
-		if rawDT>>16 != 0 {
-			// SDE format
-			nb := rawDT >> 16
-			if nb <= 4 {
-				name = strings.TrimRight(string(data[offset+4:offset+4+int(nb)]), "\x00")
-			}
-			offset += 8
-		} else {
-			offset += 8
-			nameEnd := offset + int(nameTag.numBytes)
-			if nameEnd > len(data) {
-				return "", nil
-			}
-			name = strings.TrimRight(string(data[offset:nameEnd]), "\x00")
-			if nameEnd%8 != 0 {
-				nameEnd += 8 - nameEnd%8
-			}
-			offset = nameEnd
-		}
+	var values []float64
+	if arrayClass == mxSTRUCT_CLASS {
+		values = extractStructFieldValues(data[offset:], order, elementCount, "Value")
 	} else {
-		offset += 8
-		nameEnd := offset + int(nameTag.numBytes)
-		if nameEnd > len(data) {
-			return "", nil
-		}
-		name = strings.TrimRight(string(data[offset:nameEnd]), "\x00")
-		if nameEnd%8 != 0 {
-			nameEnd += 8 - nameEnd%8
-		}
-		offset = nameEnd
+		values = extractNumericData(data[offset:], order)
 	}
-
-	if name == "" {
-		return "", nil
-	}
-
-	// Remaining data: look for numeric data subelement
-	values := extractNumericData(data[offset:], order)
 
 	return name, values
+}
+
+func align8(offset int) int {
+	if offset%8 != 0 {
+		offset += 8 - offset%8
+	}
+	return offset
+}
+
+func parseDimensions(data []byte, order binary.ByteOrder, offset int) (int, int, bool) {
+	if offset+8 > len(data) {
+		return 0, offset, false
+	}
+
+	tag := readTag(data[offset:], order)
+	offset += 8
+	end := offset + int(tag.numBytes)
+	if end > len(data) {
+		return 0, offset, false
+	}
+
+	count := 1
+	for index := offset; index+4 <= end; index += 4 {
+		dim := int(order.Uint32(data[index : index+4]))
+		if dim > 0 {
+			count *= dim
+		}
+	}
+	if count == 0 {
+		count = 1
+	}
+
+	return count, align8(end), true
+}
+
+func parseNameElement(data []byte, order binary.ByteOrder, offset int) (string, int, bool) {
+	if offset+8 > len(data) {
+		return "", offset, false
+	}
+
+	tag := readTag(data[offset:], order)
+	rawDT := order.Uint32(data[offset : offset+4])
+
+	// Small data element format.
+	if rawDT>>16 != 0 {
+		numBytes := int(rawDT >> 16)
+		if offset+4+numBytes > len(data) {
+			return "", offset, false
+		}
+		name := strings.TrimRight(string(data[offset+4:offset+4+numBytes]), "\x00")
+		return name, offset + 8, true
+	}
+
+	offset += 8
+	end := offset + int(tag.numBytes)
+	if end > len(data) {
+		return "", offset, false
+	}
+
+	name := strings.TrimRight(string(data[offset:end]), "\x00")
+	return name, align8(end), true
+}
+
+func extractStructFieldValues(data []byte, order binary.ByteOrder, elementCount int, fieldName string) []float64 {
+	offset := 0
+	fieldNameLength, nextOffset, ok := parseFieldNameLength(data, order, offset)
+	if !ok {
+		return nil
+	}
+	offset = nextOffset
+
+	fieldNames, nextOffset, ok := parseFieldNames(data, order, offset, fieldNameLength)
+	if !ok || len(fieldNames) == 0 {
+		return nil
+	}
+	offset = nextOffset
+
+	if elementCount <= 0 {
+		elementCount = 1
+	}
+
+	for elementIndex := 0; elementIndex < elementCount; elementIndex++ {
+		for _, currentField := range fieldNames {
+			if offset+8 > len(data) {
+				return nil
+			}
+
+			tag := readTag(data[offset:], order)
+			offset += 8
+			end := offset + int(tag.numBytes)
+			if end > len(data) {
+				return nil
+			}
+
+			if currentField == fieldName && tag.dataType == miMATRIX {
+				if values := parseUnnamedMatrix(data[offset:end], order); len(values) > 0 {
+					return values
+				}
+			}
+
+			offset = align8(end)
+		}
+	}
+
+	return nil
+}
+
+func parseFieldNameLength(data []byte, order binary.ByteOrder, offset int) (int, int, bool) {
+	if offset+8 > len(data) {
+		return 0, offset, false
+	}
+
+	rawDT := order.Uint32(data[offset : offset+4])
+	if rawDT>>16 != 0 {
+		fieldNameLength := int(order.Uint32(data[offset+4 : offset+8]))
+		if fieldNameLength <= 0 {
+			return 0, offset, false
+		}
+		return fieldNameLength, offset + 8, true
+	}
+
+	tag := readTag(data[offset:], order)
+	offset += 8
+	end := offset + int(tag.numBytes)
+	if end > len(data) || tag.numBytes < 4 {
+		return 0, offset, false
+	}
+
+	fieldNameLength := int(order.Uint32(data[offset : offset+4]))
+	if fieldNameLength <= 0 {
+		return 0, offset, false
+	}
+
+	return fieldNameLength, end, true
+}
+
+func parseFieldNames(data []byte, order binary.ByteOrder, offset, fieldNameLength int) ([]string, int, bool) {
+	if offset+8 > len(data) {
+		return nil, offset, false
+	}
+
+	tag := readTag(data[offset:], order)
+	offset += 8
+	end := offset + int(tag.numBytes)
+	if end > len(data) || fieldNameLength <= 0 {
+		return nil, offset, false
+	}
+
+	rawNames := data[offset:end]
+	fieldCount := len(rawNames) / fieldNameLength
+	if fieldCount == 0 {
+		return nil, offset, false
+	}
+
+	fieldNames := make([]string, 0, fieldCount)
+	for index := 0; index < fieldCount; index++ {
+		start := index * fieldNameLength
+		name := strings.TrimRight(string(rawNames[start:start+fieldNameLength]), "\x00")
+		fieldNames = append(fieldNames, name)
+	}
+
+	return fieldNames, align8(end), true
+}
+
+func parseUnnamedMatrix(data []byte, order binary.ByteOrder) []float64 {
+	if len(data) < 16 {
+		return nil
+	}
+
+	offset := 0
+	tag := readTag(data[offset:], order)
+	offset += 8
+	if tag.numBytes < 8 {
+		return nil
+	}
+	end := offset + int(tag.numBytes)
+	if end > len(data) {
+		return nil
+	}
+	arrayClass := data[offset] & 0xFF
+	offset = align8(end)
+
+	_, nextOffset, ok := parseDimensions(data, order, offset)
+	if !ok {
+		return nil
+	}
+	offset = nextOffset
+
+	_, nextOffset, ok = parseNameElement(data, order, offset)
+	if !ok {
+		return nil
+	}
+	offset = nextOffset
+
+	if arrayClass == mxSTRUCT_CLASS {
+		return extractStructFieldValues(data[offset:], order, 1, "Value")
+	}
+
+	return extractNumericData(data[offset:], order)
 }
 
 func extractNumericData(data []byte, order binary.ByteOrder) []float64 {

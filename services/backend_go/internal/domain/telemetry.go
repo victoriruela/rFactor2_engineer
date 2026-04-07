@@ -48,13 +48,13 @@ func (td *TelemetryData) ExtractTimeSeries() []TelemetrySample {
 
 	timeData := td.Channels[td.TimeCol]
 	lapData := td.Channels[td.LapCol]
-	speed := td.Channels["Speed"]
-	throttle := td.Channels["Throttle"]
-	brake := td.Channels["Brake"]
-	rpm := td.Channels["RPM"]
-	gear := td.Channels["Gear"]
-	lat := td.Channels["GPS_Lat"]
-	lon := td.Channels["GPS_Lon"]
+	speed := firstChannel(td.Channels, "Speed", "Ground_Speed")
+	throttle := firstChannel(td.Channels, "Throttle", "Throttle_Pos")
+	brake := firstChannel(td.Channels, "Brake", "Brake_Pos")
+	rpm := firstChannel(td.Channels, "RPM", "Engine_RPM")
+	gear := firstChannel(td.Channels, "Gear")
+	lat := firstChannel(td.Channels, "GPS Latitude", "GPS_Latitude", "GPS_Lat", "Latitude", "gLat")
+	lon := firstChannel(td.Channels, "GPS Longitude", "GPS_Longitude", "GPS_Lon", "Longitude", "gLon")
 
 	safeGet := func(s []float64, i int) float64 {
 		if i < len(s) {
@@ -123,8 +123,9 @@ func (td *TelemetryData) SessionStats() SessionStats {
 	}
 
 	var laps []LapStats
-	best := 1e18
+	best := 0.0
 	totalDur := 0.0
+	hasValidLap := false
 
 	for lapNum, times := range lapTimes {
 		if len(times) < 2 {
@@ -158,15 +159,17 @@ func (td *TelemetryData) SessionStats() SessionStats {
 
 		laps = append(laps, ls)
 		totalDur += duration
-		if duration < best {
+		if !hasValidLap || duration < best {
 			best = duration
+			hasValidLap = true
 		}
 	}
 
-	avgLap := 0.0
-	if len(laps) > 0 {
-		avgLap = totalDur / float64(len(laps))
+	if len(laps) == 0 {
+		return SessionStats{}
 	}
+
+	avgLap := totalDur / float64(len(laps))
 
 	return SessionStats{
 		TotalLaps:   len(laps),
@@ -174,6 +177,15 @@ func (td *TelemetryData) SessionStats() SessionStats {
 		AvgLapTime:  avgLap,
 		Laps:        laps,
 	}
+}
+
+func firstChannel(channels map[string][]float64, names ...string) []float64 {
+	for _, name := range names {
+		if data, ok := channels[name]; ok {
+			return data
+		}
+	}
+	return nil
 }
 
 // ExtractGPS returns GPS points from telemetry lat/lon channels.

@@ -8,7 +8,7 @@ import (
 )
 
 // FilterIncompleteLaps removes incomplete and anomalous laps from telemetry data.
-// Excludes lap 0 (out-lap) and laps with duration > 110% of median.
+// Excludes lap 0 (out-lap) and laps with duration outside the 90%-110% median window.
 func FilterIncompleteLaps(td *domain.TelemetryData) {
 	if td.LapCol == "" {
 		return
@@ -40,7 +40,7 @@ func FilterIncompleteLaps(td *domain.TelemetryData) {
 		return
 	}
 
-	// Filter by duration: exclude laps > 110% of median
+	// Filter by duration: exclude laps outside the median window.
 	completeLaps := filterByDuration(td, laps)
 	if len(completeLaps) == 0 {
 		completeLaps = laps
@@ -110,11 +110,12 @@ func filterByDuration(td *domain.TelemetryData, laps []int) []int {
 
 	sort.Float64s(durations)
 	medianDur := durations[len(durations)/2]
-	threshold := medianDur * 1.10
+	minThreshold := medianDur * 0.90
+	maxThreshold := medianDur * 1.10
 
 	result := make([]int, 0, len(laps))
 	for _, l := range laps {
-		if d, ok := lapDurations[l]; ok && d <= threshold {
+		if d, ok := lapDurations[l]; ok && d >= minThreshold && d <= maxThreshold {
 			result = append(result, l)
 		}
 	}

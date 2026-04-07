@@ -30,6 +30,58 @@ func TestTelemetryData_SessionStats(t *testing.T) {
 	}
 }
 
+func TestTelemetryData_SessionStats_NoValidLapsReturnsZeroValues(t *testing.T) {
+	td := &domain.TelemetryData{
+		LapCol:  "Lap",
+		TimeCol: "Time",
+		Channels: map[string][]float64{
+			"Lap":  {1},
+			"Time": {0},
+		},
+	}
+
+	stats := td.SessionStats()
+
+	if stats.TotalLaps != 0 {
+		t.Fatalf("expected zero laps, got %d", stats.TotalLaps)
+	}
+	if stats.BestLapTime != 0 {
+		t.Fatalf("expected best lap 0, got %f", stats.BestLapTime)
+	}
+	if stats.AvgLapTime != 0 {
+		t.Fatalf("expected avg lap 0, got %f", stats.AvgLapTime)
+	}
+}
+
+func TestTelemetryData_ExtractTimeSeries_UsesChannelAliases(t *testing.T) {
+	td := &domain.TelemetryData{
+		LapCol:  "Lap_Number",
+		TimeCol: "Session_Elapsed_Time",
+		Channels: map[string][]float64{
+			"Lap_Number":           {1, 1},
+			"Session_Elapsed_Time": {10, 10.5},
+			"Ground_Speed":         {100, 110},
+			"Throttle_Pos":         {0.4, 0.6},
+			"Brake_Pos":            {0.1, 0.0},
+			"Engine_RPM":           {7000, 7200},
+			"Gear":                 {3, 4},
+			"GPS Latitude":         {41.0, 41.1},
+			"GPS Longitude":        {2.0, 2.1},
+		},
+	}
+
+	series := td.ExtractTimeSeries()
+	if len(series) != 2 {
+		t.Fatalf("expected 2 samples, got %d", len(series))
+	}
+	if series[1].Spd != 110 || series[1].Thr != 0.6 || series[1].RPM != 7200 {
+		t.Fatalf("unexpected aliased telemetry sample: %+v", series[1])
+	}
+	if series[1].Lat != 41.1 || series[1].Lon != 2.1 {
+		t.Fatalf("unexpected aliased GPS sample: %+v", series[1])
+	}
+}
+
 func TestTelemetryData_ExtractGPS(t *testing.T) {
 	td := &domain.TelemetryData{
 		LapCol:  "Lap",

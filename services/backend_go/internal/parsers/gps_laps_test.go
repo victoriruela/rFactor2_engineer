@@ -48,3 +48,23 @@ func TestFilterIncompleteLaps(t *testing.T) {
 		}
 	}
 }
+
+func TestFilterIncompleteLaps_RemovesShortTrailingLap(t *testing.T) {
+	td := &domain.TelemetryData{
+		LapCol:  "Lap",
+		TimeCol: "Time",
+		Channels: map[string][]float64{
+			"Lap":   {1, 1, 1, 2, 2, 2, 3, 3},
+			"Time":  {0, 45, 90, 91, 136, 181, 182, 185},
+			"Speed": {100, 120, 140, 100, 120, 140, 80, 60},
+		},
+	}
+
+	parsers.FilterIncompleteLaps(td)
+
+	for _, lap := range td.Channels[td.LapCol] {
+		if lap == 3 {
+			t.Fatal("expected short trailing lap to be filtered out")
+		}
+	}
+}
