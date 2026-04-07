@@ -59,6 +59,11 @@ export async function listSessions(): Promise<SessionInfo[]> {
   return data.sessions ?? [];
 }
 
+export async function getSetup(sessionId: string): Promise<Record<string, SetupChange[]>> {
+  const { data } = await api.get(`/setup/${sessionId}`);
+  return data.full_setup ?? {};
+}
+
 export async function cleanup(): Promise<void> {
   await api.post('/cleanup');
 }

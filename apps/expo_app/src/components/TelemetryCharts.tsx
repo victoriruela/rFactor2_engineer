@@ -1,11 +1,10 @@
 /**
  * TelemetryCharts — interactive telemetry viewer.
  * Shows Speed / Throttle+Brake / RPM as SVG line charts.
- * A draggable vertical cursor moves across all three charts simultaneously and
- * drives the position marker on the parent's CircuitMap via onIndexChange.
+ * A draggable vertical cursor moves across all three charts simultaneously.
  */
-import React, { useCallback, useMemo, useRef, useState } from 'react';
-import { View, Text, StyleSheet, PanResponder } from 'react-native';
+import React, { useCallback, useMemo, useState } from 'react';
+import { View, Text, StyleSheet, GestureResponderEvent, Dimensions } from 'react-native';
 import Svg, {
   Line,
   Polyline,
@@ -17,14 +16,13 @@ import type { TelemetrySample } from '../api';
 interface Props {
   samples: TelemetrySample[];
   onIndexChange?: (index: number) => void;
-  width?: number;
 }
 
-const CHART_HEIGHT = 100;
-const PAD_LEFT = 36;
-const PAD_RIGHT = 8;
-const PAD_TOP = 8;
-const PAD_BOTTOM = 20;
+const CHART_HEIGHT = 120;
+const PAD_LEFT = 40;
+const PAD_RIGHT = 12;
+const PAD_TOP = 12;
+const PAD_BOTTOM = 24;
 
 interface ChartConfig {
   label: string;
@@ -34,8 +32,8 @@ interface ChartConfig {
 }
 
 const CHARTS: ChartConfig[] = [
-  { label: 'Velocidad', keys: ['spd'], colors: ['#4fc3f7'], unit: 'km/h' },
-  { label: 'Acelerador / Freno', keys: ['thr', 'brk'], colors: ['#66bb6a', '#ef5350'], unit: '%' },
+  { label: 'Velocidad (km/h)', keys: ['spd'], colors: ['#4fc3f7'], unit: 'km/h' },
+  { label: 'Acelerador / Freno (%)', keys: ['thr', 'brk'], colors: ['#66bb6a', '#ef5350'], unit: '%' },
   { label: 'RPM', keys: ['rpm'], colors: ['#ffa726'], unit: 'rpm' },
 ];
 
@@ -51,30 +49,28 @@ function buildPoints(
   innerW: number,
   innerH: number,
 ): string {
+  if (normalised.length < 2) return '';
   return normalised
     .map((v, i) => {
       const x = PAD_LEFT + (i / (normalised.length - 1)) * innerW;
       const y = PAD_TOP + (1 - v) * innerH;
-      return `${x.toFixed(1)},${y.toFixed(1)}`;
+      return `${Math.round(x)},${Math.round(y)}`;
     })
     .join(' ');
 }
 
 function formatValue(v: number, unit: string): string {
-  if (unit === '%') return `${(v * 100).toFixed(0)}%`;
+  if (unit === '%') return `${Math.round(v * 100)}%`;
   if (unit === 'rpm') return `${Math.round(v)}`;
   return `${v.toFixed(1)}`;
 }
 
-export default function TelemetryCharts({ samples, onIndexChange, width = 700 }: Props) {
-  const [cursorX, setCursorX] = useState<number | null>(null);
+export default function TelemetryCharts({ samples, onIndexChange }: Props) {
   const [cursorIdx, setCursorIdx] = useState<number>(0);
-  const containerRef = useRef<View>(null);
-  const containerLeft = useRef<number>(0);
-
+  const screenWidth = Dimensions.get('window').width;
+  const width = Math.min(screenWidth - 32, 800); // responsive width with padding
   const innerW = width - PAD_LEFT - PAD_RIGHT;
   const innerH = CHART_HEIGHT - PAD_TOP - PAD_BOTTOM;
-
   const n = samples.length;
 
   // Precompute per-chart data
@@ -102,39 +98,29 @@ export default function TelemetryCharts({ samples, onIndexChange, width = 700 }:
     [innerW, n],
   );
 
-  const panResponder = useMemo(
-    () =>
-      PanResponder.create({
-        onStartShouldSetPanResponder: () => true,
-        onMoveShouldSetPanResponder: () => true,
-        onPanResponderGrant: (evt) => {
-          const localX = evt.nativeEvent.locationX;
-          const idx = xToIndex(localX);
-          setCursorX(PAD_LEFT + (idx / (n - 1)) * innerW);
-          setCursorIdx(idx);
-          onIndexChange?.(idx);
-        },
-        onPanResponderMove: (evt) => {
-          const localX = evt.nativeEvent.locationX;
-          const idx = xToIndex(localX);
-          setCursorX(PAD_LEFT + (idx / (n - 1)) * innerW);
-          setCursorIdx(idx);
-          onIndexChange?.(idx);
-        },
-      }),
-    [xToIndex, innerW, n, onIndexChange],
+  const handlePointerEvent = useCallback(
+    (evt: GestureResponderEvent) => {
+      const localX = evt.nativeEvent.locationX;
+      const idx = xToIndex(localX);
+      setCursorIdx(idx);
+      onIndexChange?.(idx);
+    },
+    [xToIndex, onIndexChange],
   );
 
   if (!samples || samples.length < 2) {
-    return null;
+    return <Text style={styles.empty}>Sin datos de telemetría</Text>;
   }
+
+  const cursorX = PAD_LEFT + (cursorIdx / (n - 1)) * innerW;
 
   return (
     <View style={styles.container}>
       {CHARTS.map((cfg, ci) => {
         const seriesData = chartData[ci];
-        const curVal =
-          cursorIdx != null && cfg.keys[0] ? samples[cursorIdx]?.[cfg.keys[0]] : undefined;
+        if (!seriesData || seriesData.length === 0) return null;
+
+        const curVal = samples[cursorIdx]?.[cfg.keys[0]] as number | undefined;
 
         return (
           <View key={cfg.label} style={styles.chartWrap}>
@@ -142,12 +128,17 @@ export default function TelemetryCharts({ samples, onIndexChange, width = 700 }:
               <Text style={styles.chartLabel}>{cfg.label}</Text>
               {curVal != null && (
                 <Text style={[styles.cursorVal, { color: cfg.colors[0] }]}>
-                  {formatValue(curVal as number, cfg.unit)} {cfg.unit}
+                  {formatValue(curVal, cfg.unit)}
                 </Text>
               )}
             </View>
 
-            <View {...panResponder.panHandlers}>
+            <View
+              style={styles.chartContainer}
+              onStartShouldSetResponder={() => true}
+              onResponderGrant={handlePointerEvent}
+              onResponderMove={handlePointerEvent}
+            >
               <Svg width={width} height={CHART_HEIGHT}>
                 {/* Background */}
                 <Rect
@@ -156,52 +147,70 @@ export default function TelemetryCharts({ samples, onIndexChange, width = 700 }:
                   width={innerW}
                   height={innerH}
                   fill="#1a1a2e"
-                  rx={2}
+                  rx={3}
                 />
+
+                {/* Grid lines */}
+                <Line x1={PAD_LEFT} y1={PAD_TOP + innerH / 2} x2={PAD_LEFT + innerW} y2={PAD_TOP + innerH / 2} stroke="#333" strokeWidth={0.5} />
 
                 {/* Y-axis labels */}
                 <SvgText
-                  x={PAD_LEFT - 4}
-                  y={PAD_TOP + 4}
+                  x={PAD_LEFT - 6}
+                  y={PAD_TOP + 8}
                   textAnchor="end"
                   fill="#666"
-                  fontSize={9}
+                  fontSize={10}
+                  fontFamily="monospace"
                 >
                   {seriesData[0]?.max.toFixed(seriesData[0].max > 10 ? 0 : 1)}
                 </SvgText>
                 <SvgText
-                  x={PAD_LEFT - 4}
-                  y={PAD_TOP + innerH}
+                  x={PAD_LEFT - 6}
+                  y={PAD_TOP + innerH + 4}
                   textAnchor="end"
                   fill="#666"
-                  fontSize={9}
+                  fontSize={10}
+                  fontFamily="monospace"
                 >
                   {seriesData[0]?.min.toFixed(seriesData[0].min > 10 ? 0 : 1)}
                 </SvgText>
 
                 {/* Data lines */}
-                {seriesData.map((sd, si) => (
-                  <Polyline
-                    key={si}
-                    points={buildPoints(sd.norm, innerW, innerH)}
-                    fill="none"
-                    stroke={cfg.colors[si] ?? '#fff'}
-                    strokeWidth={1.5}
-                    strokeLinejoin="round"
-                  />
-                ))}
+                {seriesData.map((sd, si) => {
+                  const pts = buildPoints(sd.norm, innerW, innerH);
+                  if (!pts) return null;
+                  return (
+                    <Polyline
+                      key={si}
+                      points={pts}
+                      fill="none"
+                      stroke={cfg.colors[si] ?? '#fff'}
+                      strokeWidth={2}
+                      strokeLinejoin="round"
+                      strokeLinecap="round"
+                    />
+                  );
+                })}
 
                 {/* Cursor line */}
-                {cursorX != null && (
-                  <Line
-                    x1={cursorX}
-                    y1={PAD_TOP}
-                    x2={cursorX}
-                    y2={PAD_TOP + innerH}
-                    stroke="#fff"
-                    strokeWidth={1}
-                    strokeDasharray="4,3"
-                    opacity={0.6}
+                <Line
+                  x1={cursorX}
+                  y1={PAD_TOP}
+                  x2={cursorX}
+                  y2={PAD_TOP + innerH}
+                  stroke="#fff"
+                  strokeWidth={1.5}
+                  opacity={0.7}
+                />
+
+                {/* Cursor dot at data point */}
+                {seriesData[0] && (
+                  <circle
+                    cx={cursorX}
+                    cy={PAD_TOP + (1 - seriesData[0].norm[cursorIdx]) * innerH}
+                    r={3}
+                    fill="#fff"
+                    opacity={0.8}
                   />
                 )}
               </Svg>
@@ -210,14 +219,14 @@ export default function TelemetryCharts({ samples, onIndexChange, width = 700 }:
         );
       })}
 
-      {/* Time label */}
+      {/* Time and lap label */}
       {cursorIdx != null && samples[cursorIdx] && (
         <Text style={styles.timeLabel}>
-          t = {samples[cursorIdx].t.toFixed(2)} s — Vuelta {samples[cursorIdx].lap}
+          t = {samples[cursorIdx].t.toFixed(2)}s  |  Vuelta {samples[cursorIdx].lap}
         </Text>
       )}
 
-      {/* Legend for throttle/brake chart */}
+      {/* Legend */}
       <View style={styles.legend}>
         <View style={styles.legendItem}>
           <View style={[styles.legendDot, { backgroundColor: '#4fc3f7' }]} />
@@ -242,53 +251,74 @@ export default function TelemetryCharts({ samples, onIndexChange, width = 700 }:
 
 const styles = StyleSheet.create({
   container: {
-    backgroundColor: '#111',
+    backgroundColor: '#0d0d1f',
     borderRadius: 8,
-    padding: 8,
+    padding: 12,
     gap: 12,
+    width: '100%',
+    alignItems: 'center',
   },
   chartWrap: {
-    gap: 4,
+    width: '100%',
+    gap: 6,
   },
   chartHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     paddingHorizontal: 4,
+    marginBottom: 4,
   },
   chartLabel: {
     color: '#888',
-    fontSize: 11,
+    fontSize: 12,
+    fontWeight: '600',
     textTransform: 'uppercase',
     letterSpacing: 0.5,
   },
   cursorVal: {
-    fontSize: 12,
-    fontWeight: '600',
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  chartContainer: {
+    backgroundColor: '#111',
+    borderRadius: 6,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: '#222',
+  },
+  empty: {
+    color: '#666',
+    fontSize: 13,
+    fontStyle: 'italic',
   },
   timeLabel: {
-    color: '#666',
+    color: '#888',
     fontSize: 11,
     textAlign: 'center',
+    marginTop: 8,
+    fontFamily: 'monospace',
   },
   legend: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    gap: 12,
+    gap: 16,
+    justifyContent: 'center',
     paddingHorizontal: 4,
-    paddingTop: 4,
+    marginTop: 8,
   },
   legendItem: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 4,
+    gap: 6,
   },
   legendDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
+    width: 10,
+    height: 10,
+    borderRadius: 5,
   },
   legendText: {
-    color: '#888',
+    color: '#999',
     fontSize: 11,
   },
 });
+

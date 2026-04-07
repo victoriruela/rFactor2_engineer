@@ -1,7 +1,9 @@
 import { useState, useCallback } from 'react';
 import { View, Text, StyleSheet, Pressable, ActivityIndicator, Platform } from 'react-native';
 import { useAppStore } from '../../src/store/useAppStore';
-import { uploadFile } from '../../src/api';
+import { uploadFile, getSetup, listSessions } from '../../src/api';
+import SetupCompleteSection from '../../src/components/SetupCompleteSection';
+import type { SetupChange } from '../../src/api';
 
 export default function UploadScreen() {
   const {
@@ -12,6 +14,7 @@ export default function UploadScreen() {
   } = useAppStore();
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
+  const [fullSetup, setFullSetup] = useState<Record<string, SetupChange[]> | null>(null);
 
   const pickFile = useCallback(async (type: 'telemetry' | 'svm') => {
     if (Platform.OS === 'web') {
@@ -42,6 +45,12 @@ export default function UploadScreen() {
     try {
       await uploadFile(telemetryFile, (pct) => setUploadProgress(pct / 2));
       await uploadFile(svmFile, (pct) => setUploadProgress(50 + pct / 2));
+      // Fetch setup from the uploaded session
+      const sessions = await listSessions();
+      if (sessions.length > 0) {
+        const setup = await getSetup(sessions[0].id);
+        setFullSetup(setup);
+      }
       setSuccess(true);
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : 'Error de subida';
@@ -84,6 +93,13 @@ export default function UploadScreen() {
 
       {error && <Text style={styles.error}>{error}</Text>}
       {success && <Text style={styles.success}>Archivos subidos correctamente</Text>}
+
+      {/* Display full setup if loaded */}
+      {fullSetup && (
+        <View style={styles.setupSection}>
+          <SetupCompleteSection fullSetup={fullSetup} />
+        </View>
+      )}
     </View>
   );
 }
@@ -165,5 +181,11 @@ const styles = StyleSheet.create({
   success: {
     color: '#4caf50',
     marginTop: 16,
+  },
+  setupSection: {
+    width: '100%',
+    maxWidth: 600,
+    marginTop: 32,
+    paddingHorizontal: 16,
   },
 });
