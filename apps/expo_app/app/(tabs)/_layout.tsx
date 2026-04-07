@@ -27,6 +27,10 @@ export default function TabLayout() {
         options={{ title: 'Análisis', tabBarLabel: 'Análisis' }}
       />
       <Tabs.Screen
+        name="telemetry"
+        options={{ title: 'Telemetría', tabBarLabel: 'Telemetría' }}
+      />
+      <Tabs.Screen
         name="tracks"
         options={{ title: 'Circuitos', tabBarLabel: 'Tracks' }}
       />

@@ -41,6 +41,12 @@ interface AppState {
   svmFile: File | null;
   setTelemetryFile: (f: File | null) => void;
   setSvmFile: (f: File | null) => void;
+
+  // Locked parameters (prevent AI from suggesting changes)
+  lockedParameters: Set<string>;
+  toggleLockedParameter: (param: string) => void;
+  setLockedParameters: (params: Set<string>) => void;
+  clearLockedParameters: () => void;
 }
 
 export const useAppStore = create<AppState>((set) => ({
@@ -76,4 +82,17 @@ export const useAppStore = create<AppState>((set) => ({
   svmFile: null,
   setTelemetryFile: (telemetryFile) => set({ telemetryFile }),
   setSvmFile: (svmFile) => set({ svmFile }),
+
+  lockedParameters: new Set(),
+  toggleLockedParameter: (param) => set((state) => {
+    const newLocked = new Set(state.lockedParameters);
+    if (newLocked.has(param)) {
+      newLocked.delete(param);
+    } else {
+      newLocked.add(param);
+    }
+    return { lockedParameters: newLocked };
+  }),
+  setLockedParameters: (lockedParameters) => set({ lockedParameters }),
+  clearLockedParameters: () => set({ lockedParameters: new Set() }),
 }));

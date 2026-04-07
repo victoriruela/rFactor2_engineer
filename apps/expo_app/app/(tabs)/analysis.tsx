@@ -2,14 +2,15 @@
 import { View, Text, StyleSheet, Pressable, ScrollView, ActivityIndicator, TextInput } from 'react-native';
 import { useAppStore } from '../../src/store/useAppStore';
 import { analyzeFiles, analyzeSessionStream, listModels, listSessions } from '../../src/api';
-import type { GPSPoint, ProgressEvent } from '../../src/api';
-import CircuitMap from '../../src/components/CircuitMap';
+import type { ProgressEvent } from '../../src/api';
 import SetupTable from '../../src/components/SetupTable';
 import MarkdownText from '../../src/components/MarkdownText';
-import TelemetryCharts from '../../src/components/TelemetryCharts';
+import ChiefReasoningFormatter from '../../src/components/ChiefReasoningFormatter';
+import SetupCompleteSection from '../../src/components/SetupCompleteSection';
+import LockedParametersPanel from '../../src/components/LockedParametersPanel';
 
 const AGENT_LABELS: Record<string, string> = {
-  driving: 'Analisis de conduccion',
+  driving: 'Análisis de conducción',
   specialist: 'Especialista de setup',
   chief: 'Ingeniero jefe',
 };
@@ -23,10 +24,11 @@ export default function AnalysisScreen() {
     models, setModels,
     selectedModel, setSelectedModel,
     selectedProvider,
+    lockedParameters,
   } = useAppStore();
   const [modelsLoaded, setModelsLoaded] = useState(false);
   const [progressMessages, setProgressMessages] = useState<ProgressEvent[]>([]);
-  const [cursorPosition, setCursorPosition] = useState<GPSPoint | null>(null);
+  const [progressExpanded, setProgressExpanded] = useState(true);
 
   useEffect(() => {
     listModels()
@@ -36,14 +38,14 @@ export default function AnalysisScreen() {
 
   const handleAnalyze = useCallback(async () => {
     if (!telemetryFile || !svmFile) {
-      setAnalysisError('Sube ambos archivos primero en la pestana Upload');
+      setAnalysisError('Sube ambos archivos primero en la pestaña "Upload"');
       return;
     }
 
     setAnalyzing(true);
     setAnalysisError(null);
     setProgressMessages([]);
-    setCursorPosition(null);
+    setProgressExpanded(true);
 
     try {
       const availableSessions = await listSessions();
@@ -58,35 +60,26 @@ export default function AnalysisScreen() {
           (ev) => setProgressMessages((prev) => [...prev, ev]),
         );
         setAnalysisResult(result);
+        // Minimize progress when analysis completes
+        setProgressExpanded(false);
       } else {
         // Fallback: direct multipart (no streaming)
         setProgressMessages([{ type: 'progress', agent: 'driving', message: 'Enviando archivos y analizando...' }]);
         const result = await analyzeFiles(telemetryFile, svmFile, selectedModel, selectedProvider);
         setAnalysisResult(result);
+        setProgressExpanded(false);
       }
     } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : 'Error en el analisis';
+      const msg = e instanceof Error ? e.message : 'Error en el análisis';
       setAnalysisError(msg);
     } finally {
       setAnalyzing(false);
     }
   }, [telemetryFile, svmFile, selectedModel, selectedProvider, setAnalyzing, setAnalysisResult, setAnalysisError]);
 
-  const handleCursorIndex = useCallback(
-    (idx: number) => {
-      const series = analysisResult?.telemetry_series;
-      if (!series || idx >= series.length) return;
-      const sample = series[idx];
-      if (sample.lat !== 0 || sample.lon !== 0) {
-        setCursorPosition({ lat: sample.lat, lon: sample.lon });
-      }
-    },
-    [analysisResult],
-  );
-
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
-      <Text style={styles.title}>Analisis AI</Text>
+      <Text style={styles.title}>Análisis AI</Text>
 
       {/* Model selector */}
       {modelsLoaded && models.length > 0 && (
@@ -130,33 +123,57 @@ export default function AnalysisScreen() {
         {isAnalyzing ? (
           <ActivityIndicator color="#fff" />
         ) : (
-          <Text style={styles.analyzeBtnText}>Iniciar Analisis</Text>
+          <Text style={styles.analyzeBtnText}>Iniciar Análisis</Text>
         )}
       </Pressable>
 
       {analysisError && <Text style={styles.error}>{analysisError}</Text>}
 
-      {/* Real-time progress log */}
-      {(isAnalyzing || progressMessages.length > 0) && (
+      {/* Locked parameters panel */}
+      {analysisResult?.full_setup && (
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Progreso del analisis</Text>
-          <View style={styles.progressBox}>
-            {progressMessages.map((ev, i) => (
-              <View key={i} style={styles.progressRow}>
-                <Text style={styles.progressAgent}>
-                  {AGENT_LABELS[ev.agent] ?? ev.agent}
-                  {ev.section ? ` - ${ev.section}` : ''}
-                </Text>
-                <Text style={styles.progressMsg}>{ev.message}</Text>
-              </View>
-            ))}
-            {isAnalyzing && (
-              <View style={styles.progressRow}>
-                <ActivityIndicator size="small" color="#e53935" />
-                <Text style={styles.progressMsg}> Procesando...</Text>
-              </View>
-            )}
-          </View>
+          <LockedParametersPanel fullSetup={analysisResult.full_setup} />
+        </View>
+      )}
+
+      {/* Setup completo section */}
+      {analysisResult?.full_setup && (
+        <View style={styles.section}>
+          <SetupCompleteSection fullSetup={analysisResult.full_setup} />
+        </View>
+      )}
+
+      {/* Real-time progress log - collapsible */}
+      {progressMessages.length > 0 && (
+        <View style={styles.section}>
+          <Pressable
+            style={styles.progressHeader}
+            onPress={() => setProgressExpanded(!progressExpanded)}
+          >
+            <Text style={styles.progressHeaderText}>
+              {progressExpanded ? '▼' : '▶'} Progreso del Análisis
+            </Text>
+          </Pressable>
+
+          {progressExpanded && (
+            <View style={styles.progressBox}>
+              {progressMessages.map((ev, i) => (
+                <View key={i} style={styles.progressRow}>
+                  <Text style={styles.progressAgent}>
+                    {AGENT_LABELS[ev.agent] ?? ev.agent}
+                    {ev.section ? ` - ${ev.section}` : ''}
+                  </Text>
+                  <Text style={styles.progressMsg}>{ev.message}</Text>
+                </View>
+              ))}
+              {isAnalyzing && (
+                <View style={styles.progressRow}>
+                  <ActivityIndicator size="small" color="#e53935" />
+                  <Text style={styles.progressMsg}> Procesando...</Text>
+                </View>
+              )}
+            </View>
+          )}
         </View>
       )}
 
@@ -166,71 +183,51 @@ export default function AnalysisScreen() {
           {/* Session Stats */}
           {analysisResult.session_stats && (
             <View style={styles.section}>
-              <Text style={styles.sectionTitle}>Estadisticas</Text>
-              <Text style={styles.stat}>
-                Vueltas: {analysisResult.session_stats.total_laps}
-              </Text>
-              <Text style={styles.stat}>
-                Mejor vuelta: {analysisResult.session_stats.best_lap_time.toFixed(3)}s
-              </Text>
-              <Text style={styles.stat}>
-                Media: {analysisResult.session_stats.avg_lap_time.toFixed(3)}s
-              </Text>
-            </View>
-          )}
-
-          {/* Telemetry charts + synchronized circuit map */}
-          {analysisResult.telemetry_series?.length > 0 && (
-            <View style={styles.section}>
-              <Text style={styles.sectionTitle}>Telemetria</Text>
-              <TelemetryCharts
-                samples={analysisResult.telemetry_series}
-                onIndexChange={handleCursorIndex}
-              />
-              {analysisResult.circuit_data?.length > 0 && (
-                <View style={{ marginTop: 16 }}>
-                  <CircuitMap
-                    gpsPoints={analysisResult.circuit_data}
-                    issues={analysisResult.issues_on_map}
-                    currentPosition={cursorPosition}
-                  />
+              <Text style={styles.sectionTitle}>Estadísticas</Text>
+              <View style={styles.statsBox}>
+                <View style={styles.stat}>
+                  <Text style={styles.statLabel}>Número de Vueltas</Text>
+                  <Text style={styles.statValue}>{analysisResult.session_stats.total_laps}</Text>
                 </View>
-              )}
+                <View style={styles.stat}>
+                  <Text style={styles.statLabel}>Mejor Vuelta</Text>
+                  <Text style={styles.statValue}>{analysisResult.session_stats.best_lap_time.toFixed(3)}s</Text>
+                </View>
+                <View style={styles.stat}>
+                  <Text style={styles.statLabel}>Vuelta Media</Text>
+                  <Text style={styles.statValue}>{analysisResult.session_stats.avg_lap_time.toFixed(3)}s</Text>
+                </View>
+              </View>
             </View>
           )}
-
-          {/* Circuit map without telemetry (GPS only) */}
-          {(!analysisResult.telemetry_series?.length || analysisResult.telemetry_series.length === 0) &&
-            analysisResult.circuit_data?.length > 0 && (
-              <View style={styles.section}>
-                <Text style={styles.sectionTitle}>Mapa del Circuito</Text>
-                <CircuitMap
-                  gpsPoints={analysisResult.circuit_data}
-                  issues={analysisResult.issues_on_map}
-                  currentPosition={cursorPosition}
-                />
-              </View>
-            )}
 
           {/* Driving Analysis - markdown rendered */}
           <View style={styles.section}>
-            <Text style={styles.sectionTitle}>Analisis de Conduccion</Text>
+            <Text style={styles.sectionTitle}>Análisis de Conducción</Text>
             <MarkdownText text={analysisResult.driving_analysis} />
           </View>
 
-          {/* Chief reasoning */}
+          {/* Chief reasoning - formatted nicely */}
           {analysisResult.chief_reasoning ? (
             <View style={styles.section}>
-              <Text style={styles.sectionTitle}>Razonamiento del Ingeniero Jefe</Text>
-              <MarkdownText text={analysisResult.chief_reasoning} />
+              <ChiefReasoningFormatter reasoning={analysisResult.chief_reasoning} />
             </View>
           ) : null}
 
           {/* Setup Recommendations */}
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>Recomendaciones de Setup</Text>
-            <SetupTable changes={analysisResult.setup_analysis} />
-          </View>
+          {Object.values(analysisResult.setup_analysis).some((items) => items.length > 0) ? (
+            <View style={styles.section}>
+              <Text style={styles.sectionTitle}>Recomendaciones de Setup</Text>
+              {lockedParameters.size > 0 && (
+                <View style={styles.lockedNotice}>
+                  <Text style={styles.lockedNoticeText}>
+                    Parámetros fijados: {Array.from(lockedParameters).join(', ')}
+                  </Text>
+                </View>
+              )}
+              <SetupTable changes={analysisResult.setup_analysis} />
+            </View>
+          ) : null}
         </>
       )}
     </ScrollView>
@@ -338,10 +335,47 @@ const styles = StyleSheet.create({
     borderBottomColor: '#333',
     paddingBottom: 6,
   },
+  statsBox: {
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+    gap: 8,
+    flexWrap: 'wrap',
+  },
   stat: {
-    color: '#ccc',
-    fontSize: 14,
+    flex: 1,
+    minWidth: 120,
+    backgroundColor: '#0d0d1f',
+    borderRadius: 6,
+    padding: 12,
+    borderLeftWidth: 3,
+    borderLeftColor: '#e53935',
+    alignItems: 'center',
+  },
+  statLabel: {
+    color: '#888',
+    fontSize: 11,
+    fontWeight: '600',
     marginBottom: 4,
+    textTransform: 'uppercase',
+  },
+  statValue: {
+    color: '#e53935',
+    fontSize: 16,
+    fontWeight: 'bold',
+  },
+  progressHeader: {
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    backgroundColor: '#1a1a3e',
+    borderRadius: 6,
+    borderLeftWidth: 3,
+    borderLeftColor: '#4a90e2',
+    marginBottom: 8,
+  },
+  progressHeaderText: {
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: '600',
   },
   progressBox: {
     backgroundColor: '#0d0d1f',
@@ -358,15 +392,28 @@ const styles = StyleSheet.create({
     gap: 6,
   },
   progressAgent: {
-    color: '#e53935',
+    color: '#4a90e2',
     fontSize: 12,
     fontWeight: '600',
-    minWidth: 120,
+    minWidth: 140,
   },
   progressMsg: {
     color: '#aaa',
     fontSize: 12,
     flex: 1,
   },
+  lockedNotice: {
+    backgroundColor: '#ff9800',
+    borderRadius: 4,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    marginBottom: 12,
+  },
+  lockedNoticeText: {
+    color: '#000',
+    fontSize: 12,
+    fontWeight: '600',
+  },
 });
+
 
