@@ -78,12 +78,17 @@ mcp_asana-mcp-api_update_task(
 
 ## Ciclo de Vida de una Tarea
 
-### TODO → IN PROGRESS
+### PENDING → IN PROGRESS
 
 ```
 mcp_asana-mcp-api_add_task_to_section(task_id="<GID>", section_id="<In Progress GID>")
 mcp_asana-mcp-api_create_comment(task_id="<GID>", text="Asignada a subagente. Worktree: .worktrees/<slug>")
 ```
+
+Guardarrail operativo:
+
+- Este movimiento debe ocurrir antes de editar código o lanzar implementación sustancial.
+- Si hay varias líneas de investigación independientes, deben despacharse en paralelo con subagentes o con búsqueda/lectura paralela antes de implementar.
 
 ### IN PROGRESS → ON HOLD (bloqueo complejo)
 
@@ -106,6 +111,12 @@ mcp_asana-mcp-api_update_task(task_id="<GID>", completed=true)
 mcp_asana-mcp-api_add_task_to_section(task_id="<GID>", section_id="<Done GID>")
 mcp_asana-mcp-api_create_comment(task_id="<GID>", text="Completada. Merge commit: <SHA>")
 ```
+
+Guardarrail operativo:
+
+- No cerrar la tarea si no se ha ejecutado validación suficiente para el cambio.
+- No dejar la tarea en una columna desalineada con el estado real del trabajo.
+- Si el tablero no tiene columna `In Review`, no inventarla: mantener `In Progress` hasta validar o mover a `On Hold` si existe bloqueo.
 
 ---
 

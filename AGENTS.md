@@ -7,10 +7,23 @@ Read this file first. Mandatory entry point for all agents.
 > Every non-trivial development task **must** be tracked in Asana before work begins.
 >
 > 1. Create (or find) the task in project GID `1213839935179235` **before writing any code**.
-> 2. Move to **In Progress** when work begins → **In Review** after committing → **Done** after validation.
+> 2. Move to **In Progress** when work begins and to **Done** only after validation is complete.
 > 3. Multi-step work: break into sub-tasks with dependencies. See `SUPERVISOR.md:"## Loop de Despacho"`.
 >
 > Project GIDs and section IDs: `ASANA_CONSTANTS.md` | Plugin docs and token refresh: `ASANA.md`
+
+> **WORKFLOW GUARDRAIL — MANDATORY, ALWAYS**
+>
+> Before any non-trivial implementation, the agent must execute this checklist in order:
+>
+> 1. **Task first**: create or locate the Asana task and move it to **In Progress** before substantial work starts.
+> 2. **Column discipline**: keep the task aligned with the real board state at all times. In this project the working sections are `Pending`, `In Progress`, `On Hold`, and `Done`. Do not invent intermediate states that do not exist on the board.
+> 3. **Parallelization decision**: explicitly check whether exploration, code search, file reading, or independent sub-problems can run in parallel.
+> 4. **Use subagents when decomposition helps**: if there are independent discovery tracks or a task can be split into read-only investigation plus implementation, use subagents or parallel read-only tool calls instead of serial manual exploration.
+> 5. **Comment and transition on blockers**: if blocked, create the corresponding fix or follow-up task when needed, move the current task to `On Hold`, and leave a comment describing the blocker.
+> 6. **Close cleanly**: after validation, move the task to `Done`, mark it completed, and leave a comment with the validation summary and commit SHA when applicable.
+>
+> If any step above has not been performed yet, do it immediately before continuing.
 
 > **DOCUMENTATION MAINTENANCE MANDATE — MANDATORY**
 >
@@ -136,6 +149,18 @@ When any `mcp_asana-mcp-api_*` call fails with `invalid_token`:
 ```
 
 **NEVER** bypass MCP tools or call the Asana API directly. Full plugin docs: `ASANA.md`
+
+## Execution Guardrail
+
+For every non-trivial task, follow this operating sequence:
+
+1. **Asana preflight**: create or find the task, retrieve the relevant section GIDs if needed, and move the task to `In Progress` before editing code.
+2. **Parallel discovery**: inspect whether the task benefits from parallel read-only work. If yes, use subagents and/or parallel tool calls for search and context gathering.
+3. **Focused implementation**: only after the task is tracked and the discovery strategy is decided, edit the minimum required files.
+4. **Validation**: run the appropriate compile, test, or export steps.
+5. **Asana closure**: update the task with the outcome, move it to `Done`, and only then finish the turn.
+
+This sequence is mandatory even when the fix itself is small; the only exception is a truly trivial request that does not change code, files, configuration, or workflow state.
 
 ## Reference Index
 
