@@ -140,6 +140,9 @@ export interface LapStats {
   duration: number;
   avg_speed: number;
   max_speed: number;
+  avg_throttle?: number;
+  avg_brake?: number;
+  avg_rpm?: number;
 }
 
 export interface TelemetrySample {
@@ -154,18 +157,21 @@ export interface TelemetrySample {
   lap: number;
 }
 
+export interface SessionStats {
+  circuit_name?: string;
+  total_laps: number;
+  best_lap_time: number;
+  avg_lap_time: number;
+  laps: LapStats[];
+}
+
 export interface AnalysisResponse {
   circuit_data: GPSPoint[];
   issues_on_map: IssueMarker[];
   driving_analysis: string;
   setup_analysis: Record<string, SetupChange[]>;
   full_setup: Record<string, SetupChange[]>;
-  session_stats: {
-    total_laps: number;
-    best_lap_time: number;
-    avg_lap_time: number;
-    laps: LapStats[];
-  };
+  session_stats: SessionStats | null;
   laps_data: LapStats[];
   agent_reports: { section: string; raw: string }[];
   telemetry_summary_sent: string;

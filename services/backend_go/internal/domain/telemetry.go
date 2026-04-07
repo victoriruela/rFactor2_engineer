@@ -190,8 +190,8 @@ func firstChannel(channels map[string][]float64, names ...string) []float64 {
 
 // ExtractGPS returns GPS points from telemetry lat/lon channels.
 func (td *TelemetryData) ExtractGPS() []GPSPoint {
-	latKeys := []string{"GPS_Latitude", "Latitude", "gLat", "CG_PosY"}
-	lonKeys := []string{"GPS_Longitude", "Longitude", "gLon", "CG_PosX"}
+	latKeys := []string{"GPS Latitude", "GPS_Latitude", "Latitude", "gLat", "CG_PosY"}
+	lonKeys := []string{"GPS Longitude", "GPS_Longitude", "Longitude", "gLon", "CG_PosX"}
 
 	var latData, lonData []float64
 	for _, k := range latKeys {

@@ -229,6 +229,7 @@ func (h *AnalysisHandler) analyzeFilesWithProgress(c *gin.Context, telPath, svmP
 	}
 
 	resp.TelemetryTimeSeries = timeSeries
+	resp.CircuitData = telData.ExtractGPS()
 	return resp, nil
 }
 
