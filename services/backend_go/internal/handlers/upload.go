@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 
 	"github.com/gin-gonic/gin"
@@ -150,7 +151,12 @@ func (h *UploadHandler) CompleteUpload(c *gin.Context) {
 	}
 
 	sessionID := middleware.GetSessionID(c)
-	destDir := filepath.Join(h.DataDir, sessionID)
+	sessionName := strings.TrimSuffix(state.Filename, filepath.Ext(state.Filename))
+	if sessionName == "" {
+		sessionName = "session"
+	}
+
+	destDir := filepath.Join(h.DataDir, sessionID, sessionName)
 	if err := os.MkdirAll(destDir, 0750); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "storage error"})
 		return

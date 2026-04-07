@@ -6,6 +6,8 @@ import type { GPSPoint, IssueMarker } from '../api';
 interface Props {
   gpsPoints: GPSPoint[];
   issues?: IssueMarker[];
+  /** GPS point of the current cursor position from TelemetryCharts */
+  currentPosition?: GPSPoint | null;
   width?: number;
   height?: number;
 }
@@ -16,9 +18,9 @@ const SEVERITY_COLORS: Record<string, string> = {
   low: '#ffc107',
 };
 
-export default function CircuitMap({ gpsPoints, issues = [], width = 700, height = 400 }: Props) {
-  const { points, issueCoords, padding } = useMemo(() => {
-    if (gpsPoints.length === 0) return { points: '', issueCoords: [], padding: 20 };
+export default function CircuitMap({ gpsPoints, issues = [], currentPosition, width = 700, height = 400 }: Props) {
+  const { points, issueCoords, toX, toY } = useMemo(() => {
+    if (gpsPoints.length === 0) return { points: '', issueCoords: [], toX: null, toY: null };
 
     const pad = 20;
     const lats = gpsPoints.map((p) => p.lat);
@@ -33,22 +35,25 @@ export default function CircuitMap({ gpsPoints, issues = [], width = 700, height
     const scaleX = (width - 2 * pad) / rangeX;
     const scaleY = (height - 2 * pad) / rangeY;
 
-    const toX = (lon: number) => pad + (lon - minLon) * scaleX;
-    const toY = (lat: number) => height - pad - (lat - minLat) * scaleY;
+    const toXFn = (lon: number) => pad + (lon - minLon) * scaleX;
+    const toYFn = (lat: number) => height - pad - (lat - minLat) * scaleY;
 
-    const pts = gpsPoints.map((p) => `${toX(p.lon)},${toY(p.lat)}`).join(' ');
+    const pts = gpsPoints.map((p) => `${toXFn(p.lon)},${toYFn(p.lat)}`).join(' ');
 
     const ic = issues.map((m) => ({
-      x: toX(m.lon),
-      y: toY(m.lat),
+      x: toXFn(m.lon),
+      y: toYFn(m.lat),
       color: SEVERITY_COLORS[m.severity] ?? '#ff9800',
       desc: m.description,
     }));
 
-    return { points: pts, issueCoords: ic, padding: pad };
+    return { points: pts, issueCoords: ic, toX: toXFn, toY: toYFn };
   }, [gpsPoints, issues, width, height]);
 
   if (gpsPoints.length === 0) return null;
+
+  const posX = currentPosition && toX ? toX(currentPosition.lon) : null;
+  const posY = currentPosition && toY ? toY(currentPosition.lat) : null;
 
   return (
     <View style={styles.container}>
@@ -57,6 +62,13 @@ export default function CircuitMap({ gpsPoints, issues = [], width = 700, height
         {issueCoords.map((ic, i) => (
           <Circle key={i} cx={ic.x} cy={ic.y} r={6} fill={ic.color} opacity={0.8} />
         ))}
+        {/* Moving position marker */}
+        {posX != null && posY != null && (
+          <>
+            <Circle cx={posX} cy={posY} r={10} fill="none" stroke="#fff" strokeWidth={1.5} opacity={0.5} />
+            <Circle cx={posX} cy={posY} r={5} fill="#fff" opacity={0.9} />
+          </>
+        )}
       </Svg>
     </View>
   );

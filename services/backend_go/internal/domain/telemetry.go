@@ -13,6 +13,76 @@ type GPSPoint struct {
 	Lon float64 `json:"lon"`
 }
 
+// TelemetrySample holds a single downsampled time-series sample for the frontend charts.
+type TelemetrySample struct {
+	T    float64 `json:"t"`
+	Spd  float64 `json:"spd"`
+	Thr  float64 `json:"thr"`
+	Brk  float64 `json:"brk"`
+	RPM  float64 `json:"rpm"`
+	Gear float64 `json:"gear"`
+	Lat  float64 `json:"lat"`
+	Lon  float64 `json:"lon"`
+	Lap  int     `json:"lap"`
+}
+
+// MaxTelemetrySamples is the maximum number of samples sent to the frontend.
+const MaxTelemetrySamples = 2000
+
+// ExtractTimeSeries builds a downsampled slice of TelemetrySample from TelemetryData.
+func (td *TelemetryData) ExtractTimeSeries() []TelemetrySample {
+	n := 0
+	for _, ch := range td.Channels {
+		if len(ch) > n {
+			n = len(ch)
+		}
+	}
+	if n == 0 {
+		return nil
+	}
+
+	step := 1
+	if n > MaxTelemetrySamples {
+		step = n / MaxTelemetrySamples
+	}
+
+	timeData := td.Channels[td.TimeCol]
+	lapData := td.Channels[td.LapCol]
+	speed := td.Channels["Speed"]
+	throttle := td.Channels["Throttle"]
+	brake := td.Channels["Brake"]
+	rpm := td.Channels["RPM"]
+	gear := td.Channels["Gear"]
+	lat := td.Channels["GPS_Lat"]
+	lon := td.Channels["GPS_Lon"]
+
+	safeGet := func(s []float64, i int) float64 {
+		if i < len(s) {
+			return s[i]
+		}
+		return 0
+	}
+
+	out := make([]TelemetrySample, 0, n/step+1)
+	for i := 0; i < n; i += step {
+		s := TelemetrySample{
+			T:    safeGet(timeData, i),
+			Spd:  safeGet(speed, i),
+			Thr:  safeGet(throttle, i),
+			Brk:  safeGet(brake, i),
+			RPM:  safeGet(rpm, i),
+			Gear: safeGet(gear, i),
+			Lat:  safeGet(lat, i),
+			Lon:  safeGet(lon, i),
+		}
+		if i < len(lapData) {
+			s.Lap = int(lapData[i])
+		}
+		out = append(out, s)
+	}
+	return out
+}
+
 // LapStats holds per-lap statistics.
 type LapStats struct {
 	Lap         int     `json:"lap"`
