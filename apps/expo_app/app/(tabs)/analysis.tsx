@@ -9,9 +9,9 @@ import MarkdownText from '../../src/components/MarkdownText';
 import TelemetryCharts from '../../src/components/TelemetryCharts';
 
 const AGENT_LABELS: Record<string, string> = {
-  driving: 'ðŸŽ AnÃ¡lisis de conducciÃ³n',
-  specialist: 'ðŸ”§ Especialista de setup',
-  chief: 'ðŸ‘¨â€ðŸ’¼ Ingeniero jefe',
+  driving: 'Analisis de conduccion',
+  specialist: 'Especialista de setup',
+  chief: 'Ingeniero jefe',
 };
 
 export default function AnalysisScreen() {
@@ -36,7 +36,7 @@ export default function AnalysisScreen() {
 
   const handleAnalyze = useCallback(async () => {
     if (!telemetryFile || !svmFile) {
-      setAnalysisError('Sube ambos archivos primero en la pestaÃ±a Upload');
+      setAnalysisError('Sube ambos archivos primero en la pestana Upload');
       return;
     }
 
@@ -65,7 +65,7 @@ export default function AnalysisScreen() {
         setAnalysisResult(result);
       }
     } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : 'Error en el anÃ¡lisis';
+      const msg = e instanceof Error ? e.message : 'Error en el analisis';
       setAnalysisError(msg);
     } finally {
       setAnalyzing(false);
@@ -212,9 +212,9 @@ export default function AnalysisScreen() {
               </View>
             )}
 
-          {/* Driving Analysis â€” markdown rendered */}
+          {/* Driving Analysis - markdown rendered */}
           <View style={styles.section}>
-            <Text style={styles.sectionTitle}>AnÃ¡lisis de ConducciÃ³n</Text>
+            <Text style={styles.sectionTitle}>Analisis de Conduccion</Text>
             <MarkdownText text={analysisResult.driving_analysis} />
           </View>
 
