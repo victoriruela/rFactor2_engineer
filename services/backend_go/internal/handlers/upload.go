@@ -188,6 +188,7 @@ func (h *UploadHandler) CompleteUpload(c *gin.Context) {
 
 	c.JSON(http.StatusOK, domain.CompleteResponse{
 		Filename:      state.Filename,
+		SessionID:     sessionName,
 		BytesReceived: totalBytes,
 	})
 }

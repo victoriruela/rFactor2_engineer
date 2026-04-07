@@ -10,6 +10,7 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"github.com/viciruela/rfactor2-engineer/internal/domain"
+	"github.com/viciruela/rfactor2-engineer/internal/middleware"
 	"github.com/viciruela/rfactor2-engineer/internal/parsers"
 )
 
@@ -17,37 +18,28 @@ import (
 // This allows the frontend to display the setup immediately after uploading files,
 // without running the full analysis.
 func (h *AnalysisHandler) GetSetup(c *gin.Context) {
-	sessionID := c.Param("sessionId")
-	if sessionID == "" {
+	reqSessionID := c.Param("sessionId")
+	if reqSessionID == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "sessionId required"})
 		return
 	}
+	clientSessionID := middleware.GetSessionID(c)
 
-	sessDir := filepath.Join(h.DataDir, sessionID)
+	sessDir := filepath.Join(h.DataDir, clientSessionID, reqSessionID)
 	entries, err := os.ReadDir(sessDir)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "session not found"})
 		return
 	}
 
-	// Find the SVM file in the first session subdirectory
+	// Find the SVM file in the requested session directory.
 	var svmPath string
 	for _, entry := range entries {
-		if !entry.IsDir() || strings.HasPrefix(entry.Name(), "_") {
+		if entry.IsDir() || strings.HasPrefix(entry.Name(), "_") {
 			continue
 		}
-		subDir := filepath.Join(sessDir, entry.Name())
-		subEntries, err := os.ReadDir(subDir)
-		if err != nil {
-			continue
-		}
-		for _, f := range subEntries {
-			if strings.HasSuffix(f.Name(), ".svm") {
-				svmPath = filepath.Join(subDir, f.Name())
-				break
-			}
-		}
-		if svmPath != "" {
+		if strings.EqualFold(filepath.Ext(entry.Name()), ".svm") {
+			svmPath = filepath.Join(sessDir, entry.Name())
 			break
 		}
 	}

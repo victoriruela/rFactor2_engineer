@@ -165,6 +165,49 @@ paths:
       responses:
         '200':
           description: Upload finalized
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  filename:
+                    type: string
+                  session_id:
+                    type: string
+                  bytes_received:
+                    type: integer
+
+  /setup/{sessionId}:
+    get:
+      tags: [Analysis]
+      summary: Retrieve full setup for a stored session
+      operationId: getSessionSetup
+      parameters:
+        - name: sessionId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: X-Client-Session-Id
+          in: header
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Full setup parsed from the session SVM file
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  full_setup:
+                    type: object
+                    additionalProperties:
+                      type: array
+                      items:
+                        $ref: '#/components/schemas/SetupChange'
+        '404':
+          description: Session or SVM file not found
 
   /analyze:
     post:
@@ -295,6 +338,19 @@ paths:
 
 components:
   schemas:
+    SetupChange:
+      type: object
+      properties:
+        parameter:
+          type: string
+        old_value:
+          type: string
+        new_value:
+          type: string
+        reason:
+          type: string
+        change_pct:
+          type: string
     AnalysisResponse:
       type: object
       properties:
@@ -302,32 +358,17 @@ components:
           type: string
           description: 5 driving improvement points (Spanish)
         setup_analysis:
-          type: string
+          type: object
+          additionalProperties:
+            type: array
+            items:
+              $ref: '#/components/schemas/SetupChange'
         full_setup:
           type: object
-          properties:
-            sections:
-              type: array
-              items:
-                type: object
-                properties:
-                  name:
-                    type: string
-                  section_key:
-                    type: string
-                  items:
-                    type: array
-                    items:
-                      type: object
-                      properties:
-                        parameter:
-                          type: string
-                        current:
-                          type: string
-                        new:
-                          type: string
-                        reason:
-                          type: string
+          additionalProperties:
+            type: array
+            items:
+              $ref: '#/components/schemas/SetupChange'
         agent_reports:
           type: array
           items:

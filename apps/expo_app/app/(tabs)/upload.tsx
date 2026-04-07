@@ -1,7 +1,7 @@
 import { useState, useCallback } from 'react';
 import { View, Text, StyleSheet, Pressable, ActivityIndicator, Platform } from 'react-native';
 import { useAppStore } from '../../src/store/useAppStore';
-import { uploadFile, getSetup, listSessions } from '../../src/api';
+import { uploadFile, getSetup } from '../../src/api';
 import SetupCompleteSection from '../../src/components/SetupCompleteSection';
 import type { SetupChange } from '../../src/api';
 
@@ -43,14 +43,15 @@ export default function UploadScreen() {
     setUploadProgress(0);
 
     try {
-      await uploadFile(telemetryFile, (pct) => setUploadProgress(pct / 2));
-      await uploadFile(svmFile, (pct) => setUploadProgress(50 + pct / 2));
-      // Fetch setup from the uploaded session
-      const sessions = await listSessions();
-      if (sessions.length > 0) {
-        const setup = await getSetup(sessions[0].id);
-        setFullSetup(setup);
+      const telemetrySessionId = await uploadFile(telemetryFile, (pct) => setUploadProgress(pct / 2));
+      const svmSessionId = await uploadFile(svmFile, (pct) => setUploadProgress(50 + pct / 2));
+
+      if (telemetrySessionId !== svmSessionId) {
+        throw new Error('Los archivos subidos no quedaron asociados a la misma sesión');
       }
+
+      const setup = await getSetup(svmSessionId);
+      setFullSetup(setup);
       setSuccess(true);
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : 'Error de subida';

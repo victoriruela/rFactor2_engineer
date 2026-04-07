@@ -47,7 +47,7 @@ AI pipeline detail: `services/backend_go/AGENTS.md:"## AI Agent Pipeline"`
 ```
 services/backend_go/
   cmd/server/main.go              # Entry: Gin, routes, go:embed, graceful shutdown
-  internal/handlers/              # upload.go  session.go  analysis.go  models.go  tracks.go
+  internal/handlers/              # upload.go  session.go  analysis.go  setup_handler.go  models.go  tracks.go
   internal/parsers/               # mat.go  csv.go  svm.go  gps.go  laps.go
   internal/agents/                # pipeline.go  prompts.go
   internal/ollama/client.go       # Direct Ollama HTTP client

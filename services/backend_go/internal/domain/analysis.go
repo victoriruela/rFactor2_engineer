@@ -50,6 +50,7 @@ type ChunkResponse struct {
 // CompleteResponse is the response to POST /api/uploads/{id}/complete.
 type CompleteResponse struct {
 	Filename      string `json:"filename"`
+	SessionID     string `json:"session_id"`
 	BytesReceived int64  `json:"bytes_received"`
 }
 

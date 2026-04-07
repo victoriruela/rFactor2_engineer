@@ -76,6 +76,12 @@ interface UploadInit {
   filename: string;
 }
 
+interface UploadComplete {
+  filename: string;
+  session_id: string;
+  bytes_received: number;
+}
+
 export async function uploadFile(
   file: File,
   onProgress?: (pct: number) => void,
@@ -103,8 +109,8 @@ export async function uploadFile(
   }
 
   // Complete
-  await api.post(`/uploads/${init.upload_id}/complete`);
-  return init.upload_id;
+  const { data: complete } = await api.post<UploadComplete>(`/uploads/${init.upload_id}/complete`);
+  return complete.session_id;
 }
 
 // ── Analysis ──
