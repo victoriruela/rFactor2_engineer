@@ -1,7 +1,7 @@
 import { useState, useCallback } from 'react';
-import { View, Text, StyleSheet, Pressable, ActivityIndicator, Platform } from 'react-native';
+import { View, Text, StyleSheet, Pressable, Platform } from 'react-native';
 import { useAppStore } from '../../src/store/useAppStore';
-import { uploadFile, getSetup } from '../../src/api';
+import { uploadFile, getSetup, loadSessionTelemetry } from '../../src/api';
 import SetupCompleteSection from '../../src/components/SetupCompleteSection';
 import type { SetupChange } from '../../src/api';
 
@@ -11,6 +11,8 @@ export default function UploadScreen() {
     setTelemetryFile, setSvmFile,
     uploadProgress, setUploadProgress,
     isUploading, setUploading,
+    setActiveSessionId,
+    setAnalysisResult,
   } = useAppStore();
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
@@ -50,6 +52,11 @@ export default function UploadScreen() {
         throw new Error('Los archivos subidos no quedaron asociados a la misma sesión');
       }
 
+      setActiveSessionId(svmSessionId);
+
+      const telemetryPayload = await loadSessionTelemetry(svmSessionId);
+      setAnalysisResult(telemetryPayload);
+
       const setup = await getSetup(svmSessionId);
       setFullSetup(setup);
       setSuccess(true);
@@ -59,7 +66,14 @@ export default function UploadScreen() {
     } finally {
       setUploading(false);
     }
-  }, [telemetryFile, svmFile, setUploading, setUploadProgress]);
+  }, [
+    telemetryFile,
+    svmFile,
+    setUploading,
+    setUploadProgress,
+    setActiveSessionId,
+    setAnalysisResult,
+  ]);
 
   return (
     <View style={styles.container}>

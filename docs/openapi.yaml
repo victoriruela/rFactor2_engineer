@@ -277,6 +277,29 @@ paths:
               schema:
                 $ref: '#/components/schemas/AnalysisResponse'
 
+  /session_telemetry:
+    post:
+      tags: [Analysis]
+      summary: Load telemetry data for a stored session without running AI analysis
+      operationId: loadSessionTelemetry
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              properties:
+                session_id:
+                  type: string
+              required: [session_id]
+      responses:
+        '200':
+          description: Telemetry payload with map, lap stats and timeseries
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AnalysisResponse'
+
   /models:
     get:
       tags: [Models]

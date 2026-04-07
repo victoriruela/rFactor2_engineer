@@ -1,5 +1,7 @@
 package domain
 
+import "math"
+
 // TelemetryData holds parsed telemetry channels keyed by name.
 type TelemetryData struct {
 	Channels map[string][]float64
@@ -26,9 +28,6 @@ type TelemetrySample struct {
 	Lap  int     `json:"lap"`
 }
 
-// MaxTelemetrySamples is the maximum number of samples sent to the frontend.
-const MaxTelemetrySamples = 2000
-
 // ExtractTimeSeries builds a downsampled slice of TelemetrySample from TelemetryData.
 func (td *TelemetryData) ExtractTimeSeries() []TelemetrySample {
 	n := 0
@@ -42,10 +41,6 @@ func (td *TelemetryData) ExtractTimeSeries() []TelemetrySample {
 	}
 
 	step := 1
-	if n > MaxTelemetrySamples {
-		step = n / MaxTelemetrySamples
-	}
-
 	timeData := td.Channels[td.TimeCol]
 	lapData := td.Channels[td.LapCol]
 	speed := firstChannel(td.Channels, "Speed", "Ground_Speed")
@@ -55,6 +50,7 @@ func (td *TelemetryData) ExtractTimeSeries() []TelemetrySample {
 	gear := firstChannel(td.Channels, "Gear")
 	lat := firstChannel(td.Channels, "GPS Latitude", "GPS_Latitude", "GPS_Lat", "Latitude", "gLat")
 	lon := firstChannel(td.Channels, "GPS Longitude", "GPS_Longitude", "GPS_Lon", "Longitude", "gLon")
+	lat, lon = cleanGPSPair(lat, lon)
 
 	safeGet := func(s []float64, i int) float64 {
 		if i < len(s) {
@@ -111,6 +107,8 @@ func (td *TelemetryData) SessionStats() SessionStats {
 		return SessionStats{}
 	}
 
+	lapTimeData := firstChannel(td.Channels, "Lap_Time", "Lap Time", "LapTime")
+
 	lapTimes := make(map[int][]float64)
 	for i, lv := range lapData {
 		lap := int(lv)
@@ -131,14 +129,41 @@ func (td *TelemetryData) SessionStats() SessionStats {
 		if len(times) < 2 {
 			continue
 		}
-		duration := times[len(times)-1] - times[0]
+		duration := 0.0
+		if lapTimeData != nil {
+			startIdx := -1
+			endIdx := -1
+			for i, lv := range lapData {
+				if int(lv) == lapNum {
+					if startIdx == -1 {
+						startIdx = i
+					}
+					endIdx = i
+				}
+			}
+			if startIdx >= 0 && endIdx >= startIdx {
+				maxLapTime := 0.0
+				for i := startIdx; i <= endIdx && i < len(lapTimeData); i++ {
+					v := lapTimeData[i]
+					if v > maxLapTime {
+						maxLapTime = v
+					}
+				}
+				if maxLapTime > 0 {
+					duration = maxLapTime
+				}
+			}
+		}
+
+		if duration <= 0 {
+			duration = times[len(times)-1] - times[0]
+		}
 		if duration <= 0 {
 			continue
 		}
 
 		ls := LapStats{Lap: lapNum, Duration: duration}
 
-		// Compute per-channel stats for this lap range
 		startIdx := -1
 		endIdx := -1
 		for i, lv := range lapData {
@@ -188,6 +213,52 @@ func firstChannel(channels map[string][]float64, names ...string) []float64 {
 	return nil
 }
 
+func cleanGPSPair(latData, lonData []float64) ([]float64, []float64) {
+	if latData == nil || lonData == nil {
+		return latData, lonData
+	}
+	n := len(latData)
+	if len(lonData) < n {
+		n = len(lonData)
+	}
+	if n < 3 {
+		return latData, lonData
+	}
+
+	cleanLat := make([]float64, len(latData))
+	copy(cleanLat, latData)
+	cleanLon := make([]float64, len(lonData))
+	copy(cleanLon, lonData)
+
+	isValid := func(lat, lon float64) bool {
+		return (lat != 0 || lon != 0) &&
+			!math.IsNaN(lat) && !math.IsNaN(lon) &&
+			!math.IsInf(lat, 0) && !math.IsInf(lon, 0) &&
+			lat >= -90 && lat <= 90 && lon >= -180 && lon <= 180
+	}
+
+	lastValid := -1
+	for i := 0; i < n; i++ {
+		if !isValid(cleanLat[i], cleanLon[i]) {
+			if lastValid >= 0 {
+				cleanLat[i] = cleanLat[lastValid]
+				cleanLon[i] = cleanLon[lastValid]
+			} else {
+				cleanLat[i] = 0
+				cleanLon[i] = 0
+			}
+			continue
+		}
+		if lastValid == -1 {
+			lastValid = i
+			continue
+		}
+		lastValid = i
+	}
+
+	return cleanLat, cleanLon
+}
+
 // ExtractGPS returns GPS points from telemetry lat/lon channels.
 func (td *TelemetryData) ExtractGPS() []GPSPoint {
 	latKeys := []string{"GPS Latitude", "GPS_Latitude", "Latitude", "gLat", "CG_PosY"}
@@ -209,13 +280,13 @@ func (td *TelemetryData) ExtractGPS() []GPSPoint {
 	if latData == nil || lonData == nil {
 		return nil
 	}
+	latData, lonData = cleanGPSPair(latData, lonData)
 
 	n := len(latData)
 	if len(lonData) < n {
 		n = len(lonData)
 	}
 
-	// Subsample to max 2000 points
 	step := 1
 	if n > 2000 {
 		step = n / 2000

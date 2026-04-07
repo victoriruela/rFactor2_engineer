@@ -249,7 +249,14 @@ func parseMatrixElement(data []byte, order binary.ByteOrder) (string, []float64)
 
 	var values []float64
 	if arrayClass == mxSTRUCT_CLASS {
-		values = extractStructFieldValues(data[offset:], order, elementCount, "Value")
+		if name == "Session_Elapsed_Time" {
+			values = extractStructFieldValues(data[offset:], order, elementCount, "Time")
+			if len(values) == 0 {
+				values = extractStructFieldValues(data[offset:], order, elementCount, "Value")
+			}
+		} else {
+			values = extractStructFieldValues(data[offset:], order, elementCount, "Value")
+		}
 	} else {
 		values = extractNumericData(data[offset:], order)
 	}

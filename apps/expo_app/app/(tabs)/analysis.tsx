@@ -25,6 +25,8 @@ export default function AnalysisScreen() {
     selectedModel, setSelectedModel,
     selectedProvider,
     lockedParameters,
+    activeSessionId,
+    setActiveSessionId,
   } = useAppStore();
   const [modelsLoaded, setModelsLoaded] = useState(false);
   const [progressMessages, setProgressMessages] = useState<ProgressEvent[]>([]);
@@ -48,13 +50,17 @@ export default function AnalysisScreen() {
     setProgressExpanded(true);
 
     try {
-      const availableSessions = await listSessions();
-      const targetSession = availableSessions[0];
+      let targetSessionId = activeSessionId;
+      if (!targetSessionId) {
+        const availableSessions = await listSessions();
+        targetSessionId = availableSessions[0]?.id ?? null;
+      }
 
-      if (targetSession) {
+      if (targetSessionId) {
+        setActiveSessionId(targetSessionId);
         // Use streaming endpoint
         const result = await analyzeSessionStream(
-          targetSession.id,
+          targetSessionId,
           selectedModel,
           selectedProvider,
           (ev) => setProgressMessages((prev) => [...prev, ev]),
@@ -75,7 +81,17 @@ export default function AnalysisScreen() {
     } finally {
       setAnalyzing(false);
     }
-  }, [telemetryFile, svmFile, selectedModel, selectedProvider, setAnalyzing, setAnalysisResult, setAnalysisError]);
+  }, [
+    telemetryFile,
+    svmFile,
+    selectedModel,
+    selectedProvider,
+    activeSessionId,
+    setActiveSessionId,
+    setAnalyzing,
+    setAnalysisResult,
+    setAnalysisError,
+  ]);
 
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>

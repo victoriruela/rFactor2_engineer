@@ -117,6 +117,85 @@ func TestTelemetryData_ExtractGPS_NoGPSChannels(t *testing.T) {
 	}
 }
 
+func TestTelemetryData_ExtractTimeSeries_PreservesValidGPSJumps(t *testing.T) {
+	td := &domain.TelemetryData{
+		LapCol:  "Lap_Number",
+		TimeCol: "Session_Elapsed_Time",
+		Channels: map[string][]float64{
+			"Lap_Number":           {1, 1, 1, 1, 1},
+			"Session_Elapsed_Time": {0, 1, 2, 3, 4},
+			"Speed":                {100, 101, 102, 103, 104},
+			"GPS Latitude":         {41.0000, 41.0001, 60.0, 41.0002, 41.0003},
+			"GPS Longitude":        {2.0000, 2.0001, 80.0, 2.0002, 2.0003},
+		},
+	}
+
+	series := td.ExtractTimeSeries()
+	if len(series) != 5 {
+		t.Fatalf("expected 5 samples, got %d", len(series))
+	}
+	if series[2].Lat != 60.0 || series[2].Lon != 80.0 {
+		t.Fatalf("expected valid in-range GPS sample to be preserved, got lat=%f lon=%f", series[2].Lat, series[2].Lon)
+	}
+}
+
+func TestTelemetryData_ExtractTimeSeries_ReplacesInvalidGPSValues(t *testing.T) {
+	td := &domain.TelemetryData{
+		LapCol:  "Lap_Number",
+		TimeCol: "Session_Elapsed_Time",
+		Channels: map[string][]float64{
+			"Lap_Number":           {1, 1, 1, 1},
+			"Session_Elapsed_Time": {0, 1, 2, 3},
+			"Speed":                {100, 101, 102, 103},
+			"GPS Latitude":         {41.0000, 41.0001, 999.0, 41.0002},
+			"GPS Longitude":        {2.0000, 2.0001, 500.0, 2.0002},
+		},
+	}
+
+	series := td.ExtractTimeSeries()
+	if len(series) != 4 {
+		t.Fatalf("expected 4 samples, got %d", len(series))
+	}
+	if series[2].Lat != series[1].Lat || series[2].Lon != series[1].Lon {
+		t.Fatalf("expected invalid GPS sample to be replaced with previous valid value, got lat=%f lon=%f", series[2].Lat, series[2].Lon)
+	}
+}
+
+func TestTelemetryData_SessionStats_UsesLapTimeChannelPrecision(t *testing.T) {
+	td := &domain.TelemetryData{
+		LapCol:  "Lap",
+		TimeCol: "Session_Elapsed_Time",
+		Channels: map[string][]float64{
+			"Lap":                  {1, 1, 1, 2, 2, 2},
+			"Session_Elapsed_Time": {0, 10, 20, 20, 30, 40},
+			"Lap_Time":             {0.1, 10.2, 87.518, 0.2, 10.0, 88.777},
+		},
+	}
+
+	stats := td.SessionStats()
+	if stats.TotalLaps != 2 {
+		t.Fatalf("expected 2 laps, got %d", stats.TotalLaps)
+	}
+
+	gotLap1 := 0.0
+	gotLap2 := 0.0
+	for _, l := range stats.Laps {
+		if l.Lap == 1 {
+			gotLap1 = l.Duration
+		}
+		if l.Lap == 2 {
+			gotLap2 = l.Duration
+		}
+	}
+
+	if gotLap1 != 87.518 {
+		t.Fatalf("expected lap 1 duration 87.518, got %.3f", gotLap1)
+	}
+	if gotLap2 != 88.777 {
+		t.Fatalf("expected lap 2 duration 88.777, got %.3f", gotLap2)
+	}
+}
+
 func TestSetup_NewSetup(t *testing.T) {
 	s := domain.NewSetup()
 	if s == nil {

@@ -84,6 +84,7 @@ func main() {
 		api.POST("/analyze", analysisH.Analyze)
 		api.POST("/analyze_session", analysisH.AnalyzeSession)
 		api.POST("/analyze_stream", analysisH.AnalyzeStream)
+		api.POST("/session_telemetry", analysisH.LoadSessionTelemetry)
 		api.GET("/setup/:sessionId", analysisH.GetSetup)
 
 		// Models

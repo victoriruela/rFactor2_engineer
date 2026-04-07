@@ -8,7 +8,9 @@ interface AppState {
 
   // Sessions
   sessions: SessionInfo[];
+  activeSessionId: string | null;
   setSessions: (s: SessionInfo[]) => void;
+  setActiveSessionId: (id: string | null) => void;
 
   // Upload
   uploadProgress: number;
@@ -54,7 +56,9 @@ export const useAppStore = create<AppState>((set) => ({
   setServerStatus: (serverStatus) => set({ serverStatus }),
 
   sessions: [],
+  activeSessionId: null,
   setSessions: (sessions) => set({ sessions }),
+  setActiveSessionId: (activeSessionId) => set({ activeSessionId }),
 
   uploadProgress: 0,
   isUploading: false,
@@ -66,7 +70,7 @@ export const useAppStore = create<AppState>((set) => ({
   analysisError: null,
   setAnalyzing: (isAnalyzing) => set({ isAnalyzing }),
   setAnalysisResult: (analysisResult) => set({ analysisResult, analysisError: null }),
-  setAnalysisError: (analysisError) => set({ analysisError, analysisResult: null }),
+  setAnalysisError: (analysisError) => set({ analysisError }),
 
   models: [],
   selectedModel: 'llama3.2:latest',

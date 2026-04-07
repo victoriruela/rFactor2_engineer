@@ -211,6 +211,14 @@ export async function analyzeSession(
   return data;
 }
 
+export async function loadSessionTelemetry(sessionId: string): Promise<AnalysisResponse> {
+  const form = new FormData();
+  form.append('session_id', sessionId);
+
+  const { data } = await api.post<AnalysisResponse>('/session_telemetry', form);
+  return data;
+}
+
 export interface ProgressEvent {
   type: 'progress' | 'error';
   agent: string;

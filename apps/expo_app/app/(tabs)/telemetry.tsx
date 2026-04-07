@@ -1,4 +1,4 @@
-﻿import { useCallback, useState } from 'react';
+﻿import { useCallback, useEffect, useMemo, useState } from 'react';
 import { View, Text, StyleSheet, ScrollView, useWindowDimensions } from 'react-native';
 import { useAppStore } from '../../src/store/useAppStore';
 import type { GPSPoint } from '../../src/api';
@@ -6,7 +6,7 @@ import CircuitMap from '../../src/components/CircuitMap';
 import TelemetryCharts from '../../src/components/TelemetryCharts';
 
 function formatLapTime(seconds: number): string {
-  if (seconds <= 0) return 'â€”';
+  if (seconds <= 0) return '--';
   const m = Math.floor(seconds / 60);
   const s = seconds % 60;
   return `${m}:${s.toFixed(3).padStart(6, '0')}`;
@@ -15,46 +15,119 @@ function formatLapTime(seconds: number): string {
 export default function TelemetryScreen() {
   const { analysisResult } = useAppStore();
   const [cursorPosition, setCursorPosition] = useState<GPSPoint | null>(null);
+  const [selectedLap, setSelectedLap] = useState<number | null>(null);
   const { width: windowWidth } = useWindowDimensions();
   const isWide = windowWidth >= 900;
 
-  const handleCursorIndex = useCallback(
-    (idx: number) => {
-      const series = analysisResult?.telemetry_series;
-      if (!series || idx >= series.length) return;
-      const sample = series[idx];
-      if (sample.lat !== 0 || sample.lon !== 0) {
-        setCursorPosition({ lat: sample.lat, lon: sample.lon });
-      }
-    },
-    [analysisResult],
+  const telemetrySeries = Array.isArray(analysisResult?.telemetry_series)
+    ? analysisResult.telemetry_series
+    : [];
+  const hasTelemetry = telemetrySeries.length > 0;
+  const stats = analysisResult?.session_stats ?? null;
+  const lapsData = Array.isArray(analysisResult?.laps_data) ? analysisResult.laps_data : null;
+  const statsLaps = Array.isArray(stats?.laps) ? stats.laps : [];
+  const laps = lapsData ?? statsLaps;
+  const bestLapTime = stats?.best_lap_time ?? 0;
+
+  const availableLaps = useMemo(() => {
+    const fromSeries = telemetrySeries
+      .map((s) => s.lap)
+      .filter((lap) => Number.isFinite(lap) && lap > 0);
+    const fromStats = laps.map((l) => l.lap).filter((lap) => Number.isFinite(lap) && lap > 0);
+    return Array.from(new Set([...fromSeries, ...fromStats])).sort((a, b) => a - b);
+  }, [telemetrySeries, laps]);
+
+  useEffect(() => {
+    if (availableLaps.length === 0) {
+      setSelectedLap(null);
+      return;
+    }
+    if (selectedLap == null || !availableLaps.includes(selectedLap)) {
+      setSelectedLap(availableLaps[0]);
+    }
+  }, [availableLaps, selectedLap]);
+
+  const selectedLapSamples = useMemo(() => {
+    if (selectedLap == null) return telemetrySeries;
+    return telemetrySeries.filter((s) => s.lap === selectedLap);
+  }, [telemetrySeries, selectedLap]);
+
+  const selectedLapGpsPoints = useMemo(
+    () =>
+      selectedLapSamples
+        .filter(
+          (s) =>
+            Number.isFinite(s.lat) &&
+            Number.isFinite(s.lon) &&
+            s.lat >= -90 &&
+            s.lat <= 90 &&
+            s.lon >= -180 &&
+            s.lon <= 180 &&
+            (s.lat !== 0 || s.lon !== 0),
+        )
+        .map((s) => ({ lat: s.lat, lon: s.lon })),
+    [selectedLapSamples],
   );
+
+  const allTelemetryGpsPoints = useMemo(
+    () =>
+      telemetrySeries
+        .filter(
+          (s) =>
+            Number.isFinite(s.lat) &&
+            Number.isFinite(s.lon) &&
+            s.lat >= -90 &&
+            s.lat <= 90 &&
+            s.lon >= -180 &&
+            s.lon <= 180 &&
+            (s.lat !== 0 || s.lon !== 0),
+        )
+        .map((s) => ({ lat: s.lat, lon: s.lon })),
+    [telemetrySeries],
+  );
+
+  const mapPoints = selectedLapGpsPoints.length >= 2
+    ? selectedLapGpsPoints
+    : allTelemetryGpsPoints.length >= 2
+    ? allTelemetryGpsPoints
+    : Array.isArray(analysisResult?.circuit_data)
+    ? analysisResult.circuit_data
+    : [];
+
+  const hasCircuit = mapPoints.length >= 2;
+
+  const bestLapNumber = useMemo(() => {
+    const sorted = [...laps]
+      .filter((l) => Number.isFinite(l.duration) && l.duration > 0)
+      .sort((a, b) => a.duration - b.duration);
+    return sorted.length > 0 ? sorted[0].lap : null;
+  }, [laps]);
+
+  const handleCursorIndex = useCallback((_: number, sample: { lat: number; lon: number }) => {
+    if (sample.lat !== 0 || sample.lon !== 0) {
+      setCursorPosition({ lat: sample.lat, lon: sample.lon });
+    }
+  }, []);
 
   if (!analysisResult) {
     return (
       <ScrollView style={styles.container} contentContainerStyle={styles.center}>
-        <Text style={styles.emptyText}>Carga un anÃ¡lisis primero en la pestaÃ±a "AnÃ¡lisis AI"</Text>
+        <Text style={styles.emptyText}>Sube archivos en Upload para ver la telemetria</Text>
       </ScrollView>
     );
   }
 
-  const hasTelemetry = analysisResult.telemetry_series && analysisResult.telemetry_series.length > 0;
-  const hasCircuit = analysisResult.circuit_data && analysisResult.circuit_data.length > 0;
-  const stats = analysisResult.session_stats;
-  const laps = analysisResult.laps_data ?? stats?.laps ?? [];
-  const bestLapTime = stats?.best_lap_time ?? 0;
-
   if (!hasTelemetry && !hasCircuit) {
     return (
       <ScrollView style={styles.container} contentContainerStyle={styles.center}>
-        <Text style={styles.emptyText}>Sin datos de telemetrÃ­a disponibles</Text>
+        <Text style={styles.emptyText}>Sin datos de telemetria disponibles</Text>
       </ScrollView>
     );
   }
 
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
-      {/* â”€â”€ Session stats banner â”€â”€ */}
+      {/* Session stats banner */}
       {stats && (
         <View style={styles.statsBanner}>
           <View style={styles.statCard}>
@@ -80,15 +153,15 @@ export default function TelemetryScreen() {
         </View>
       )}
 
-      {/* â”€â”€ Circuit map (full width, before charts) â”€â”€ */}
+      {/* Circuit map (full width, before charts) */}
       {hasCircuit && (
         <View style={styles.mapSection}>
           <Text style={styles.sectionTitle}>Mapa del Circuito</Text>
           <CircuitMap
-            gpsPoints={analysisResult.circuit_data}
+            gpsPoints={mapPoints}
             issues={analysisResult.issues_on_map}
             currentPosition={cursorPosition}
-            width={windowWidth - 32}
+            width={Math.max(windowWidth - 32, 320)}
             height={isWide ? 360 : 260}
           />
         </View>
@@ -99,18 +172,39 @@ export default function TelemetryScreen() {
         </View>
       )}
 
-      {/* â”€â”€ Telemetry charts â”€â”€ */}
+      {/* Telemetry charts */}
       {hasTelemetry && (
         <View style={styles.chartsSection}>
-          <Text style={styles.sectionTitle}>TelemetrÃ­a</Text>
+          <Text style={styles.sectionTitle}>Telemetria</Text>
+          {availableLaps.length > 0 && (
+            <View style={styles.lapSelectorRow}>
+              {availableLaps.map((lap) => {
+                const isActive = lap === selectedLap;
+                const isBest = bestLapNumber != null && lap === bestLapNumber;
+                return (
+                  <Text
+                    key={lap}
+                    style={[
+                      styles.lapChip,
+                      isBest ? styles.lapChipBest : null,
+                      isActive ? styles.lapChipActive : null,
+                    ]}
+                    onPress={() => setSelectedLap(lap)}
+                  >
+                    {isBest ? '★ ' : ''}Vuelta {lap}
+                  </Text>
+                );
+              })}
+            </View>
+          )}
           <TelemetryCharts
-            samples={analysisResult.telemetry_series}
+            samples={selectedLapSamples}
             onIndexChange={handleCursorIndex}
           />
         </View>
       )}
 
-      {/* â”€â”€ Lap table â”€â”€ */}
+      {/* Lap table */}
       {laps.length > 0 && (
         <View style={styles.tableSection}>
           <Text style={styles.sectionTitle}>Vueltas</Text>
@@ -256,6 +350,35 @@ const styles = StyleSheet.create({
   chartsSection: {
     marginBottom: 20,
     marginHorizontal: -16, // bleed to edges
+  },
+  lapSelectorRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    paddingHorizontal: 16,
+    paddingBottom: 8,
+    rowGap: 8,
+    columnGap: 8,
+  },
+  lapChip: {
+    color: '#9aa0c4',
+    borderWidth: 1,
+    borderColor: '#2a2a48',
+    backgroundColor: '#101026',
+    borderRadius: 14,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    fontSize: 12,
+    overflow: 'hidden',
+  },
+  lapChipBest: {
+    borderColor: '#4caf50',
+    color: '#8edc92',
+  },
+  lapChipActive: {
+    color: '#0b1b0b',
+    backgroundColor: '#66bb6a',
+    borderColor: '#66bb6a',
+    fontWeight: '700',
   },
   // â”€â”€ Lap table â”€â”€
   tableSection: {

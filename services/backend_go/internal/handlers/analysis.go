@@ -143,28 +143,9 @@ func (h *AnalysisHandler) AnalyzeSession(c *gin.Context) {
 	model := strings.TrimSpace(c.PostForm("model"))
 	provider := strings.TrimSpace(c.PostForm("provider"))
 
-	sessDir := filepath.Join(h.DataDir, sessionID, uploadSessionID)
-
-	entries, err := os.ReadDir(sessDir)
+	telPath, svmPath, err := h.resolveSessionFilePaths(sessionID, uploadSessionID)
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "session not found"})
-		return
-	}
-
-	var telPath, svmPath string
-	for _, entry := range entries {
-		name := entry.Name()
-		ext := strings.ToLower(filepath.Ext(name))
-		switch ext {
-		case ".mat", ".csv":
-			telPath = filepath.Join(sessDir, name)
-		case ".svm":
-			svmPath = filepath.Join(sessDir, name)
-		}
-	}
-
-	if telPath == "" || svmPath == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "telemetry and svm files not found in session"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
@@ -179,6 +160,56 @@ func (h *AnalysisHandler) AnalyzeSession(c *gin.Context) {
 		log.Error().Err(err).Msg("analysis failed")
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
+	}
+
+	c.JSON(http.StatusOK, resp)
+}
+
+// LoadSessionTelemetry handles POST /api/session_telemetry (telemetry only, no AI pipeline).
+func (h *AnalysisHandler) LoadSessionTelemetry(c *gin.Context) {
+	sessionID := middleware.GetSessionID(c)
+
+	uploadSessionID := c.PostForm("session_id")
+	if uploadSessionID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "session_id is required"})
+		return
+	}
+
+	telPath, _, err := h.resolveSessionFilePaths(sessionID, uploadSessionID)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	ext := strings.ToLower(filepath.Ext(telPath))
+	var telData *domain.TelemetryData
+	switch ext {
+	case ".mat":
+		telData, err = parsers.ParseMATFile(telPath)
+	case ".csv":
+		telData, err = parsers.ParseCSVFile(telPath)
+	default:
+		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("unsupported telemetry format: %s", ext)})
+		return
+	}
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("telemetry parse error: %v", err)})
+		return
+	}
+
+	stats := telData.SessionStats()
+	resp := &domain.AnalysisResponse{
+		CircuitData:         telData.ExtractGPS(),
+		IssuesOnMap:         []domain.IssueMarker{},
+		DrivingAnalysis:     "",
+		SetupAnalysis:       map[string][]domain.SetupChange{},
+		FullSetup:           map[string][]domain.SetupChange{},
+		SessionStats:        &stats,
+		LapsData:            stats.Laps,
+		AgentReports:        []domain.SectionReport{},
+		TelemetrySummary:    buildTelemetrySummary(telData),
+		ChiefReasoning:      "",
+		TelemetryTimeSeries: telData.ExtractTimeSeries(),
 	}
 
 	c.JSON(http.StatusOK, resp)
@@ -246,28 +277,9 @@ func (h *AnalysisHandler) AnalyzeStream(c *gin.Context) {
 	model := strings.TrimSpace(c.PostForm("model"))
 	provider := strings.TrimSpace(c.PostForm("provider"))
 
-	sessDir := filepath.Join(h.DataDir, sessionID, uploadSessionID)
-
-	entries, err := os.ReadDir(sessDir)
+	telPath, svmPath, err := h.resolveSessionFilePaths(sessionID, uploadSessionID)
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "session not found"})
-		return
-	}
-
-	var telPath, svmPath string
-	for _, entry := range entries {
-		name := entry.Name()
-		ext := strings.ToLower(filepath.Ext(name))
-		switch ext {
-		case ".mat", ".csv":
-			telPath = filepath.Join(sessDir, name)
-		case ".svm":
-			svmPath = filepath.Join(sessDir, name)
-		}
-	}
-
-	if telPath == "" || svmPath == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "telemetry and svm files not found in session"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
@@ -313,6 +325,40 @@ func (h *AnalysisHandler) AnalyzeStream(c *gin.Context) {
 	if canFlush {
 		flusher.Flush()
 	}
+}
+
+func (h *AnalysisHandler) resolveSessionFilePaths(clientSessionID, uploadSessionID string) (string, string, error) {
+	sessDir := filepath.Join(h.DataDir, clientSessionID, uploadSessionID)
+
+	entries, err := os.ReadDir(sessDir)
+	if err != nil {
+		return "", "", fmt.Errorf("session not found")
+	}
+
+	var telPath, svmPath string
+	for _, entry := range entries {
+		if entry.IsDir() || strings.HasPrefix(entry.Name(), "_") {
+			continue
+		}
+
+		name := entry.Name()
+		ext := strings.ToLower(filepath.Ext(name))
+		switch ext {
+		case ".mat", ".csv":
+			telPath = filepath.Join(sessDir, name)
+		case ".svm":
+			svmPath = filepath.Join(sessDir, name)
+		}
+	}
+
+	if telPath == "" {
+		return "", "", fmt.Errorf("telemetry file not found in session")
+	}
+	if svmPath == "" {
+		return "", "", fmt.Errorf("svm file not found in session")
+	}
+
+	return telPath, svmPath, nil
 }
 
 func buildTelemetrySummary(td *domain.TelemetryData) string {

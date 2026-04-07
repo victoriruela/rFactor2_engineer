@@ -9,8 +9,8 @@ import Svg, { Line, Polyline, Rect, Text as SvgText, Circle } from 'react-native
 import type { TelemetrySample } from '../api';
 
 interface Props {
-  samples: TelemetrySample[];
-  onIndexChange?: (index: number) => void;
+  samples: TelemetrySample[] | null | undefined;
+  onIndexChange?: (index: number, sample: TelemetrySample) => void;
 }
 
 const CHART_HEIGHT = 160;
@@ -26,6 +26,7 @@ interface ChartConfig {
   colors: string[];
   unit: string;
   formatFn?: (v: number) => string;
+  smoothRadius?: number;
 }
 
 const CHARTS: ChartConfig[] = [
@@ -35,6 +36,7 @@ const CHARTS: ChartConfig[] = [
     colors: ['#4fc3f7'],
     unit: 'km/h',
     formatFn: (v) => `${v.toFixed(0)} km/h`,
+    smoothRadius: 2,
   },
   {
     label: 'Acelerador / Freno',
@@ -42,6 +44,7 @@ const CHARTS: ChartConfig[] = [
     colors: ['#66bb6a', '#ef5350'],
     unit: '%',
     formatFn: (v) => `${(v * 100).toFixed(0)}%`,
+    smoothRadius: 1,
   },
   {
     label: 'RPM',
@@ -49,6 +52,7 @@ const CHARTS: ChartConfig[] = [
     colors: ['#ffa726'],
     unit: 'rpm',
     formatFn: (v) => `${v.toFixed(0)}`,
+    smoothRadius: 2,
   },
   {
     label: 'Marcha',
@@ -56,18 +60,44 @@ const CHARTS: ChartConfig[] = [
     colors: ['#ce93d8'],
     unit: '',
     formatFn: (v) => `${Math.round(v)}ª`,
+    smoothRadius: 0,
   },
 ];
 
 function normalise(values: number[]): { norm: number[]; min: number; max: number } {
-  const mn = Math.min(...values);
-  const mx = Math.max(...values);
+  if (values.length === 0) {
+    return { norm: [], min: 0, max: 0 };
+  }
+  let mn = values[0];
+  let mx = values[0];
+  for (let i = 1; i < values.length; i++) {
+    const value = values[i];
+    if (value < mn) mn = value;
+    if (value > mx) mx = value;
+  }
   const range = mx - mn || 1;
   return {
     norm: values.map((v) => (v - mn) / range),
     min: mn,
     max: mx,
   };
+}
+
+function smoothSeries(values: number[], windowRadius: number): number[] {
+  if (values.length < 5 || windowRadius <= 0) return values;
+  const out = new Array<number>(values.length);
+  for (let i = 0; i < values.length; i++) {
+    let sum = 0;
+    let count = 0;
+    const start = Math.max(0, i - windowRadius);
+    const end = Math.min(values.length - 1, i + windowRadius);
+    for (let j = start; j <= end; j++) {
+      sum += values[j];
+      count++;
+    }
+    out[i] = count > 0 ? sum / count : values[i];
+  }
+  return out;
 }
 
 function buildPolylinePoints(norm: number[], innerW: number, innerH: number, n: number): string {
@@ -84,21 +114,23 @@ function buildPolylinePoints(norm: number[], innerW: number, innerH: number, n: 
 export default function TelemetryCharts({ samples, onIndexChange }: Props) {
   const [cursorIdx, setCursorIdx] = useState<number>(0);
   const { width: screenW } = Dimensions.get('window');
+  const safeSamples = Array.isArray(samples) ? samples : [];
   const chartWidth = screenW - 32; // full width with small margin
   const innerW = chartWidth - PAD_LEFT - PAD_RIGHT;
   const innerH = CHART_HEIGHT - PAD_TOP - PAD_BOTTOM;
-  const n = samples.length;
+  const n = safeSamples.length;
 
   // Precompute per-chart normalised data once
   const chartData = useMemo(
     () =>
       CHARTS.map((cfg) =>
         cfg.keys.map((k) => {
-          const raw = samples.map((s) => (s[k] as number) ?? 0);
-          return { raw, ...normalise(raw) };
+          const raw = safeSamples.map((s) => (s[k] as number) ?? 0);
+          const smoothed = smoothSeries(raw, cfg.smoothRadius ?? 0);
+          return { raw: smoothed, ...normalise(smoothed) };
         }),
       ),
-    [samples],
+    [safeSamples],
   );
 
   // Precompute polyline points strings (expensive, cache them)
@@ -123,16 +155,19 @@ export default function TelemetryCharts({ samples, onIndexChange }: Props) {
     (localX: number) => {
       const idx = xToIndex(localX);
       setCursorIdx(idx);
-      onIndexChange?.(idx);
+      const sample = safeSamples[idx];
+      if (sample) {
+        onIndexChange?.(idx, sample);
+      }
     },
-    [xToIndex, onIndexChange],
+    [xToIndex, onIndexChange, safeSamples],
   );
 
-  if (!samples || samples.length < 2) {
+  if (safeSamples.length < 2) {
     return <Text style={styles.empty}>Sin datos de telemetría</Text>;
   }
 
-  const curSample = samples[cursorIdx];
+  const curSample = safeSamples[cursorIdx];
   const cursorX = PAD_LEFT + (cursorIdx / (n - 1)) * innerW;
 
   // Grid line y positions & values for a chart
