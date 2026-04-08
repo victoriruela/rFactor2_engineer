@@ -1,0 +1,17 @@
+{
+  "expo": {
+    "name": "rFactor2 Engineer",
+    "slug": "rfactor2-engineer",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "scheme": "rfactor2",
+    "web": {
+      "bundler": "metro",
+      "output": "single"
+    },
+    "plugins": ["expo-router"],
+    "extra": {
+      "eas": {}
+    }
+  }
+}

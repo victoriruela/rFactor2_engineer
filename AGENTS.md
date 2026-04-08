@@ -1,1051 +1,186 @@
-# AGENTS.md - rFactor2 Engineer
+# AGENTS.md — rFactor2 Engineer
 
-Complete context for any AI agent working on this project. Read this file first before making changes.
+Read this file first. Mandatory entry point for all agents.
 
-> **ASANA MANDATE — MANDATORY FOR ALL AGENTS, ALWAYS**
+> **ASANA MANDATE — MANDATORY, ALWAYS**
 >
 > Every non-trivial development task **must** be tracked in Asana before work begins.
-> This applies regardless of whether the user explicitly mentions Asana.
 >
-> **Required workflow for any task involving code changes:**
-> 1. Before writing a single line, create (or find) the corresponding Asana task in the
->    **"rFactor2 Engineer"** project (GID `1213839935179235`).
-> 2. Move the task to **In Progress** when work begins.
-> 3. Move to **In Review** after committing; move to **Done** after the user validates.
-> 4. For multi-step work, break it down into sub-tasks and respect the dependency graph
->    to maximize parallelism (see "Development Methodology" → "Supervisor Algorithm").
+> 1. Create (or find) the task in project GID `1213839935179235` **before writing any code**.
+> 2. Move to **In Progress** when work begins and to **Done** only after validation is complete.
+> 3. Multi-step work: break into sub-tasks with dependencies. See `SUPERVISOR.md:"## Loop de Despacho"`.
 >
-> **No exceptions.** Using Asana is how this project tracks progress, enables parallelism,
-> and avoids duplicate or conflicting work. Skipping it is treated as a process violation.
-> See the full MCP integration details in the "Asana MCP Integration" section below.
+> Project GIDs and section IDs: `ASANA_CONSTANTS.md` | Plugin docs and token refresh: `ASANA.md`
 
-> **DOCUMENTATION MAINTENANCE MANDATE — MANDATORY FOR ALL AGENTS**
+> **WORKFLOW GUARDRAIL — MANDATORY, ALWAYS**
 >
-> Any agent that modifies **implementation** (API endpoints, data pipeline, AI agents, parsers, tests)
-> or **infrastructure / deployment** (Docker, Nginx, GCP scripts, release flow, environment variables)
-> **must** update this file in the same commit that introduces the change. Sections to keep current:
-> - `File Map` — add / rename / remove entries when files change
-> - `API Endpoints` — reflect any new, changed, or removed route
-> - `GCP Deployment` — reflect any change to topology, scripts, credentials, or release procedure
-> - `Development Environment` — reflect changes to test commands or Docker services
-> - `Architecture` / `Data Flow` — reflect structural changes to the pipeline
+> Before any non-trivial implementation, the agent must execute this checklist in order:
 >
-> Stale documentation is treated as a bug. The pre-commit hook does not enforce this automatically,
-> so agents are the last line of defence.
+> 1. **Task first**: create or locate the Asana task and move it to **In Progress** before substantial work starts.
+> 2. **Column discipline**: keep the task aligned with the real board state at all times. In this project the working sections are `Pending`, `In Progress`, `On Hold`, and `Done`. Do not invent intermediate states that do not exist on the board.
+> 3. **Parallelization decision**: explicitly check whether exploration, code search, file reading, or independent sub-problems can run in parallel.
+> 4. **Use subagents when decomposition helps**: if there are independent discovery tracks or a task can be split into read-only investigation plus implementation, use subagents or parallel read-only tool calls instead of serial manual exploration.
+> 5. **Comment and transition on blockers**: if blocked, create the corresponding fix or follow-up task when needed, move the current task to `On Hold`, and leave a comment describing the blocker.
+> 6. **Close cleanly**: after validation, move the task to `Done`, mark it completed, and leave a comment with the validation summary and commit SHA when applicable.
+>
+> If any step above has not been performed yet, do it immediately before continuing.
+
+> **DOCUMENTATION MAINTENANCE MANDATE — MANDATORY**
+>
+> Any modification to implementation or infrastructure **must** update this file in the same commit:
+> - `File Map` — add/rename/remove entries when files change
+> - API changes → also update `docs/openapi.yaml`
+> - Deployment changes → also update `docs/deployment.md`
+> - Architecture/Data Flow changes → update the diagram below
+
+---
 
 ## Project Summary
 
-rFactor2 Engineer analyzes sim-racing telemetry (MoTeC `.mat`/`.csv`) and vehicle setup files (`.svm`) using a multi-agent LLM pipeline to produce driving technique feedback and setup change recommendations. All output is in Spanish (Castellano).
+rFactor2 Engineer analyzes sim-racing telemetry (MoTeC `.mat`/`.csv`) and vehicle setup files (`.svm`) using a multi-agent LLM pipeline (4 agents) to produce driving feedback and setup recommendations. All user-facing output is in **Spanish (Castellano)**.
+
+**Stack**: Go 1.22+ (Gin) + Expo web (React Native Web), deployed as a single Linux amd64 binary via `go:embed`.
 
 ## Architecture
 
 ```
-User (Browser)
-    |
-Streamlit Frontend (:8501)        ← frontend/streamlit_app.py
-    |  HTTP calls to localhost:8000
-FastAPI API Layer (:8000)         ← app/main.py + app/api/schemas.py
-    |
-  ├── Service Layer             ← app/services/
-  │     session_service.py, upload_service.py, analysis_service.py
-    |
-  ├── Core Parsing              ← app/core/telemetry_parser.py
-  │     parse_mat_file(), parse_csv_file(), parse_svm_file()
-  |
-  └── AI Agent Pipeline         ← app/core/ai_agents.py (class AIAngineer)
-          |  LangChain → ChatOllama
-          Ollama LLM Server (:11434)
+Browser  ├── GET /          → Expo web (embedded from apps/expo_app/dist/ via go:embed)
+         └── /api/*         → Gin handlers
+                                ├── Parsers       (.mat / .csv / .svm)
+                                ├── AI Pipeline   (Translation → Driving → Specialists → Chief)
+                                └── Ollama client (HTTP, :11434)
 ```
 
-**Startup sequence**: Backend (`uvicorn app.main:app --reload`) + Frontend (`streamlit run frontend/streamlit_app.py`). Ollama is auto-started by the backend on first analysis if not running.
+Entry point: `services/backend_go/cmd/server/main.go`
+Full topology & ports: `NETWORK_CONSTANTS.md`
+AI pipeline detail: `services/backend_go/AGENTS.md:"## AI Agent Pipeline"`
 
 ## File Map
 
 ```
-rFactor2_engineer/
-├── app/
-│   ├── main.py                    # FastAPI API layer; lightweight endpoint orchestration
-│   ├── AGENTS.md                  # Backend layer guidance
-│   ├── api/
-│   │   ├── __init__.py
-│   │   └── schemas.py             # Pydantic request/response schemas
-│   ├── config/
-│   │   ├── __init__.py
-│   │   ├── AGENTS.md              # Config-layer guidance
-│   │   └── settings.py            # Centralized runtime settings/constants
-│   ├── services/
-│   │   ├── __init__.py
-│   │   ├── AGENTS.md              # Service-layer contracts and rules
-│   │   ├── session_service.py     # Session id handling, listing, cleanup
-│   │   ├── upload_service.py      # Chunked upload orchestration
-│   │   └── analysis_service.py    # Telemetry + setup + AI orchestration
-│   └── core/
-│       ├── ai_agents.py           # AIAngineer class only; re-exports helpers from llm_utils
-│       ├── ai_prompts.py          # LLM prompt template strings (DRIVING, SECTION, CHIEF, TRANSLATOR)
-│       ├── llm_utils.py           # LLM constants, _ensure_ollama_running, list_available_models, numeric helpers
-│       ├── telemetry_parser.py    # .mat, .csv, .svm parsers
-│       ├── param_mapping.json     # Internal→friendly name translation (116 entries)
-│       └── fixed_params.json      # Parameters locked from AI modification (28 entries)
-├── frontend/
-│   ├── AGENTS.md                  # Frontend-layer guidance
-│   ├── streamlit_app.py           # Streamlit UI orchestrator (~120 lines); delegates to views/
-│   ├── config.py                  # Frontend runtime constants (URLs, timeouts, paths)
-│   ├── api_client.py              # Frontend HTTP wrapper for backend endpoints
-│   ├── session_manager.py         # Session-local temp file lifecycle and validation helpers
-│   ├── setup_parser.py            # Frontend helper for setup file parsing/reuse
-│   ├── telemetry_processing.py    # Frontend telemetry prep (MAT load, lap filtering, channel extraction)
-│   ├── views/
-│   │   ├── __init__.py
-│   │   ├── sidebar_view.py        # Sidebar UI: file upload, ephemeral session controls
-│   │   ├── setup_view.py          # Setup tab: fixed-params editor backed by .svm file
-│   │   ├── telemetry_view.py      # Telemetry tab: lap times + interactive charts
-│   │   └── analysis_view.py       # AI analysis tab: provider selector, trigger, results display
-│   └── components/
-│       ├── __init__.py
-│       ├── browser_session.py    # Streamlit wrapper to persist browser tab session id via sessionStorage
-│       ├── browser_session/
-│       │   └── index.html        # iframe HTML/JS bridge for browser sessionStorage sync
-│       ├── browser_hooks.py       # Browser-side unload cleanup hook injection
-│       ├── chunked_uploader.py    # Streamlit wrapper for browser-side chunked upload component
-│       └── chunked_uploader/
-│           └── index.html         # iframe HTML/JS uploader for large telemetry/setup files via /uploads/*
-│       └── telemetry_embed.py     # Plotly/JS embed renderer for interactive lap telemetry
-├── .streamlit/
-│   └── config.toml                # maxUploadSize = 20000
-├── tests/                         # Unit + integration test suite (pytest)
-│   ├── conftest.py                # Shared fixtures (DataFrames, SVM content, setup dicts)
-│   ├── core/
-│   │   ├── test_telemetry_parser.py  # CSV, SVM, .mat parsing; _filter_incomplete_laps
-│   │   └── test_ai_agents.py         # Pure functions + AIAngineer unit tests (mocked LLM)
-│   ├── frontend/
-│   │   └── test_upload_temp_files.py # Chunked upload helper functions
-│   ├── integration/
-│   │   ├── conftest.py            # Auto-skip guard if Ollama/llama3.2 unavailable
-│   │   └── test_ai_pipeline.py    # 3 tests: full AI pipeline with real LLM (opt-in)
-│   ├── test_main.py               # FastAPI endpoints: real parsers, mocked AI
-│   └── fixtures/
-│       ├── sample.csv             # 2-lap MoTeC CSV with GPS + telemetry columns
-│       └── sample.svm             # Minimal rFactor2 setup file
-├── e2e/
-│   ├── api/
-│   │   ├── conftest.py            # httpx async client, auto-skip if server offline
-│   │   └── test_endpoints.py      # Smoke tests against live backend (:8000)
-│   └── web/
-│       ├── upload_telemetry.yaml  # Maestro Web flow: file upload → telemetry tab
-│       └── ai_analysis.yaml       # Maestro Web flow: AI analysis → results visible
-├── scripts/
-│   ├── release_and_deploy.ps1     # Master release orchestration (RC → tag → publish → deploy)
-│   ├── deploy_gcp.ps1             # Deploy tagged artifact to GCP host (requires -ReleaseTag)
-│   ├── run_docker_test.ps1        # Wrapper: docker compose test run with container cleanup
-│   └── cleanup_docker_test_artifacts.ps1  # Remove exited test containers/images
-├── deploy/
-│   ├── docker-compose.gcp.yml     # GCP host override (loopback port binds + host-gateway)
-│   ├── nginx-rfactor2_engineer.conf  # Nginx reverse-proxy config (TLS, Basic Auth, proxy)
-│   └── .htpasswd                  # Basic Auth credentials (hashed) for host Nginx
-├── scripts/
-│   ├── release_and_deploy.ps1     # Master release orchestration (RC → tag → publish → deploy)
-│   ├── deploy_gcp.ps1             # Deploy tagged artifact to GCP host (requires -ReleaseTag)
-│   ├── run_docker_test.ps1        # Wrapper: docker compose test run with container cleanup
-│   └── cleanup_docker_test_artifacts.ps1  # Remove exited test containers/images
-├── dist/                          # Local deploy artifacts (git-archived tarballs)
-├── data/                          # Runtime: per-client session uploads (Docker-owned, not in git)
-├── models/                        # Optional: local .gguf model files
-├── pytest.ini                     # asyncio_mode=auto, testpaths=tests, markers
-├── requirements.txt               # Python runtime dependencies
-├── requirements-dev.txt           # Test dependencies (pytest, httpx, pytest-mock, etc.)
-├── AGENTS.md                      # THIS FILE — complete context for AI agents (keep current)
-├── ASANA.md                       # Asana MCP plugin docs
-├── asana-mcp-plugin.zip           # Asana MCP plugin (install to ~/.claude/asana-mcp/)
-├── CONSTANTS.md                   # Index of domain constant files
-├── SPECIFICATION.md               # Original project spec
-├── README.md                      # User-facing docs (Spanish)
-├── Dockerfile                     # Multi-stage build (backend + frontend targets)
-├── docker-compose.yml             # Container orchestration (backend, frontend, test) using host Ollama
-├── .dockerignore                  # Excludes data/, tests/, dist/, .git/ from build context
-├── GIT.md                         # Git workflow, hooks, commit conventions, linting
-├── pyproject.toml                 # Ruff linter configuration
-├── package.json                   # Node devDeps (husky + commitlint)
-├── commitlint.config.js           # Conventional commits rule config
-└── .husky/                        # Git hooks (pre-commit, commit-msg)
+services/backend_go/
+  cmd/server/main.go              # Entry: Gin, routes, go:embed, graceful shutdown
+  internal/handlers/              # upload.go  session.go  analysis.go  setup_handler.go  models.go  tracks.go
+  internal/parsers/               # mat.go  csv.go  svm.go  gps.go  laps.go
+  internal/agents/                # pipeline.go  prompts.go
+  internal/ollama/client.go       # Direct Ollama HTTP client
+  internal/domain/                # telemetry.go  setup.go  analysis.go
+  internal/config/config.go       # Env var bindings (RF2_PORT, OLLAMA_*, etc.)
+  internal/middleware/            # session.go  cors.go
+  data/param_mapping.json         # Internal → Spanish friendly name map (auto-extended by Translation Agent)
+  data/fixed_params.json          # Locked params list (AI agents must not change these)
+
+apps/expo_app/
+  app/(tabs)/                     # index.tsx  upload.tsx  analysis.tsx  sessions.tsx  tracks.tsx
+  src/api/                        # client.ts  index.ts  (axios, all /api/* calls)
+  src/components/                 # CircuitMap.tsx  SetupTable.tsx
+  src/store/useAppStore.ts        # Zustand global state
+
+docs/
+  openapi.yaml                    # Full API spec (all endpoints + request/response schemas)
+  deployment.md                   # GCP host, Nginx, TLS, release procedure
+  release_checklist.md            # QA steps before cutting a release
+
+Root reference files:
+  CONSTANTS.md          # Index of all constant files
+  NETWORK_CONSTANTS.md  # Ports, hosts, URLs
+  LLM_CONSTANTS.md      # Model, temperature, providers (Ollama, Jimmy)
+  PARSING_CONSTANTS.md  # CSV offsets, GPS smoothing, lap filtering
+  SETUP_CONSTANTS.md    # Sections, parameter types, fixed params
+  ASANA_CONSTANTS.md    # Asana GIDs
+  GIT.md                # Commit conventions, hooks, branching rules
+  SUPERVISOR.md         # Supervisor loop, merge protocol, worktree commands
+  SUBAGENT.md           # Subagent protocol, quality gates
+  ASANA.md              # Asana MCP plugin docs and token refresh procedure
 ```
-
-## Dependencies
-
-```
-fastapi                    # API server
-uvicorn                    # ASGI runner
-streamlit                  # Frontend UI
-python-multipart           # File upload support for FastAPI
-pandas                     # DataFrame operations
-numpy                      # Numeric/stats
-scipy                      # .mat file parsing (scipy.io.loadmat)
-langchain>=1.2.0           # LLM framework
-langchain-core>=0.3.0      # PromptTemplate, StrOutputParser
-langchain-ollama           # ChatOllama integration
-python-dotenv              # .env loading
-plotly                     # Interactive circuit map
-matplotlib                 # Listed but unused
-requests                   # HTTP calls (Ollama API, frontend→backend)
-```
-
-**System dependency**: [Ollama](https://ollama.com/) must be installed. The app auto-starts it and auto-detects its binary on Windows (`LOCALAPPDATA/Programs/Ollama/ollama.exe`, `ProgramFiles/Ollama/ollama.exe`) and PATH.
-
-**Python**: 3.9+ (no 3.10+ syntax used).
 
 ## Environment Variables
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
-| `OLLAMA_BASE_URL` | `http://localhost:11434` | Ollama API endpoint |
-| `OLLAMA_MODEL` | `llama3.2:latest` | Model tag passed to ChatOllama |
-| `RF2_API_URL` | `http://localhost:8000` | Backend URL used by Streamlit Python code (server-side requests) |
-| `RF2_BROWSER_API_BASE_URL` | `/api` | Base URL injected into the browser-side JS chunked uploader. `/api` in production (Nginx prefix); `http://localhost:8000` for local dev without Nginx. |
-| `RF2_PROD_URL` | *(unset)* | Production API base URL for prod-circuit E2E tests, e.g. `https://car-setup.com/api`. Not used at runtime. |
-| `RF2_PROD_BASIC_AUTH` | *(unset)* | Nginx BasicAuth credentials for prod-circuit E2E tests, format `user:password`. Not used at runtime. |
-
-Set in `.env` at project root (loaded by python-dotenv). In Docker, backend points to host Ollama via `OLLAMA_BASE_URL=http://host.docker.internal:11434`.
-For local Docker validation, the `frontend` service must set `RF2_BROWSER_API_BASE_URL=http://localhost:8000`
-so the browser talks directly to the backend; Streamlit on `:8501` does not proxy `/api` locally.
-
-## API Endpoints
-
-All endpoints that touch the `data/` directory are **session-scoped**: the caller's identity is
-resolved from the `X-Client-Session-Id` request header or the `rf2_session_id` cookie.
-Each client sees only its own uploads and sessions.
-
-### Chunked file upload flow
-
-#### `POST /uploads/init`
-Initiates a resumable file upload. Body: `{"filename": "<name>"}` (JSON).
-Returns `{"upload_id", "chunk_size", "filename"}`.
-
-#### `PUT /uploads/{upload_id}/chunk?chunk_index=N`
-Uploads one raw-body chunk (max `chunk_size` bytes). Must be sent in order (409 if out of sequence).
-Current default `chunk_size` is **16 MiB** (tuned for Cloudflare/Nginx stability).
-Returns `{"upload_id", "chunk_index", "bytes_received"}`.
-
-#### `POST /uploads/{upload_id}/complete`
-Assembles all chunks into the final file under `data/<client_session_id>/`.
-Returns `{"filename", "bytes_received"}`.
-
-#### `GET /uploads/file/{filename}`
-Downloads an already assembled client-scoped uploaded file from `data/<client_session_id>/`
-before it has necessarily been paired into a complete session. Used by the frontend's
-ephemeral chunked-upload flow for both telemetry and `.svm` files.
-
-### Session management
-
-#### `GET /sessions`
-Lists complete sessions (directories in `data/<client_session_id>/` with both a telemetry file
-and a `.svm` file). Returns `{"sessions": [{"id", "telemetry", "svm"}]}`.
-
-#### `GET /sessions/{session_id}/file/{filename}`
-Downloads a stored session file. Only the telemetry and SVM filenames belonging to that session
-are accessible (path-traversal guard).
-
-### Analysis
-
-#### `POST /analyze`
-Direct-upload analysis (no prior chunking required). Accepts multipart form:
-- `telemetry_file`: `.mat` or `.csv` (MoTeC export)
-- `svm_file`: `.svm` (rFactor 2 setup)
-- `model` (optional): Ollama model tag override
-- `provider` (optional): LLM provider (default `ollama`)
-- `fixed_params` (optional): JSON string array of locked parameter names
-- `ollama_base_url` (optional): Override Ollama endpoint (e.g. `https://ollama.com` for Ollama Cloud)
-- `ollama_api_key` (optional): Bearer token for remote/cloud Ollama
-
-Temp files are written to `data/_analysis_tmp/{uuid}/` and deleted in `finally`. Returns
-`AnalysisResponse` with: `circuit_data`, `issues_on_map`, `driving_analysis`, `setup_analysis`,
-`full_setup`, `session_stats`, `laps_data`, `agent_reports`, `telemetry_summary_sent`, `chief_reasoning`.
-
-#### `POST /analyze_session`
-Analyzes a previously uploaded stored session (via chunked upload). Form params:
-`session_id` (required), `model`, `provider`, `fixed_params`, `ollama_base_url` (optional), `ollama_api_key` (optional). Deletes the session files
-after a successful analysis. Same `AnalysisResponse` shape as `POST /analyze`.
-
-### Other
-
-#### `GET /models`
-Returns available Ollama models via `GET /api/tags` on Ollama.
-Optional query params: `ollama_base_url` (override Ollama endpoint, e.g. `https://ollama.com`) and `ollama_api_key` (Bearer token for remote/cloud Ollama).
-
-#### `POST /cleanup`
-Deletes the current client session's telemetry/setup files and in-progress chunk files from
-`data/<client_session_id>/`. Removes empty directories.
-
-#### `POST /cleanup_all`
-Deletes **all** stored telemetry/setup/chunk/temp-analysis artifacts under `data/`.
-Used by the frontend ephemeral-session mode at page load to guarantee no stale data survives.
-
-## AI Agent Pipeline
-
-The `AIAngineer.analyze()` method runs this sequence:
-
-### 1. Translation Agent (once, cached)
-**Prompt**: `TRANSLATOR_PROMPT`
-Translates any new section/parameter names to Spanish-friendly names. Results saved to `param_mapping.json`.
-
-### 2. Driving Analysis Agent
-**Prompt**: `DRIVING_PROMPT`
-Input: telemetry summary + session stats.
-Output: 5 driving improvement points with real numeric values, organized by **numbered curves** ("Curva 1", "Curva 2"...) with curve type description (horquilla, chicane, ese rápida...). Each point compares the same curve across multiple laps, citing real telemetry values. Strictly forbidden from suggesting setup changes. Distance ranges from Lap Distance are used internally but not shown in output headers.
-
-### 3. Section Specialist Agents (one per setup section)
-**Prompt**: `SECTION_AGENT_PROMPT`
-Runs once per section (GENERAL, FRONTWING, REARWING, BODYAERO, SUSPENSION, CONTROLS, ENGINE, DRIVELINE, FRONTLEFT, FRONTRIGHT, REARLEFT, REARRIGHT, etc.). Skips BASIC, LEFTFENDER, RIGHTFENDER. Also skips Gear*Setting parameters.
-Input: full telemetry + section's current parameters + fixed params list.
-Output: JSON with `items` array (parameter, new_value, reason) and `summary`.
-Specialists explicitly acknowledge parameters that are already well-configured and reason about why no change is needed in the `summary` field.
-
-### 4. Chief Engineer Agent
-**Prompt**: `CHIEF_ENGINEER_PROMPT`
-Consolidates all specialist reports into a coherent setup via **holistic review**. Rules:
-- Reviews ALL specialist proposals against full telemetry + setup context
-- Approves changes with technical merit; rejects redundant or contradictory changes
-- Detects and corrects physical incoherencies (e.g. "lower rear wing to reduce understeer" is wrong)
-- **Reason ownership**: if accepting a specialist proposal unchanged → copies specialist reason verbatim; if modifying → writes own detailed reason
-- Enforces axle symmetry (FL≈FR, RL≈RR) unless telemetry justifies asymmetry
-- Acknowledges parameters that are already correct and need no changes
-- Respects fixed params absolutely
-- `chief_reasoning` is **mandatory always** — must explain overall strategy and each proposal acceptance/modification/rejection
-Output: JSON with `full_setup.sections[]` and `chief_reasoning`.
-
-### Response formatting
-`_format_full_setup()` merges chief's recommendations with the original setup data, computing change percentages for display. Sections with zero proposed changes are **excluded** from the output (only sections with at least one changed parameter are included).
-Additionally, `setup_agent_reports` is built from the final consolidated map (after chief + deterministic post-processing) so frontend reasoning values match the final setup table. Specialist summaries from the original reports are propagated into `setup_agent_reports`.
-
-## File Parsing
-
-### `.mat` files (`parse_mat_file`)
-MoTeC i2 MATLAB export. Uses `scipy.io.loadmat(struct_as_record=False, squeeze_me=True)`. Extracts channels from struct `.Value` fields. Aligns all channels to the length of `Session_Elapsed_Time`. Applies GPS smoothing and incomplete lap filtering.
-
-### `.csv` files (`parse_csv_file`)
-MoTeC CSV export. First 14 lines are metadata, line 15 is headers, line 16 is units, data starts line 17. All columns converted to numeric. GPS smoothing applied.
-
-### `.svm` files (`parse_svm_file`)
-rFactor 2 setup. INI-like format with `[Section]` headers and `key=value` pairs. Tries UTF-16 first (common for rF2), falls back to UTF-8. Values often contain `//` comments: `223//N/mm` means value is `N/mm` part (cleaned by `_clean_value`).
-
-## Data Flow Through Analysis
-
-1. Files uploaded → saved to `data/{uuid}/`
-2. Telemetry parsed → DataFrame with all channels
-3. GPS extracted for circuit map (subsampled to 5000 points max)
-4. Per-lap stats computed (speed, throttle, brake, RPM, fuel, wear, temps)
-5. Telemetry subsampled (~50 points/lap, top 100 columns) → CSV string for AI
-6. Summary built: circuit name + session stats + lap summaries + detailed CSV
-7. Summary + setup dict → `AIAngineer.analyze()`
-8. Multi-agent pipeline runs (driving → specialists → chief)
-9. Results formatted with friendly names + change percentages → JSON response
-
-## Param Mapping System
-
-`app/core/param_mapping.json` maps internal names → Spanish friendly names:
-- Sections: `FRONTLEFT` → `"Neumático Delantero Izquierdo"`
-- Parameters: `CamberSetting` → `"Caída (Camber)"`
-
-Auto-extended by the Translation Agent when new parameters are encountered. The reverse mapping (friendly → internal) is used to match LLM output back to internal names.
-
-## Fixed Parameters System
-
-`app/core/fixed_params.json` is a JSON array of parameter names that AI agents must not modify. Managed by the Streamlit UI. Passed to every specialist and chief prompt as a constraint. See `CONSTANTS.md` for the current default list.
-
-## Asana MCP Integration
-
-See [`ASANA.md`](ASANA.md) for full details. Plugin zip at `asana-mcp-plugin.zip`. Manages OAuth2 auth and token injection into Claude Desktop, Claude CLI, VS Code Copilot, and JetBrains Copilot configs.
-
-### Canonical project
-
-The single Asana project for all phases of this repo is **"rFactor2 Engineer"** (GID `1213839935179235`, workspace `1213846793386214`). **Always use this project.** Never create a second project.
-
-### Board layout
-
-The project uses **Board layout** with four fixed sections. These must exist before creating tasks:
-
-| Section | Meaning |
-|---------|---------|
-| `To Do` | Task created, not yet started |
-| `In Progress` | Assigned to a subagent and actively being worked |
-| `In Review` | Subagent committed; supervisor is merging |
-| `Done` | Merged and verified |
-
-When creating tasks, always supply `section_id` pointing to the `To Do` section GID. Retrieve section GIDs with `get_project(project_id, include_sections=True)`.
-
-Task status transitions use `update_tasks` with `add_projects` containing the target section GID, or a dedicated move-to-section call.
-
-### MCP tool failure protocol — MANDATORY
-
-The `mcp_asana-mcp_*` tools authenticate via a token stored in the JetBrains IDE config file. That token **expires every hour**. The IDE **caches it at startup** and does not reload it mid-session.
-
-When any `mcp_asana-mcp_*` call fails with `invalid_token`:
-
-```
-Step 1 — Refresh & re-inject the token (run in terminal):
-    python "$env:USERPROFILE\.claude\asana-mcp\scripts\asana_mcp.py" auth
-    python "$env:USERPROFILE\.claude\asana-mcp\scripts\asana_mcp.py" update-mcp
-
-Step 2 — Retry the MCP tool immediately (the token in the config file is
-    now valid; occasionally the IDE picks it up without a restart).
-
-Step 3 — If the tool still fails:
-    ► STOP. Tell the user:
-      "The Asana MCP token has been refreshed and written to the IDE
-       config, but JetBrains has cached the old token. Please restart
-       the IDE (File → Invalidate Caches / Restart, or close and reopen
-       the project), then ask me to continue."
-    ► Wait for the user to confirm restart before doing anything else.
-
-NEVER create a workaround Python script that calls the Asana API or MCP
-endpoint directly. NEVER silently bypass the MCP tools.
-```
-
-### Creating the board sections (one-time setup)
-
-If `get_project(project_id, include_sections=True)` returns fewer than four sections, create the missing ones using `create_project` with the `sections` array, or via the Asana web UI. The four required section names are exactly: `To Do`, `In Progress`, `In Review`, `Done`.
-
-## Constants
-
-All hardcoded values (ports, paths, thresholds, parameter lists, telemetry channels, Asana config) are documented in [`CONSTANTS.md`](CONSTANTS.md). Reference that file when working with specific numeric values or configuration.
-
-## Key Patterns
-
-**Value cleaning**: Setup values like `223//N/mm` → cleaned to `N/mm` via `_clean_value()` which splits on `//` and takes the right side.
-
-**Numeric extraction**: `_extract_numeric("223 N/mm")` → `223.0`. Used for computing change percentages.
-
-**LLM JSON extraction**: `_get_json_from_llm()` parses JSON from potentially messy LLM output using brace-depth counting and trailing-comma cleanup.
-
-**Section name resolution**: LLM may return friendly names instead of internal names. Both `AIAngineer.analyze()` and `_format_full_setup()` use reverse-mapping dicts to handle this.
-
-**Ollama auto-start**: `_ensure_ollama_running()` checks health via `GET /api/tags`, starts `ollama serve` as background process if needed, waits up to 15s. Skipped automatically when a `custom_base_url` is passed to `_init_llm()` or `list_available_models()` (i.e. remote/cloud Ollama).
-
-**Ollama remote/cloud API**: `list_available_models(base_url, api_key)`, `_init_llm(..., custom_base_url, custom_api_key)`, and `AIAngineer.analyze(..., ollama_base_url, ollama_api_key)` all support targeting a remote Ollama server (e.g. Ollama Cloud at `https://ollama.com`). When `api_key` is provided, `Authorization: Bearer <key>` is injected into `ChatOllama` headers. API keys for Ollama Cloud are obtained from `https://ollama.com/settings/keys` (distinct from SSH keys used for model registry push/pull).
-
-**Jimmy specialist normalization**: `AIAngineer._normalize_specialist_report()` accepts alternate JSON keys from Jimmy responses (`recomendaciones`, `parametro`, `nuevo_valor`, `motivo`, etc.) and maps them to the canonical `items[{parameter,new_value,reason}]` shape. Specialist `summary` is preserved and passed to the chief engineer context.
-
-**Jimmy chief-item normalization**: Chief engineer section items are now normalized through the same canonical shape (`parameter`, `new_value`, `reason`) and accept alternate keys such as `newValue`, `nuevoValor`, `parametro`, and `motivo`. This prevents false "no setup changes" outcomes when Jimmy returns variant field names.
-
-**Reason sanitization against prompt leakage**: the backend sanitizes `reason` and `chief_reasoning` fields to strip internal/template artifacts (e.g. "COPIA AQUI...", "OBLIGATORIO:", `chartInstance`). If a chief item reason is invalid, it falls back to the specialist reason for that same section/parameter; if no specialist reason exists, it uses a safe generic fallback in Spanish.
-
-**Specialist-first consolidation merge**: the final recommendation map is built from specialist proposals first, then chief proposals are applied as overrides for parameters explicitly returned by the chief. This avoids accidental loss of valid specialist changes when the chief response is partial or noisy.
-
-**Deterministic axle symmetry post-processing**: after chief consolidation, the backend enforces symmetry for `FRONTLEFT/FRONTRIGHT` and `REARLEFT/REARRIGHT` when asymmetric values are not explicitly justified by telemetry in the item reasons. If needed, it harmonizes to the more conservative value (smaller absolute delta from current setup) and annotates the reason.
-
-**Frontend reasoning alignment**: the frontend reasoning panel should consume `setup_agent_reports` (fallback to `agent_reports` only for backward compatibility). This avoids mismatches where specialist raw reports differ from the final setup after chief corrections.
-
-**Frontend ephemeral session policy**: the UI now treats uploads as session-local only. No cookie/query-param persistence is used for client session IDs. The client session id is persisted only in browser `sessionStorage`, so it survives reloads within the same tab but is discarded when the tab/browser session ends.
-
-**Frontend reload resilience**: on page reload/reconnect, the frontend reuses the browser-tab session id from `sessionStorage` and auto-restores the latest uploaded telemetry/setup pair for that client from backend storage instead of forcing a re-upload.
-
-**Frontend local-only analysis flow**: analysis requests are executed from local temporary files via `POST /analyze`; fallback to `POST /analyze_session` was removed to enforce strict ephemeral behavior.
-
-**Frontend chunked upload flow**: both telemetry (`.mat/.csv`) and setup (`.svm`) can be uploaded through the browser-side chunked uploader component. After `POST /uploads/init` → `PUT /uploads/{id}/chunk` → `POST /uploads/{id}/complete`, the frontend downloads the assembled files through `GET /uploads/file/{filename}` into its temp directory and continues with the unchanged local `POST /analyze` flow.
-
-**Frontend Ollama model selector persistence**: the model dropdown in `frontend/views/analysis_view.py` now normalizes, de-duplicates, and sorts model names deterministically, then stores the selected model in `st.session_state['selected_ollama_model']`. This prevents random model jumps across Streamlit reruns.
-
-**Prompt benchmark tooling removed from repo**: legacy benchmark/grid-search helper scripts and `docs/benchmark` artifacts were removed to keep the runtime repository lightweight for deployment. Runtime behavior now depends on the committed values inside `app/core/jimmy_runtime_config.v1.json`.
-
-**Frontend session analysis timeout**: `frontend/streamlit_app.py` posts stored sessions to `/analyze_session` with a long-running Requests timeout tuple `(10, 1800)`. Never use `timeout=0` with `requests`; urllib3 rejects non-positive timeouts before the backend call is made.
-
-**Frontend large-.mat safeguard**: when a local `.mat` file exceeds `RF2_FRONTEND_MAX_PREVIEW_MAT_MB` (default `800` MB), the frontend skips detailed telemetry preview parsing to avoid Streamlit OOM/restarts on low-memory hosts. AI analysis remains available through backend endpoints. The default was raised from 120 MB to 800 MB after a 2 GiB persistent swap was added to the GCP host, making files up to ~700 MB safe to render.
-
-**Frontend lap-figure cache (session_state)**: `precompute_all_laps()` is a plain function (no `@st.cache_resource`). The caller caches its result in `st.session_state['_lap_cache']` under key `st.session_state['_lap_cache_key'] = (tele_path, tuple(laps))`. Key is a tuple of strings (cheap equality check), avoiding the costly DataFrame hash that `@st.cache_resource` performed on every Streamlit rerun.
-
-**Frontend defensive re-download gate**: the block that re-downloads temp files from the backend is guarded by a `_files_ok` check (all expected local paths exist and are non-empty). It only fires when a file is genuinely missing, and it invalidates `_lap_cache_key` so the cache is rebuilt from the fresh download.
+| `OLLAMA_BASE_URL` | `http://localhost:11434` | Ollama endpoint |
+| `OLLAMA_MODEL` | `llama3.2:latest` | Model tag for all LLM calls |
+| `OLLAMA_API_KEY` | *(unset)* | Bearer token for remote/cloud Ollama |
+| `RF2_PORT` | `8080` | Gin server listen port |
+| `RF2_DATA_DIR` | `./data` | Session uploads directory |
+| `RF2_LOG_LEVEL` | `info` | zerolog level (debug/info/warn/error) |
+
+Extended provider config and numeric defaults: `LLM_CONSTANTS.md`
+
+## Key Implementation Patterns
+
+**Value cleaning**: `cleanValue("223//N/mm")` → splits on `//`, uses right part (unit annotation stripped).
+**Numeric extraction**: `extractNumeric("223 N/mm")` → `223.0` (used for change-% computation).
+**LLM JSON extraction**: `extractJSON()` — brace-depth counter + trailing-comma cleanup on messy LLM output.
+**Section name resolution**: LLM may return Spanish friendly names; reverse-map resolves back to internal.
+**Ollama auto-start**: `ensureOllamaRunning()` → health GET → starts `ollama serve` if absent, waits 15 s. Skipped when custom `OLLAMA_BASE_URL` is set.
+**Ollama cloud auth**: `Authorization: Bearer <OLLAMA_API_KEY>` injected per-request when key is set.
+**Specialist normalization**: `normalizeSpecialistReport()` maps Jimmy alternate keys (`recomendaciones`, `parametro`, `nuevo_valor`, `motivo`) → canonical `items[{parameter, new_value, reason}]`.
+**Chief-item normalization**: same pattern; also accepts `newValue`, `nuevoValor`, `parametro`, `motivo`.
+**Reason sanitization**: strips prompt-template artifacts; fallback chain: chief reason → specialist reason → generic Spanish string.
+**Merge strategy**: build from specialist proposals first; chief overrides only for params it explicitly returns.
+**Circuit map rendering**: telemetría prioriza la vuelta seleccionada para el mapa; backend extrae una sola vuelta por defecto para `circuit_data` y frontend corta solo discontinuidades abruptas (paridad con Python `lap_xy`) para evitar saltos entre vueltas.
+**Axle symmetry**: post-processing pass enforces FL≈FR and RL≈RR unless telemetry data justifies asymmetry.
+**Session scope**: all `/api/` routes scoped to `X-Client-Session-Id` header / `rf2_session_id` cookie. Frontend calls `POST /api/cleanup_all` at startup.
 
 ## Language
 
 All user-facing output (driving analysis, setup recommendations, parameter names) is in **Spanish (Castellano)**. Prompts explicitly instruct the LLM to respond in Spanish. The Translation Agent produces Spanish-friendly parameter names.
 
-## Development Environment
-
-**Docker is the canonical development environment for this project.** Do NOT use the host Python installation for running tests or lint — the host may have incompatible package versions (e.g. Python 3.13 + pandas).
-
-### Quick start (first time)
+## Quick Dev Start
 
 ```bash
-# Build the test image (one-time, or after requirements changes)
-docker compose --profile test build test
-
-# Start the full app stack
-docker compose up --build
-
-# Ensure host Ollama has the required model (one-time)
-ollama pull llama3.2:latest
+# Backend
+cd services/backend_go && go run ./cmd/server    # :8080
+# Frontend
+cd apps/expo_app && npx expo start --web          # :8081
 ```
 
-### Running tests (always use Docker)
+Full test commands: `SUBAGENT.md:"## Quality Gates"` | Build artifact: `README.md:"## Building"`
 
-```bash
-# Preferred wrapper (auto-cleans exited one-off test containers for this project)
-powershell -ExecutionPolicy Bypass -NoProfile -File scripts/run_docker_test.ps1
+## Asana MCP Failure Protocol — MANDATORY
 
-# Unit tests — fast, no Ollama required (~3s in container)
-docker compose --profile test run --rm test
-
-# Unit tests with extra args (e.g. -k filter, -x stop-on-first-fail)
-docker compose --profile test run --rm test pytest tests/ --ignore=tests/integration -v -k "my_test"
-
-# Lint
-docker compose --profile test run --rm test ruff check app/ frontend/ tests/
-
-# Integration tests — real LLM, requires host Ollama running with llama3.2:latest (~3min)
-docker compose --profile test run --rm test pytest -m integration -v
-
-# E2E API tests — requires backend container running at :8000
-docker compose --profile test run --rm test pytest e2e/api/test_endpoints.py -v
-
-# Prod-circuit E2E tests — hit the real domain through Cloudflare + Nginx + BasicAuth
-# These are NEVER run inside Docker (they target a live external URL); run from the host:
-# RF2_PROD_URL=https://car-setup.com/api RF2_PROD_BASIC_AUTH=racef1:secret pytest e2e/api/test_prod_upload.py -v
-```
-
-To pass custom arguments through the wrapper, append them after the script path:
-
-```bash
-powershell -ExecutionPolicy Bypass -NoProfile -File scripts/run_docker_test.ps1 pytest tests/test_main.py -q
-```
-
-If stale containers exist from interrupted runs, clean exited test containers for both:
-- this project (`rfactor2_engineer`), and
-- temporary benchmark projects (`t1-*`, `t2-*`, ...):
-
-```bash
-powershell -ExecutionPolicy Bypass -NoProfile -File scripts/cleanup_docker_test_artifacts.ps1
-```
-
-After a benchmark/temporary task is completed, those temporary test containers must be purged. If you also want to remove temporary benchmark test images (e.g. `t1-...-test`), run:
-
-```bash
-powershell -ExecutionPolicy Bypass -NoProfile -File scripts/cleanup_docker_test_artifacts.ps1 -RemoveTemporaryTestImages
-```
-
-The `test` service bind-mounts the full source tree at `/app`, so **code changes are reflected immediately without rebuilding** the image. Only rebuild (`docker compose --profile test build test`) when `requirements.txt` or `requirements-dev.txt` change.
-
-### App services
-
-| Service | URL | Start command |
-|---------|-----|---------------|
-| Backend | http://localhost:8000 | `docker compose up backend` |
-| Frontend | http://localhost:8501 | `docker compose up frontend` |
-| Host Ollama (external dependency) | http://localhost:11434 | `ollama serve` (host) |
-| All | — | `docker compose up --build` |
-
-## Test Infrastructure
-
-### System requirement
-
-`llama3.2:latest` (= 3b, 2.0 GB) is a **hard project requirement** — the same model the app uses in production. Pull it once:
-
-```bash
-ollama pull llama3.2:latest
-```
-
-Note: `llama3.2:3b` and `llama3.2:latest` are the same weights (`:latest` is the canonical alias). Always use `:latest` as the tag to avoid 404 errors on machines that only pulled via the default alias.
-
-### Mocking strategy
-
-| Layer | Approach | Reason |
-|---|---|---|
-| `scipy.io.loadmat` | Mocked in unit tests | Real MoTeC `.mat` binary format cannot be reproduced with `scipy.io.savemat`; mock accurately mirrors `mat_struct.Value` interface |
-| `ChatOllama` / LLM | Mocked in unit tests | Non-deterministic, slow, requires Ollama; covered by `tests/integration/` with real model |
-| `parse_csv_file` / `parse_svm_file` in endpoint tests | **Real files** — not mocked | Mocking parsers hides ~200 lines of GPS/lap/subsampling logic in `app/main.py` |
-| `ai_engineer.analyze` in endpoint tests | Mocked | Only the LLM boundary; all data pipeline before it runs for real |
-
-### Test layout
+When any `mcp_asana-mcp-api_*` call fails with `invalid_token`:
 
 ```
-tests/
-├── core/test_telemetry_parser.py   # CSV, SVM, .mat parsing; _filter_incomplete_laps
-├── core/test_ai_agents.py          # Pure functions + AIAngineer unit tests
-├── test_main.py                    # All endpoints (real parsers, mocked AI)
-└── integration/test_ai_pipeline.py # Full AI pipeline with real Ollama (opt-in)
-
-e2e/
-├── api/test_endpoints.py           # Live backend smoke tests (localhost:8000, no Nginx)
-├── api/test_prod_upload.py         # Prod-circuit: Cloudflare→Nginx BasicAuth→backend
-│                                   # Opt-in via RF2_PROD_URL + RF2_PROD_BASIC_AUTH
-└── web/*.yaml                      # Maestro Web flows (Streamlit UI)
-
-**Why prod-circuit tests exist**: unit and local E2E tests bypass Nginx and BasicAuth entirely.
-Bugs that only manifest through Nginx (e.g. `credentials: 'omit'` in the browser JS dropping
-stored BasicAuth → 401) are invisible without testing the full stack.
-`test_prod_upload.py` specifically verifies unauthenticated requests return 401 and that the
-full chunked upload cycle works end-to-end through Cloudflare and Nginx.
-
-**Complementary local-browser topology**: local RC validation exercises a different path:
-browser on `http://localhost:8501` → backend on `http://localhost:8000`.
-That path requires:
-- `RF2_BROWSER_API_BASE_URL=http://localhost:8000` in local Docker frontend runs
-- FastAPI CORS enabled for `http://localhost:8501`
-
-Without those two pieces, the browser would incorrectly call `http://localhost:8501/api/...`
-(no proxy there) or hit cross-origin failures even though production works.
+1. python "$env:USERPROFILE\.claude\asana-mcp\scripts\asana_mcp.py" auth
+   python "$env:USERPROFILE\.claude\asana-mcp\scripts\asana_mcp.py" update-mcp
+2. Retry the MCP tool immediately.
+3. If it still fails: STOP. Tell the user the IDE must be restarted.
 ```
 
-## Docker
+**NEVER** bypass MCP tools or call the Asana API directly. Full plugin docs: `ASANA.md`
+
+## Execution Guardrail
+
+For every non-trivial task, follow this operating sequence:
+
+1. **Asana preflight**: create or find the task, retrieve the relevant section GIDs if needed, and move the task to `In Progress` before editing code.
+2. **Parallel discovery**: inspect whether the task benefits from parallel read-only work. If yes, use subagents and/or parallel tool calls for search and context gathering.
+3. **Focused implementation**: only after the task is tracked and the discovery strategy is decided, edit the minimum required files.
+4. **Validation**: run the appropriate compile, test, or export steps.
+5. **Asana closure**: update the task with the outcome, move it to `Done`, and only then finish the turn.
+
+This sequence is mandatory even when the fix itself is small; the only exception is a truly trivial request that does not change code, files, configuration, or workflow state.
+
+## Reference Index
+
+Load only when your task requires it — use the grep-syntax references to jump directly to the relevant section.
+
+| Topic | Reference |
+|-------|-----------|
+| API endpoints — full spec | `docs/openapi.yaml:"paths:"` |
+| GCP host, Nginx, TLS, deploy steps | `docs/deployment.md:"## Runtime Topology"` |
+| Ports, hosts, base URLs | `NETWORK_CONSTANTS.md` |
+| LLM model, temperature, providers | `LLM_CONSTANTS.md` |
+| CSV header offsets, GPS smoothing, lap filtering | `PARSING_CONSTANTS.md:"## CSV Format"` |
+| Setup sections, parameter types, fixed params | `SETUP_CONSTANTS.md:"## Setup Sections"` |
+| Asana project GID, section GIDs | `ASANA_CONSTANTS.md` |
+| Git commit format, hooks, branching | `GIT.md:"## Commit Message Format"` |
+| Supervisor loop, merge protocol, worktrees | `SUPERVISOR.md:"## Loop de Despacho"` |
+| Subagent protocol, quality gates | `SUBAGENT.md:"## Loop de Trabajo"` |
+| AI pipeline (4 agents, prompts, data flow) | `services/backend_go/AGENTS.md:"## AI Agent Pipeline"` |
+| Go test layout, mocking strategy | `services/backend_go/AGENTS.md:"## Test Infrastructure"` |
+| Frontend components, screens, state | `apps/expo_app/AGENTS.md` |
+| All constants index | `CONSTANTS.md` |
 
-### Quick start
-
-```bash
-docker compose up --build
-```
-
-Services:
-- **Frontend**: http://localhost:8501
-- **Backend**: http://localhost:8000
-- **Host Ollama**: http://localhost:11434 (runs outside Docker)
-
-### First run — pull the model
-
-On the host machine, pull the required model:
-
-```bash
-ollama pull llama3.2:latest
-```
-
-### Architecture
-
-```
-┌─────────────┐    ┌──────────┐    ┌──────────────────────┐
-│  Frontend   │───▶│ Backend  │───▶│ Host Ollama          │
-│  :8501      │    │  :8000   │    │ localhost:11434      │
-└─────────────┘    └──────────┘    └──────────────────────┘
-  RF2_API_URL       OLLAMA_BASE_URL=http://host.docker.internal:11434
-```
-
-### Volumes
-
-| Mount | Purpose |
-|-------|---------|
-| `./data` → `/app/data` | Session uploads (persist across restarts) |
-| `./app/core/param_mapping.json` | Translation cache (generated at runtime) |
-| `./app/core/fixed_params.json` | User-locked parameters |
-
-
-### Files
-
-| File | Purpose |
-|------|---------|
-| `Dockerfile` | Multi-stage build (targets: `backend`, `frontend`); frontend image also copies `app/` because `frontend/setup_parser.py` imports `app.core.telemetry_parser` |
-| `docker-compose.yml` | Orchestrates backend/frontend/test containers; uses host Ollama |
-| `.dockerignore` | Excludes data/, tests/, dist/, .git/ from build context |
-| `deploy/docker-compose.gcp.yml` | GCP host override: localhost-only port binds + host-gateway mapping |
-| `deploy/nginx-rfactor2_engineer.conf` | HTTP reverse-proxy config (Nginx -> frontend/backend, TLS, Basic Auth) |
-| `deploy/.htpasswd` | Basic Auth credentials file (hashed) copied to host Nginx |
-| `scripts/release_and_deploy.ps1` | Master release orchestration: RC → tag → GitHub Release → deploy |
-| `scripts/deploy_gcp.ps1` | Deploy a specific tagged artifact to the GCP host (requires `-ReleaseTag`) |
-
-## GCP Deployment
-
-### Canonical host
-
-- SSH target: `bitor@34.175.126.128`
-- Auth: default SSH keypair already configured for current user.
-- Docker access: use `sudo -n docker ...` (user is not in `docker` group).
-- Nginx binary path: `/usr/sbin/nginx`
-
-### Runtime topology
-
-- `frontend` container bound to `127.0.0.1:18501`
-- `backend` container bound to `127.0.0.1:18000`
-- Public domains: `telemetria.bot.nu`, `car-setup.com`
-- Nginx listens on `:80` and `:443`
-- `http://telemetria.bot.nu` redirects to `https://telemetria.bot.nu`
-- `http://car-setup.com` redirects to `https://car-setup.com`
-- HTTPS proxy routes:
-  - `/` -> `http://127.0.0.1:18501`
-  - `/api/` -> `http://127.0.0.1:18000`
-- Nginx enforces HTTP Basic Auth on **all routes** (`/` and `/api/*`).
-- Nginx upload limit is set to `client_max_body_size 20000M` (aligned with Streamlit `maxUploadSize=20000`) and includes an explicit `/_stcore/upload_file/` route to avoid `413 Request Entity Too Large` on telemetry uploads.
-- TLS is terminated at host Nginx using Let's Encrypt certs from `/etc/letsencrypt/live/telemetria.bot.nu/` and `/etc/letsencrypt/live/car-setup.com/`.
-
-### HTTP Basic Auth (current)
-
-- User: `racef1`
-- Password: `100fuchupabien`
-- Credential file deployed to host: `/etc/nginx/.htpasswd_rfactor2_engineer`
-- Source file in repo: `deploy/.htpasswd` (hashed value)
-
-Quick verify commands on host:
-
-```bash
-curl -I http://127.0.0.1/                          # expected 401
-curl -u racef1:100fuchupabien -I http://127.0.0.1/ # expected 200
-curl -u racef1:100fuchupabien -I http://127.0.0.1/api/models # expected 200
-```
-
-If credentials must rotate:
-1. Update `deploy/.htpasswd` with the new hashed credential.
-2. Redeploy with `scripts/deploy_gcp.ps1`.
-3. Validate with authenticated `curl` checks.
-
-### TLS / Certbot
-
-- Certbot and the Nginx plugin are installed on the host via apt (`certbot`, `python3-certbot-nginx`).
-- Active certificate names: `telemetria.bot.nu`, `car-setup.com`
-- Live cert paths:
-  - `/etc/letsencrypt/live/telemetria.bot.nu/fullchain.pem`
-  - `/etc/letsencrypt/live/car-setup.com/fullchain.pem`
-- Live key paths:
-  - `/etc/letsencrypt/live/telemetria.bot.nu/privkey.pem`
-  - `/etc/letsencrypt/live/car-setup.com/privkey.pem`
-- Automatic renewal is handled by `certbot.timer`.
-
-Quick verify commands on host:
-
-```bash
-curl -I http://telemetria.bot.nu/                                  # expected 301 to https://telemetria.bot.nu/
-curl -u racef1:100fuchupabien -I https://telemetria.bot.nu/        # expected 200
-curl -u racef1:100fuchupabien https://telemetria.bot.nu/api/models # expected JSON response
-curl -I http://car-setup.com/                                      # expected 301 to https://car-setup.com/
-curl -u racef1:100fuchupabien -I https://car-setup.com/            # expected 200
-curl -u racef1:100fuchupabien https://car-setup.com/api/models     # expected JSON response
-```
-
-### Release and deploy procedure
-
-**All production deploys must go through the formal release pipeline — never deploy from a dirty tree or an untagged commit.**
-
-The canonical entry point is `scripts/release_and_deploy.ps1`. It enforces:
-1. Abort if working tree is dirty.
-2. Merge one or more source branches into `develop`.
-3. Run Docker unit tests on `develop`; tag RC (`vX.Y.Z-rc.N`) and push.
-4. **MANDATORY GATE**: ask the human owner to validate that RC locally.
-   - "Validate locally" means the agent must start the local Docker stack from `develop`/RC:
-     `docker compose up -d --build`
-   - The agent must provide the user the exact URLs to visit:
-     - Frontend: `http://localhost:8501`
-     - Backend API: `http://localhost:8000` (sanity check: `/models`)
-   - The agent must wait for explicit user approval after the user tests those local URLs.
-5. Only after explicit human approval: merge `develop` into `main`; run Docker unit tests again.
-6. Tag release (`vX.Y.Z`) on `main` and push.
-7. Create `dist/rfactor2_engineer-vX.Y.Z.tar.gz` via `git archive <tag>`.
-8. Publish a GitHub Release with that artifact.
-9. Call `deploy_gcp.ps1 -ReleaseTag vX.Y.Z -UseGithubReleaseArtifact`.
-
-**Mandatory policy for all agents**: never continue automatically from RC to `main`/deploy.
-After RC push, start local Docker for RC validation, provide local URLs, and wait for user confirmation before proceeding.
-
-```powershell
-# Full release from a feature branch
-powershell -ExecutionPolicy Bypass -NoProfile -File scripts/release_and_deploy.ps1 `
-    -VersionBump patch `
-    -SourceBranches feat/your-branch
-
-# Release with no pending merges (develop is already current)
-powershell -ExecutionPolicy Bypass -NoProfile -File scripts/release_and_deploy.ps1 -VersionBump minor
-```
-
-**Emergency redeploy from an existing tag** (no new release):
-
-```powershell
-powershell -ExecutionPolicy Bypass -NoProfile -File scripts/deploy_gcp.ps1 `
-    -ReleaseTag v1.0.1 -UseGithubReleaseArtifact
-```
-
-What `deploy_gcp.ps1` does:
-1. Asserts clean working tree.
-2. Downloads the artifact from the GitHub Release (or uses `git archive <tag>` if not using GitHub artifact).
-3. Uploads the tarball to the remote host via `scp`.
-4. Extracts on remote: removes app-code files (non-`data/`), then runs `tar -xzf`.
-   - `data/` is **intentionally preserved** — it contains Docker-owned session uploads.
-   - Plain `rm -rf` handles bitor-owned files; `sudo` is used only as a fallback for any
-     Docker-owned files that exist outside `data/` (edge case).
-5. Copies `deploy/` config files and starts services with `docker compose ... up -d --build`.
-  - Compose must be executed from the remote `deploy/` directory (`cd "$RemoteDir/deploy"`) when using `deploy/docker-compose.gcp.yml`, because its `context: ..` and bind mounts are relative to that folder. Running it from `$RemoteDir` can resolve paths one level too high and fail with `failed to read dockerfile: open Dockerfile: no such file or directory`.
-6. Installs and reloads Nginx config.
-7. Runs health checks for frontend/backend/nginx endpoints.
-
-### Operational notes
-
-- Do not expose backend/frontend directly to public interfaces; keep loopback bindings and route through Nginx.
-- Do not replace `deploy/nginx-rfactor2_engineer.conf` with a non-TLS variant; future deploys copy that file directly onto the host.
-- The `data/` directory on the remote host is owned by the Docker container user (root). Never run `sudo rm -rf $RemoteDir` or a broad sweep; use `find ... -not -name data` patterns when clearing old code.
-- Host memory safeguard: configure persistent swap on the GCP host (`/swapfile`, 2 GiB, `vm.swappiness=10`) to reduce OOM kills of the Streamlit process during peak telemetry workloads.
-- **Cloudflare upload limit**: Cloudflare free plan limits request bodies to 100 MB. For large `.mat` files (> 100 MB) going through Cloudflare, Streamlit's `/_stcore/upload_file/` upload will fail silently (the filename appears in the widget but `st.file_uploader` returns `None`). **Fix**: set the DNS records for `telemetria.bot.nu` and `car-setup.com` in Cloudflare to **DNS only** (grey cloud, not proxied). TLS continues to work because Let's Encrypt certificates are terminated at host Nginx. Only the 100 MB Cloudflare proxy limit is removed.
-- After benchmark/temporary tasks, purge temporary Docker test artifacts (see cleanup scripts in this document).
-
-## Git Workflow
-
-All commit conventions, hooks (husky + commitlint), linting (ruff), and branching rules are documented in [`GIT.md`](GIT.md). **Read that file before any git operation.**
-
-Key points:
-- **Pre-commit hook** runs lint → build → unit tests (blocks commit on failure)
-- **Commit-msg hook** enforces [Conventional Commits](https://www.conventionalcommits.org/) format
-- Hooks must **never** be bypassed (`--no-verify` is forbidden)
-
-## Development Methodology
-
-Rules and operational playbook for all agentic (multi-subagent) development work on this project.
-
----
-
-### Phase Specification Format
-
-All work is organized in **phases**. A phase is a coherent unit of work (e.g., "Add .ld file support", "Refactor AI pipeline to streaming") that produces one Release Candidate when merged to `develop`. The supervisor receives a phase spec as input — either from the user or from a higher-level planning step.
-
-A phase spec must contain:
-
-```
-Phase: <short name>
-Goal: <what this phase delivers, in 1-2 sentences>
-Scope: <which areas of the codebase are affected>
-Version bump: patch | minor | major
-
-Tasks:
-  1. <task name>
-     Description: <what the subagent must implement>
-     Files: <expected files to create/modify>
-     Depends on: none | <task numbers>
-
-  2. <task name>
-     Description: ...
-     Files: ...
-     Depends on: 1
-
-  3. <task name>
-     Description: ...
-     Files: ...
-     Depends on: none
-
-  (tasks 2 and 3 can run in parallel; task 1 must finish first)
-```
-
-The supervisor uses this spec to:
-- Create Asana tasks with the correct dependency graph
-- Determine which tasks can be parallelized (those with no pending upstream dependencies)
-- Write subagent prompts scoped to each task
-- Resolve merge conflicts in the context of the phase goal
-
----
-
-### Supervisor Algorithm
-
-The supervisor follows this exact loop when executing a phase:
-
-```
-PHASE_START:
-  1. Parse the phase spec
-  2. Create Asana tasks (see "Asana Task Structure" below)
-     - One task per spec item, in the correct project
-     - Set `add_dependencies` for each task based on "Depends on"
-     - All tasks start as incomplete (not started)
-
-EXECUTION_LOOP:
-  3. Query Asana for incomplete tasks in this phase's project/section
-  4. Identify the READY FRONTIER: tasks whose dependencies are ALL marked Done
-  5. If frontier is empty and tasks remain → error (circular dependency or stuck task)
-  6. If no tasks remain → go to PHASE_COMPLETE
-
-  For each task in the ready frontier (launch in parallel where possible):
-    a. Update Asana task → In Progress (add comment: "Assigned to subagent")
-    b. Create a git worktree:
-         git worktree add .worktrees/<task-slug> develop
-    c. Spawn subagent with the SUBAGENT PROMPT TEMPLATE (see below)
-    d. Wait for subagent to complete (it will commit and stop)
-
-  For each completed subagent (process as they finish):
-    e. Update Asana task → In Review
-    f. Merge the worktree branch into develop (see "Merge Protocol")
-    g. If merge succeeds:
-         - Update Asana task → Done (add comment with merge commit SHA)
-         - Clean up worktree: git worktree remove .worktrees/<task-slug>
-    h. If merge has conflicts:
-         - Read both diffs + phase spec
-         - Produce reconciled version preserving both implementations
-         - Commit the reconciliation
-         - Update Asana task → Done
-         - Clean up worktree
-
-  7. Go to EXECUTION_LOOP (new tasks may now be unblocked)
-
-PHASE_COMPLETE:
-  8. Run full test suite on develop (unit + integration + E2E)
-  9. If tests fail → fix on develop, commit fix
-  10. Tag Release Candidate: vX.Y.Z-rc.N
-  11. Ask user to validate RC locally and WAIT for explicit approval
-  12. After approval: merge develop → main, create release tag, publish artifact, deploy
-  13. Update Asana project status: "Phase complete — RC validated and released"
-```
-
----
-
-### Asana Task Structure
-
-Tasks are created and managed via the **`mcp_asana-mcp_*` tools only** — never via custom scripts or direct HTTP calls.
-
-#### Pre-flight checklist
-
-Before creating any task:
-1. Call `get_project("1213839935179235", include_sections=True)` to retrieve the four section GIDs (`To Do`, `In Progress`, `In Review`, `Done`).
-2. If a section is missing, stop and create it (or ask the user to create it in the Asana web UI).
-3. Confirm the token is valid (if the previous step failed, follow the **MCP tool failure protocol** above).
-
-#### Creating tasks
-
-Use `create_tasks` with `default_project` as a **top-level tool parameter** (NOT inside the task objects) and `section_id` inside each task pointing to `To Do`:
-
-> ⚠️ **CRITICAL**: `default_project` is a separate top-level argument to the `create_tasks` tool, not a field inside each task object. If placed inside the task, the tool silently ignores it and creates the task with no project.
-
-Call signature:
-
-```
-mcp_asana-mcp_create_tasks(
-  default_project = "1213839935179235",   ← TOP-LEVEL, not inside tasks[]
-  tasks = [
-    {
-      "name": "[Phase Name] Task: <task name>",
-      "notes": "<description>\n\nFiles: <files>\nPhase: <phase>",
-      "section_id": "<to_do_section_gid>"   ← inside each task object
-    }
-  ]
-)
-```
-
-**Dependency ordering**: Tasks without dependencies are created first. Then tasks with dependencies pass `add_dependencies` referencing the GIDs returned by the first batch.
-
-#### Moving tasks between sections
-
-Use `update_tasks` with `add_projects` to move a task into a new section:
-
-| Transition | Action |
-|------------|--------|
-| Created → To Do | supply `section_id` in `create_tasks` |
-| → In Progress | `update_tasks` → `add_projects: [{project_id, section_id: in_progress_gid}]` + `add_comment`: "Assigned to subagent" |
-| → In Review | `add_comment`: "Subagent committed. Reviewing and merging." |
-| → Done | `update_tasks` → `completed: true` + `add_comment`: "Merged in \<sha\>" |
-
-#### Querying tasks
-
-Use `get_tasks(project="1213839935179235")` to list all tasks. Check `completed` and `memberships[].section.name` to identify the current state and compute the ready frontier.
-
----
-
-### Subagent Prompt Template
-
-Every subagent receives this prompt. The supervisor fills in the `{{placeholders}}`.
-
-```
-## Task
-{{task_description}}
-
-## Files
-You are expected to create or modify: {{file_list}}
-
-## Worktree
-You are working in: {{worktree_path}}
-Your branch: {{branch_name}}
-
-## Rules (mandatory)
-1. READ `AGENTS.md` and `GIT.md` before starting.
-2. Follow TDD: write unit tests FIRST (in tests/), verify they fail,
-   then implement. Commit tests before implementation.
-3. Write E2E tests at the end if your task adds/changes an endpoint
-   or UI behavior. E2E tests must pass before you stop.
-4. All commits must use Conventional Commit format (see GIT.md).
-   The pre-commit hook will enforce lint + build + test.
-5. Do NOT merge, push, or modify any branch other than your own.
-6. When done, commit all work and stop. Report back with:
-   - List of commits (SHAs + messages)
-   - Summary of what was implemented
-   - Any concerns or known limitations
-
-## Context
-Phase: {{phase_name}}
-Phase goal: {{phase_goal}}
-Your task depends on: {{dependency_descriptions_or_none}}
-Other parallel tasks in this phase: {{sibling_task_names}}
-(Be aware of potential overlap with sibling tasks — the supervisor
-will handle merge conflicts, but minimize unnecessary changes to
-shared files.)
-```
-
----
-
-### Merge Protocol (Supervisor)
-
-#### Simple merge (no conflicts)
-
-```bash
-cd /path/to/repo                          # main working directory
-git checkout develop
-git merge .worktrees/<task-slug>          # fast-forward or clean merge
-git worktree remove .worktrees/<task-slug>
-```
-
-#### Conflict merge
-
-When two parallel subagents touched the same files:
-
-1. **Attempt merge**: `git merge <branch>` — git marks conflict markers
-2. **Read the phase spec** to understand the intended behavior of both tasks
-3. **Read both diffs**: `git diff develop...<branch-A>` and `git diff develop...<branch-B>`
-4. **Reconcile**: produce a version that includes both implementations:
-   - If both modified the same function differently → combine both behaviors
-   - If both added code to the same location → include both additions in logical order
-   - If one renamed/moved code the other modified → apply the modification to the new location
-   - **Never discard one side** — both tasks were approved in the phase spec
-5. **Test**: run `python -m pytest tests/ --ignore=tests/integration -q` on the reconciled code
-6. **Commit** the merge resolution with message: `chore: merge <task-A> and <task-B> (conflict reconciled)`
-
-#### Post-merge validation
-
-After every merge into develop:
-- Run `python -m ruff check app/ frontend/ tests/ e2e/` (lint)
-- Run `python -m pytest tests/ --ignore=tests/integration -q` (unit tests)
-- If either fails, fix immediately on develop before proceeding to the next task
-
----
-
-### Semantic Release
-
-- **`develop`**: every completed phase creates a Release Candidate tag (`vX.Y.Z-rc.N`)
-- **`main`**: every merge from develop creates a full version tag (`vX.Y.Z`) following [SemVer](https://semver.org/):
-  - **Patch** (`Z`): bug fixes, no API changes
-  - **Minor** (`Y`): new features, backward-compatible
-  - **Major** (`X`): breaking changes
-- Tags are created with `git tag` and the corresponding GitHub Release via `gh release create`
-- The version bump type is specified in the phase spec
-
----
-
-### Test-Driven Development (TDD)
-
-- Subagents must write unit tests for every function/behavior they implement **before** writing the implementation
-- Tests live in `tests/` mirroring the `app/` structure (e.g., `tests/core/test_ai_agents.py`)
-- Implementation is written only after tests are in place and confirmed to fail (red → green)
-- Subagent commits should be ordered: test commit first, then implementation commit
-- The pre-commit hook enforces that all unit tests pass before any commit is accepted
-
-### End-to-End Testing
-
-- E2E tests are written at the **end** of the same task that delivers the feature — not deferred to a separate task
-- Subagents **cannot signal task completion** if any E2E test fails; the worktree must not be handed back until the suite is green
-- Two E2E topologies are supported for this project:
-  - **API**: pytest-based HTTP tests against `localhost:8000` (using `httpx` or `requests`); files in `e2e/api/`
-  - **Web**: [Maestro](https://maestro.mobile.dev/) flows against the Streamlit frontend at `localhost:8501`; files in `e2e/web/`
-
----
-
-### Quick Reference: Supervisor Checklist
-
-```
-[ ] Phase spec received and understood
-[ ] Asana tasks created with correct dependencies
-[ ] Ready frontier identified
-[ ] Subagents spawned with full prompt template
-[ ] Asana status updated: In Progress
-[ ] Subagent commits received
-[ ] Asana status updated: In Review
-[ ] Worktree merged into develop (conflicts reconciled if needed)
-[ ] Post-merge lint + tests pass
-[ ] Asana status updated: Done
-[ ] All tasks complete → full test suite green
-[ ] RC tagged on develop
-[ ] User asked to validate RC locally
-[ ] Local Docker stack for RC started (`docker compose up -d --build`)
-[ ] Local validation URLs shared (`http://localhost:8501`, `http://localhost:8000`)
-[ ] Explicit user approval received
-[ ] Asana project status updated
-```

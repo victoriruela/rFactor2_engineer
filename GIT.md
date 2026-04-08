@@ -5,14 +5,11 @@ All git operations in this project are governed by automated hooks and conventio
 ## Setup
 
 ```bash
-# Install Node dependencies (husky + commitlint)
-npm install
-
-# Install Python dev dependencies (ruff + pytest)
-pip install -r requirements-dev.txt
+# From repo root
+powershell -ExecutionPolicy Bypass -NoProfile -File scripts/setup-hooks.ps1
 ```
 
-`npm install` triggers `husky` via the `prepare` script, which installs the git hooks automatically.
+This sets `core.hooksPath=.githooks` so Git uses the project's hook scripts.
 
 ## Hooks
 
@@ -22,15 +19,15 @@ Runs three stages in sequence. The commit is blocked if any stage fails.
 
 | Stage | Command | What it checks |
 |-------|---------|----------------|
-| **Lint** | `python -m ruff check app/ frontend/ tests/ e2e/` | Python code quality (unused imports, style, errors) |
-| **Build** | `python -c "from app.main import app"` | App is importable (no syntax or import errors) |
-| **Test** | `python -m pytest tests/ --ignore=tests/integration -q` | Unit tests pass (no Ollama required) |
+| **Go vet** | `go vet ./services/backend_go/...` | Go code correctness (shadow vars, printf args, etc.) |
+| **Go test** | `go test ./services/backend_go/... -count=1 -short` | Unit tests pass (no Ollama required) |
+| **Expo lint** | `cd apps/expo_app && npx tsc --noEmit` | TypeScript type checking |
 
-Integration tests (`tests/integration/`) are excluded from the pre-commit hook because they require Ollama and take ~2 minutes. Run them manually before opening a PR.
+Integration tests (tagged `integration`) are excluded from the pre-commit hook because they require Ollama and take ~2 minutes. Run them manually before opening a PR.
 
 ### `commit-msg`
 
-Validates the commit message against [Conventional Commits](https://www.conventionalcommits.org/) using `commitlint`.
+Validates the commit message against [Conventional Commits](https://www.conventionalcommits.org/) format. Uses a shell script (no Node/commitlint dependency).
 
 ## Commit Message Format
 
@@ -64,31 +61,32 @@ type(scope): subject
 
 ```
 feat(telemetry): add .ld file parsing support
-fix(ai): handle empty telemetry gracefully
-docs: update AGENTS.md with docker section
-test(e2e): add upload flow maestro test
-build: dockerize project with compose
-chore: update ruff config
+fix(agents): handle empty telemetry gracefully
+docs: update AGENTS.md with Go architecture
+test(e2e): add upload flow test
+build: add go.mod dependencies
+chore: update Expo SDK
 release: v1.1.0
 ```
 
 ## Linting
 
-The project uses [ruff](https://docs.astral.sh/ruff/) for Python linting. Configuration is in `pyproject.toml`.
+### Go
+
+The project uses `go vet` for correctness and `staticcheck` (optional) for deeper analysis.
 
 ```bash
-# Check for issues
-ruff check app/ frontend/ tests/ e2e/
-
-# Auto-fix safe issues
-ruff check app/ frontend/ tests/ e2e/ --fix
+# From services/backend_go/
+go vet ./...
 ```
 
-### Configured rules
+### TypeScript (Expo)
 
-- **Selected**: `E` (pycodestyle errors), `F` (pyflakes), `W` (pycodestyle warnings)
-- **Ignored globally**: `E501` (line too long), `E741` (ambiguous variable name)
-- **Per-file ignores**: `E402` for `frontend/streamlit_app.py`, `app/main.py`, `tests/test_main.py`
+```bash
+# From apps/expo_app/
+npx tsc --noEmit
+npx eslint .
+```
 
 ## Branching & Semantic Release
 

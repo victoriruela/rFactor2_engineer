@@ -1,184 +1,81 @@
 # rFactor2 Engineer
 
-rFactor2 Engineer es una aplicación inteligente diseñada para pilotos de rFactor 2 que buscan optimizar su rendimiento en pista mediante el análisis de telemetría y el ajuste preciso del setup del vehículo. La aplicación utiliza agentes de IA (basados en LangChain con Ollama y el modelo Llama 3.2 3B local) para procesar archivos de MoTeC (.ld) y archivos de configuración (.svm), proporcionando recomendaciones visuales y detalladas.
+rFactor2 Engineer es una aplicación de análisis de telemetría y setup para rFactor 2. El runtime actual es un backend Go que sirve la API REST y la web embebida sin necesidad de Docker.
 
 ## ✨ Características Principales
 
-- **Análisis de Telemetría MoTeC**: Soporte para archivos `.ld`.
-- **Interpretación de Setup**: Lectura de archivos `.svm` de rFactor 2.
-- **Mapa de Circuito Inteligente**: Visualización del trazado con zonas coloreadas según el tipo de pérdida de tiempo:
-  - 🔴 **Rojo**: Pérdida por mala conducción.
-  - 🟡 **Amarillo**: Pérdida por deficiencia en el setup.
-  - 🟠 **Naranja**: Pérdida combinada (conducción y setup).
-- **Agentes de IA con Ollama + Llama 3.2 3B**:
-  - Modelo local `llama3.2:latest` ejecutado mediante Ollama del host.
-  - Requisito: Ollama instalado en el host y accesible en `http://localhost:11434`.
-  - Si falta el modelo: `ollama pull llama3.2:latest`.
-  - Ingeniero de Pista (Conducción).
-  - Mecánico de Competición (Setup).
-- **Reporte de Setup Completo**: Recomendaciones detalladas para cada parámetro del setup, justificando tanto los cambios como la decisión de mantener ciertos valores.
+- **Análisis de telemetría de sesión** y lectura de setups `*.svm`.
+- **Recomendaciones de setup** generadas por agentes de IA que usan Ollama.
+- **Web embebida** servida directamente desde el binario Go.
+- **Ejecución local sin Docker**.
+- **Artefacto Windows listo para ejecutar** en `dist/`.
 
 ## 🏗️ Estructura del Proyecto
 
 ```text
 rFactor2_engineer/
-├── app/
-│   ├── main.py                # Servidor API FastAPI
-│   ├── core/
-│   │   ├── ai_agents.py       # Lógica de agentes de IA (LangChain + Ollama)
-│   │   └── telemetry_parser.py # Decodificadores de archivos .ld, .svm
-├── frontend/
-│   └── streamlit_app.py       # Interfaz de usuario interactiva
-├── models/
-│   └── Llama-3.2-3B-Instruct-Q4_0.gguf  # Modelo local
-├── data/                      # Almacenamiento temporal de archivos
-├── requirements.txt           # Dependencias del proyecto
-└── .env                       # Variables de entorno
+├── apps/expo_app/              # Fuente de la web Expo
+├── services/backend_go/        # Backend Go y assets estáticos embebidos
+│   ├── cmd/server/             # Servidor Go principal
+│   └── internal/               # Lógica del backend, handlers y parsers
+├── data/                       # Sesiones y uploads temporales
+├── docs/                       # Documentación del proyecto
+├── scripts/                    # Scripts de utilidad para Windows y deploy
+└── dist/                       # Artefactos de build generados localmente
 ```
 
-## 🚀 Guía de Instalación y Ejecución
+## 🚀 Requisitos
 
-### 1. Requisitos Previos
-
-- Python 3.9 o superior.
-- [Ollama](https://ollama.com/) instalado en el host (Windows/Linux/macOS).
-- Modelo `llama3.2:latest` descargado en Ollama (**requisito obligatorio** para la app y los tests de integración):
-  ```
-  ollama pull llama3.2:latest
-  ```
-
-### 2. Instalación de Dependencias
-
-Clona el repositorio y ejecuta:
+- Go 1.23+ instalado.
+- Ollama instalado y corriendo en `http://localhost:11434`.
+- Modelo `llama3.2:latest` descargado en Ollama:
 
 ```powershell
-pip install -r requirements.txt
+ollama pull llama3.2:latest
 ```
 
-### 3. Configuración
+## 🧰 Construir el artefacto de Windows
 
-El archivo `.env` en la raíz del proyecto contiene la configuración de Ollama:
-
-```text
-OLLAMA_MODEL="llama3.2-3b-instruct"
-OLLAMA_BASE_URL="http://localhost:11434"
-```
-
-En Docker Compose, el backend usa el Ollama del host mediante:
-
-```text
-OLLAMA_BASE_URL=http://host.docker.internal:11434
-```
-
-### 4. Lanzar la Aplicación
-
-Debes iniciar tanto el backend (API) como el frontend (Streamlit).
-
-**Paso A: Iniciar el Backend (FastAPI)**
-Abre una terminal y ejecuta:
+Desde la raíz del repositorio:
 
 ```powershell
-python -m uvicorn app.main:app --reload
+cd services/backend_go
+go build -ldflags "-s -w" -o ..\..\dist\rfactor2-engineer-windows-amd64.exe ./cmd/server
 ```
-La API estará disponible en `http://localhost:8000`.
 
-**Paso B: Iniciar el Frontend (Streamlit)**
-Abre otra terminal y ejecuta:
+El ejecutable resultante estará en `dist/rfactor2-engineer-windows-amd64.exe`.
+
+## ▶️ Ejecutar la aplicación
+
+En Windows, abre PowerShell y ejecuta:
 
 ```powershell
-streamlit run frontend/streamlit_app.py
+cd dist
+.\rfactor2-engineer-windows-amd64.exe
 ```
-La aplicación se abrirá automáticamente en tu navegador (por defecto en `http://localhost:8501`).
 
-**Notas importantes:**
-- El backend inicia rápidamente (el LLM se carga de forma lazy en el primer análisis).
-- Inicia Ollama en el host antes de analizar (`ollama serve` si no está ya corriendo).
-- Si falta el modelo, descárgalo una vez con `ollama pull llama3.2:latest`.
-- Ver docs API en `http://localhost:8000/docs`.
+La API se servirá en `http://localhost:8080`.
 
-### Ejecución con Docker (recomendada)
+### Variables opcionales
+
+- `PORT` — puerto HTTP (por defecto `8080`)
+- `DATA_DIR` — directorio de sesiones (por defecto `data`)
+- `OLLAMA_BASE_URL` — URL de Ollama (por defecto `http://localhost:11434`)
+- `OLLAMA_MODEL` — modelo Ollama (por defecto `llama3.2:latest`)
+
+## 🔧 Desarrollo
+
+Para ejecutar el backend desde el código fuente:
 
 ```powershell
-docker compose up --build
+cd services/backend_go
+go run ./cmd/server
 ```
 
-Servicios:
-- Frontend: `http://localhost:8501`
-- Backend: `http://localhost:8000`
-- Ollama (host): `http://localhost:11434`
+El servidor escuchará en `http://localhost:8080`.
 
-### Tests Docker sin acumulación de contenedores
+## 📄 Notas
 
-Para ejecutar tests en Docker y limpiar automáticamente contenedores efímeros de `test` de este proyecto:
-
-```powershell
-powershell -ExecutionPolicy Bypass -NoProfile -File scripts/run_docker_test.ps1
-```
-
-Con argumentos personalizados:
-
-```powershell
-powershell -ExecutionPolicy Bypass -NoProfile -File scripts/run_docker_test.ps1 pytest tests/test_main.py -q
-```
-
-Si hubo ejecuciones interrumpidas y quedaron contenedores `exited`, limpia los de este proyecto y también los temporales de benchmark (`t1-*`, `t2-*`, ...):
-
-```powershell
-powershell -ExecutionPolicy Bypass -NoProfile -File scripts/cleanup_docker_test_artifacts.ps1
-```
-
-Al terminar una tarea/fase de benchmark, esos contenedores temporales deben purgarse. Opcionalmente, para limpiar tambien imagenes temporales tipo `t*-*-test`:
-
-```powershell
-powershell -ExecutionPolicy Bypass -NoProfile -File scripts/cleanup_docker_test_artifacts.ps1 -RemoveTemporaryTestImages
-```
-
-### Deploy HTTPS en host GCP (Nginx reverse proxy)
-
-Despliegue canonico al host configurado (`bitor@34.175.126.128`):
-
-```powershell
-powershell -ExecutionPolicy Bypass -NoProfile -File scripts/deploy_gcp.ps1
-```
-
-Topologia actual:
-- Nginx publico en `:80` y `:443`
-- Frontend Streamlit en `127.0.0.1:18501`
-- Backend FastAPI en `127.0.0.1:18000`
-- Proxy HTTPS: `/` -> frontend, `/api/` -> backend
-- Hosts publicos: `https://telemetria.bot.nu` y `https://car-setup.com`
-- `http://telemetria.bot.nu` y `http://car-setup.com` redirigen a HTTPS
-- **Basic Auth en Nginx para todas las rutas**
-  - Usuario: `racef1`
-  - Password: `100fuchupabien`
-- TLS: certificados Let's Encrypt gestionados con `certbot` en el host para ambos dominios
-- Uploads grandes: Nginx configurado con `client_max_body_size 20000M` y ruta explicita `/_stcore/upload_file/` para evitar `413 Request Entity Too Large`.
-
-Si no necesitas rebuild de imagenes:
-
-```powershell
-powershell -ExecutionPolicy Bypass -NoProfile -File scripts/deploy_gcp.ps1 -SkipDockerBuild
-```
-
-## 🛠️ Uso
-
-1. Abre la interfaz de Streamlit.
-2. Sube los archivos de tu sesión arrastrándolos al cargador:
-   - Archivo de telemetría de datos (`.ld`).
-   - Archivo de setup del coche (`.svm`).
-   - *Nota: Ambos archivos deben tener el mismo nombre base.*
-3. Si has subido varias sesiones, selecciona la que deseas analizar en el menú desplegable.
-4. Haz clic en **"Analizar Datos"**.
-5. Revisa el mapa del circuito y las listas de recomendaciones para mejorar tu tiempo de vuelta.
-
-## 🔗 Asana MCP Integration
-
-Este proyecto incluye un plugin de Claude Code para gestionar la autenticación OAuth2 y configuración MCP de Asana en múltiples IDEs (Claude Desktop, Claude CLI, VS Code Copilot, JetBrains Copilot).
-
-- **Plugin zip:** [`asana-mcp-plugin.zip`](asana-mcp-plugin.zip) — descomprimir en `~/.claude/asana-mcp/`
-- **Documentación completa:** [`ASANA.md`](ASANA.md)
-
-## 📝 Notas Técnicas
-- El parseo de archivos `.ld` se realiza mediante una implementación interna que lee la estructura binaria de MoTeC, extrayendo canales de telemetría sin depender de librerías externas de terceros.
-- La visualización del mapa utiliza `Plotly` para gráficos interactivos.
-- Los agentes de IA están configurados para procesar la telemetría y el setup de forma integral, cumpliendo con el requisito de no dejar ningún punto del setup sin analizar.
+- No se utiliza Docker para la ejecución local actual.
+- El frontend está preconstruido y embebido en `services/backend_go/cmd/server/static`.
+- Si modificas la web Expo, genera los assets nuevamente en `apps/expo_app` y actualiza el contenido de `services/backend_go/cmd/server/static`.

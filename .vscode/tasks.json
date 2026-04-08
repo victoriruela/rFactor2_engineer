@@ -1,0 +1,115 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "docker-run: backend",
+            "type": "docker-run",
+            "dockerRun": {
+                "image": "rfactor2_engineer-backend",
+                "ports": [
+                    {
+                        "containerPort": 8000,
+                        "hostPort": 8000
+                    },
+                    {
+                        "containerPort": 5678,
+                        "hostPort": 5678
+                    }
+                ],
+                "volumes": [
+                    {
+                        "localPath": "${workspaceFolder}/app",
+                        "containerPath": "/app/app"
+                    },
+                    {
+                        "localPath": "${workspaceFolder}/data",
+                        "containerPath": "/app/data"
+                    }
+                ],
+                "env": {
+                    "OLLAMA_BASE_URL": "http://host.docker.internal:11434",
+                    "OLLAMA_MODEL": "llama3.2:latest"
+                }
+            },
+            "python": {
+                "args": [
+                    "-m",
+                    "uvicorn",
+                    "app.main:app",
+                    "--host",
+                    "0.0.0.0",
+                    "--port",
+                    "8000"
+                ],
+                "file": "app/main.py"
+            }
+        },
+        {
+            "label": "docker-run: frontend",
+            "type": "docker-run",
+            "dockerRun": {
+                "image": "rfactor2_engineer-frontend",
+                "ports": [
+                    {
+                        "containerPort": 8501,
+                        "hostPort": 8501
+                    }
+                ],
+                "volumes": [
+                    {
+                        "localPath": "${workspaceFolder}/frontend",
+                        "containerPath": "/app/frontend"
+                    }
+                ],
+                "env": {
+                    "RF2_API_URL": "http://host.docker.internal:8000",
+                    "RF2_BROWSER_API_BASE_URL": "http://localhost:8000"
+                }
+            },
+            "python": {
+                "args": [
+                    "run",
+                    "frontend/streamlit_app.py",
+                    "--server.address",
+                    "0.0.0.0"
+                ],
+                "module": "streamlit"
+            }
+        },
+        {
+             "label": "docker-compose: up backend",
+             "type": "shell",
+             "command": "docker compose up backend",
+             "problemMatcher": [],
+             "group": "build"
+         },
+         {
+             "label": "docker-compose: up frontend",
+             "type": "shell",
+             "command": "docker compose up frontend",
+             "problemMatcher": [],
+             "group": "build"
+         },
+         {
+             "label": "docker-compose: up app",
+             "type": "shell",
+             "command": "docker compose up backend frontend",
+             "problemMatcher": [],
+             "group": "build"
+         },
+         {
+            "label": "docker-compose: up",
+            "type": "shell",
+            "command": "docker-compose up -d",
+            "problemMatcher": [],
+            "group": "build"
+        },
+        {
+            "label": "docker-compose: build",
+            "type": "shell",
+            "command": "docker-compose build",
+            "problemMatcher": [],
+            "group": "build"
+        }
+    ]
+}
