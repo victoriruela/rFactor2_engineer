@@ -17,6 +17,8 @@
 - Upload limit: `client_max_body_size 20000M`
 - TLS terminated at Nginx via Let's Encrypt
 
+> Nota: la ejecución actual utiliza un único binario Go y no requiere Docker para la aplicación.
+
 ## HTTP Basic Auth
 
 | | Value |

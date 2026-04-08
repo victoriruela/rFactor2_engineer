@@ -167,44 +167,122 @@ func filterByLaps(td *domain.TelemetryData, keepLaps []int) {
 	}
 }
 
-// ExtractGPS extracts GPS coordinates from telemetry, applying smoothing.
-// Subsamples to maxPoints for circuit map display.
+// ExtractGPS extracts GPS coordinates from telemetry for circuit map display.
+// Selects the single lap with the most data points to avoid multi-lap overlap.
+// The data is already gently smoothed at parse time (rolling mean only).
 func ExtractGPS(td *domain.TelemetryData, maxPoints int) []domain.GPSPoint {
 	latCol := findChannel(td, "GPS Latitude", "GPS_Latitude", "gps latitude")
 	lonCol := findChannel(td, "GPS Longitude", "GPS_Longitude", "gps longitude")
-
 	if latCol == "" || lonCol == "" {
 		return nil
 	}
 
-	lat := SmoothGPS(td.Channels[latCol])
-	lon := SmoothGPS(td.Channels[lonCol])
-
-	n := len(lat)
-	if len(lon) < n {
-		n = len(lon)
+	allLat := td.Channels[latCol]
+	allLon := td.Channels[lonCol]
+	n := len(allLat)
+	if len(allLon) < n {
+		n = len(allLon)
+	}
+	if n == 0 {
+		return nil
 	}
 
-	if maxPoints <= 0 || maxPoints >= n {
-		points := make([]domain.GPSPoint, n)
-		for i := 0; i < n; i++ {
-			points[i] = domain.GPSPoint{Lat: lat[i], Lon: lon[i]}
+	// Select only the single best lap to avoid multi-lap overlap artifacts.
+	lat, lon := bestLapGPS(td, allLat[:n], allLon[:n])
+	if len(lat) == 0 {
+		return nil
+	}
+
+	// Filter out invalid coordinates and consecutive duplicates (stationary car).
+	type pair struct{ lat, lon float64 }
+	valid := make([]pair, 0, len(lat))
+	var prevLat, prevLon float64
+	for i := range lat {
+		la, lo := lat[i], lon[i]
+		if math.IsNaN(la) || math.IsNaN(lo) || math.IsInf(la, 0) || math.IsInf(lo, 0) {
+			continue
 		}
-		return points
+		if la == prevLat && lo == prevLon {
+			continue // skip stationary / duplicate samples
+		}
+		valid = append(valid, pair{la, lo})
+		prevLat, prevLon = la, lo
+	}
+	if len(valid) == 0 {
+		return nil
 	}
 
-	// Subsample
-	step := float64(n) / float64(maxPoints)
-	points := make([]domain.GPSPoint, maxPoints)
+	// Subsample evenly to maxPoints.
+	rawN := len(valid)
+	if maxPoints <= 0 || maxPoints >= rawN {
+		out := make([]domain.GPSPoint, rawN)
+		for i, p := range valid {
+			out[i] = domain.GPSPoint{Lat: p.lat, Lon: p.lon}
+		}
+		return out
+	}
+
+	step := float64(rawN) / float64(maxPoints)
+	out := make([]domain.GPSPoint, maxPoints)
 	for i := 0; i < maxPoints; i++ {
 		idx := int(math.Round(float64(i) * step))
-		if idx >= n {
-			idx = n - 1
+		if idx >= rawN {
+			idx = rawN - 1
 		}
-		points[i] = domain.GPSPoint{Lat: lat[idx], Lon: lon[idx]}
+		out[i] = domain.GPSPoint{Lat: valid[idx].lat, Lon: valid[idx].lon}
+	}
+	return out
+}
+
+// bestLapGPS picks the single lap with the most GPS samples.
+// Falls back to the full data if no lap column is available.
+func bestLapGPS(td *domain.TelemetryData, lat, lon []float64) ([]float64, []float64) {
+	if td.LapCol == "" {
+		return lat, lon
+	}
+	lapData, ok := td.Channels[td.LapCol]
+	if !ok || len(lapData) == 0 {
+		return lat, lon
 	}
 
-	return points
+	n := len(lat)
+	if len(lapData) < n {
+		n = len(lapData)
+	}
+
+	// Count samples per lap.
+	lapCounts := make(map[int]int)
+	for i := 0; i < n; i++ {
+		lap := int(lapData[i])
+		if lap > 0 {
+			lapCounts[lap]++
+		}
+	}
+	if len(lapCounts) == 0 {
+		return lat, lon
+	}
+
+	// Find the lap with the most data points.
+	bestLap := 0
+	bestCount := 0
+	for lap, count := range lapCounts {
+		if count > bestCount {
+			bestCount = count
+			bestLap = lap
+		}
+	}
+
+	// Extract GPS data for the best lap only.
+	bestLat := make([]float64, 0, bestCount)
+	bestLon := make([]float64, 0, bestCount)
+	for i := 0; i < n; i++ {
+		if int(lapData[i]) == bestLap {
+			bestLat = append(bestLat, lat[i])
+			bestLon = append(bestLon, lon[i])
+		}
+	}
+
+	return bestLat, bestLon
 }
 
 func findChannel(td *domain.TelemetryData, names ...string) string {

@@ -6,10 +6,13 @@ import type { GPSPoint, IssueMarker } from '../api';
 interface Props {
   gpsPoints: GPSPoint[] | null | undefined;
   issues?: IssueMarker[] | null;
-  /** GPS point of the current cursor position from TelemetryCharts */
   currentPosition?: GPSPoint | null;
   width?: number;
   height?: number;
+}
+
+function distance(a: GPSPoint, b: GPSPoint): number {
+  return Math.hypot(a.lat - b.lat, a.lon - b.lon);
 }
 
 const SEVERITY_COLORS: Record<string, string> = {
@@ -22,42 +25,40 @@ export default function CircuitMap({ gpsPoints, issues = [], currentPosition, wi
   const safeGpsPoints = Array.isArray(gpsPoints) ? gpsPoints : [];
   const safeIssues = Array.isArray(issues) ? issues : [];
 
-  const { points, issueCoords, toX, toY } = useMemo(() => {
-    if (safeGpsPoints.length === 0) return { points: '', issueCoords: [], toX: null, toY: null };
-
+  const { pointSegments, issueCoords, toX, toY } = useMemo(() => {
     const finitePoints = safeGpsPoints.filter(
       (point) => Number.isFinite(point.lat) && Number.isFinite(point.lon),
     );
-    if (finitePoints.length === 0) {
-      return { points: '', issueCoords: [], toX: null, toY: null };
+    if (finitePoints.length < 2) {
+      return { pointSegments: [], issueCoords: [], toX: null, toY: null };
     }
 
     const sanitized: GPSPoint[] = [];
-    for (let i = 0; i < finitePoints.length; i++) {
-      const curr = finitePoints[i];
+    for (const point of finitePoints) {
       const prev = sanitized[sanitized.length - 1];
-      if (!prev || prev.lat !== curr.lat || prev.lon !== curr.lon) {
-        sanitized.push(curr);
+      if (!prev || prev.lat !== point.lat || prev.lon !== point.lon) {
+        sanitized.push(point);
       }
     }
-    if (sanitized.length === 0) {
-      return { points: '', issueCoords: [], toX: null, toY: null };
+    if (sanitized.length < 2) {
+      return { pointSegments: [], issueCoords: [], toX: null, toY: null };
     }
 
-    const pad = 20;
-    let minLat = sanitized[0].lat;
-    let maxLat = sanitized[0].lat;
-    let minLon = sanitized[0].lon;
-    let maxLon = sanitized[0].lon;
+    let lonMin = sanitized[0].lon;
+    let lonMax = sanitized[0].lon;
+    let latMin = sanitized[0].lat;
+    let latMax = sanitized[0].lat;
     for (const point of sanitized) {
-      if (point.lat < minLat) minLat = point.lat;
-      if (point.lat > maxLat) maxLat = point.lat;
-      if (point.lon < minLon) minLon = point.lon;
-      if (point.lon > maxLon) maxLon = point.lon;
+      if (point.lon < lonMin) lonMin = point.lon;
+      if (point.lon > lonMax) lonMax = point.lon;
+      if (point.lat < latMin) latMin = point.lat;
+      if (point.lat > latMax) latMax = point.lat;
     }
 
-    const rangeX = maxLon - minLon || 1;
-    const rangeY = maxLat - minLat || 1;
+    const rangeX = lonMax - lonMin || 1;
+    const rangeY = latMax - latMin || 1;
+    const mapDiag = Math.hypot(rangeX, rangeY);
+    const pad = 20;
     const scaleX = (width - 2 * pad) / rangeX;
     const scaleY = (height - 2 * pad) / rangeY;
     const scale = Math.min(scaleX, scaleY);
@@ -66,12 +67,36 @@ export default function CircuitMap({ gpsPoints, issues = [], currentPosition, wi
     const offsetX = (width - contentW) / 2;
     const offsetY = (height - contentH) / 2;
 
-    const toXFn = (lon: number) => offsetX + (lon - minLon) * scale;
-    const toYFn = (lat: number) => height - (offsetY + (lat - minLat) * scale);
+    const toXFn = (lon: number) => offsetX + (lon - lonMin) * scale;
+    const toYFn = (lat: number) => height - (offsetY + (lat - latMin) * scale);
 
-    const pointsStr = sanitized
-      .map((point) => `${toXFn(point.lon)},${toYFn(point.lat)}`)
-      .join(' ');
+    // With single-lap data from backend, discontinuities should be rare.
+    // Break only on truly anomalous jumps (> 5% of coordinate range, matching Python lap_xy).
+    const maxJump = Math.max(mapDiag * 0.05, 0.001);
+    const segments: GPSPoint[][] = [];
+    let currentSegment: GPSPoint[] = [sanitized[0]];
+    for (let i = 1; i < sanitized.length; i++) {
+      const point = sanitized[i];
+      const prev = currentSegment[currentSegment.length - 1];
+      if (distance(prev, point) > maxJump) {
+        if (currentSegment.length > 1) {
+          segments.push(currentSegment);
+        }
+        currentSegment = [point];
+      } else {
+        currentSegment.push(point);
+      }
+    }
+    if (currentSegment.length > 1) {
+      segments.push(currentSegment);
+    }
+    if (segments.length === 0) {
+      return { pointSegments: [], issueCoords: [], toX: null, toY: null };
+    }
+
+    const pointsSegmentsStr = segments.map((segment) =>
+      segment.map((point) => `${toXFn(point.lon)},${toYFn(point.lat)}`).join(' '),
+    );
 
     const ic = safeIssues.map((m) => ({
       x: toXFn(m.lon),
@@ -80,7 +105,7 @@ export default function CircuitMap({ gpsPoints, issues = [], currentPosition, wi
       desc: m.description,
     }));
 
-    return { points: pointsStr, issueCoords: ic, toX: toXFn, toY: toYFn };
+    return { pointSegments: pointsSegmentsStr, issueCoords: ic, toX: toXFn, toY: toYFn };
   }, [safeGpsPoints, safeIssues, width, height]);
 
   if (safeGpsPoints.length === 0) return null;
@@ -91,11 +116,12 @@ export default function CircuitMap({ gpsPoints, issues = [], currentPosition, wi
   return (
     <View style={styles.container}>
       <Svg width={width} height={height} viewBox={`0 0 ${width} ${height}`}>
-        {points ? <Polyline points={points} fill="none" stroke="#4fc3f7" strokeWidth={2} /> : null}
+        {pointSegments.map((segmentPoints, index) => (
+          <Polyline key={index} points={segmentPoints} fill="none" stroke="#4fc3f7" strokeWidth={2} />
+        ))}
         {issueCoords.map((ic, i) => (
           <Circle key={i} cx={ic.x} cy={ic.y} r={6} fill={ic.color} opacity={0.8} />
         ))}
-        {/* Moving position marker */}
         {posX != null && posY != null && (
           <>
             <Circle cx={posX} cy={posY} r={10} fill="none" stroke="#fff" strokeWidth={1.5} opacity={0.5} />

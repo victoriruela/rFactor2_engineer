@@ -7,8 +7,7 @@
     "scheme": "rfactor2",
     "web": {
       "bundler": "metro",
-      "output": "single",
-      "favicon": "./assets/favicon.png"
+      "output": "single"
     },
     "plugins": ["expo-router"],
     "extra": {

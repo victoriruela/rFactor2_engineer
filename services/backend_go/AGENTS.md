@@ -97,7 +97,7 @@ Combina recomendaciones del chief con setup original, calcula porcentajes de cam
 
 1. Archivos subidos → guardados en `data/{session_id}/`
 2. Telemetría parseada → mapa de canales `map[string][]float64`
-3. GPS extraído para circuit map (submuestreado a 5000 puntos máx.)
+3. GPS extraído para circuit map (por defecto una vuelta y submuestreado a 2000 puntos máx.)
 4. Stats por vuelta calculados (velocidad, acelerador, freno, RPM, combustible, desgaste, temps)
 5. Telemetría submuestreada (~50 puntos/vuelta, top 100 columnas) → CSV string para IA
 6. Resumen construido: nombre del circuito + stats + resúmenes de vuelta + CSV detallado

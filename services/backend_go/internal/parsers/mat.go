@@ -164,10 +164,12 @@ func ParseMATFile(path string) (*domain.TelemetryData, error) {
 	td := &domain.TelemetryData{Channels: aligned}
 	detectSpecialColumns(td)
 
-	// Apply GPS smoothing
+	// Apply gentle GPS smoothing: only rolling mean, no outlier removal.
+	// rFactor2 GPS is synthetic (simulation), so there are no real GPS spikes to remove.
+	// Outlier removal with 1.5*std would incorrectly clip legitimate track corners.
 	for _, col := range []string{"GPS Latitude", "GPS Longitude"} {
 		if data, ok := td.Channels[col]; ok {
-			td.Channels[col] = SmoothGPS(data)
+			td.Channels[col] = rollingMean(data, 11)
 		}
 	}
 
