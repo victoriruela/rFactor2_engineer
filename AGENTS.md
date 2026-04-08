@@ -119,7 +119,7 @@ Extended provider config and numeric defaults: `LLM_CONSTANTS.md`
 **Chief-item normalization**: same pattern; also accepts `newValue`, `nuevoValor`, `parametro`, `motivo`.
 **Reason sanitization**: strips prompt-template artifacts; fallback chain: chief reason → specialist reason → generic Spanish string.
 **Merge strategy**: build from specialist proposals first; chief overrides only for params it explicitly returns.
-**Circuit map cleanup**: frontend map rendering removes duplicate points, splits abrupt jumps (including anomalous step-length spikes) into separate polyline segments (legacy parity with Python `lap_xy` discontinuity breaks), and keeps the main connected track while pruning isolated straight artifact branches that do not reconnect coherently.
+**Circuit map rendering**: telemetría prioriza la vuelta seleccionada para el mapa; backend extrae una sola vuelta por defecto para `circuit_data` y frontend corta solo discontinuidades abruptas (paridad con Python `lap_xy`) para evitar saltos entre vueltas.
 **Axle symmetry**: post-processing pass enforces FL≈FR and RL≈RR unless telemetry data justifies asymmetry.
 **Session scope**: all `/api/` routes scoped to `X-Client-Session-Id` header / `rf2_session_id` cookie. Frontend calls `POST /api/cleanup_all` at startup.
 

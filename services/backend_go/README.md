@@ -25,12 +25,30 @@ go run ./cmd/server
 | `OLLAMA_BASE_URL` | `http://localhost:11434` | URL de Ollama |
 | `OLLAMA_MODEL` | `llama3.2:latest` | Modelo LLM por defecto |
 
+## Build Windows
+
+```powershell
+cd services/backend_go
+go build -ldflags "-s -w" -o ..\..\dist\rfactor2-engineer-windows-amd64.exe ./cmd/server
+```
+
+El ejecutable de Windows queda en `dist/rfactor2-engineer-windows-amd64.exe`.
+
 ## Build Linux
 
 ```powershell
 $env:GOOS = "linux"; $env:GOARCH = "amd64"
 go build -ldflags "-s -w" -o rf2engineer ./cmd/server
 ```
+
+## Ejecutar el artefacto Windows
+
+```powershell
+cd dist
+.\rfactor2-engineer-windows-amd64.exe
+```
+
+El servidor escuchará en `http://localhost:8080`.
 
 ## Tests
 

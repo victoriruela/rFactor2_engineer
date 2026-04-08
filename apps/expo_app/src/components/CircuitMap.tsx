@@ -15,46 +15,6 @@ function distance(a: GPSPoint, b: GPSPoint): number {
   return Math.hypot(a.lat - b.lat, a.lon - b.lon);
 }
 
-function segmentLength(segment: GPSPoint[]): number {
-  if (segment.length < 2) return 0;
-  let total = 0;
-  for (let i = 1; i < segment.length; i++) {
-    total += distance(segment[i - 1], segment[i]);
-  }
-  return total;
-}
-
-function segmentStraightness(segment: GPSPoint[]): number {
-  if (segment.length < 2) return 1;
-  const len = segmentLength(segment);
-  if (len <= 0) return 1;
-  const chord = distance(segment[0], segment[segment.length - 1]);
-  return chord / len;
-}
-
-function minDistanceToSegmentEndpoints(segment: GPSPoint[], target: GPSPoint[]): number {
-  if (segment.length === 0 || target.length === 0) return Number.POSITIVE_INFINITY;
-  const probes = [segment[0], segment[segment.length - 1]];
-  let minDist = Number.POSITIVE_INFINITY;
-  for (const probe of probes) {
-    for (const point of target) {
-      const d = distance(probe, point);
-      if (d < minDist) minDist = d;
-    }
-  }
-  return minDist;
-}
-
-function median(values: number[]): number {
-  if (values.length === 0) return 0;
-  const sorted = [...values].sort((a, b) => a - b);
-  const mid = Math.floor(sorted.length / 2);
-  if (sorted.length % 2 === 0) {
-    return (sorted[mid - 1] + sorted[mid]) / 2;
-  }
-  return sorted[mid];
-}
-
 const SEVERITY_COLORS: Record<string, string> = {
   high: '#f44336',
   medium: '#ff9800',
@@ -66,24 +26,21 @@ export default function CircuitMap({ gpsPoints, issues = [], currentPosition, wi
   const safeIssues = Array.isArray(issues) ? issues : [];
 
   const { pointSegments, issueCoords, toX, toY } = useMemo(() => {
-    if (safeGpsPoints.length === 0) return { pointSegments: [], issueCoords: [], toX: null, toY: null };
-
     const finitePoints = safeGpsPoints.filter(
       (point) => Number.isFinite(point.lat) && Number.isFinite(point.lon),
     );
-    if (finitePoints.length === 0) {
+    if (finitePoints.length < 2) {
       return { pointSegments: [], issueCoords: [], toX: null, toY: null };
     }
 
     const sanitized: GPSPoint[] = [];
-    for (let i = 0; i < finitePoints.length; i++) {
-      const curr = finitePoints[i];
+    for (const point of finitePoints) {
       const prev = sanitized[sanitized.length - 1];
-      if (!prev || prev.lat !== curr.lat || prev.lon !== curr.lon) {
-        sanitized.push(curr);
+      if (!prev || prev.lat !== point.lat || prev.lon !== point.lon) {
+        sanitized.push(point);
       }
     }
-    if (sanitized.length === 0) {
+    if (sanitized.length < 2) {
       return { pointSegments: [], issueCoords: [], toX: null, toY: null };
     }
 
@@ -98,98 +55,10 @@ export default function CircuitMap({ gpsPoints, issues = [], currentPosition, wi
       if (point.lat > latMax) latMax = point.lat;
     }
 
-    const lonJumpThreshold = Math.max((lonMax - lonMin) * 0.05, 0.000001);
-    const latJumpThreshold = Math.max((latMax - latMin) * 0.05, 0.000001);
-    const mapDiag = Math.hypot(latMax - latMin, lonMax - lonMin);
-
-    const stepDistances: number[] = [];
-    for (let i = 1; i < sanitized.length; i++) {
-      stepDistances.push(distance(sanitized[i - 1], sanitized[i]));
-    }
-    const medianStep = median(stepDistances);
-    const anomalousStepThreshold = Math.max(medianStep * 18, mapDiag * 0.035, 0.00003);
-
-    const segments: GPSPoint[][] = [];
-    let currentSegment: GPSPoint[] = [];
-
-    for (let i = 0; i < sanitized.length; i++) {
-      const point = sanitized[i];
-      const prev = currentSegment[currentSegment.length - 1];
-
-      if (!prev) {
-        currentSegment.push(point);
-        continue;
-      }
-
-      const lonJump = Math.abs(point.lon - prev.lon);
-      const latJump = Math.abs(point.lat - prev.lat);
-      const stepJump = distance(prev, point);
-      const hasAbruptJump =
-        lonJump > lonJumpThreshold ||
-        latJump > latJumpThreshold ||
-        stepJump > anomalousStepThreshold;
-
-      if (hasAbruptJump) {
-        if (currentSegment.length > 1) {
-          segments.push(currentSegment);
-        }
-        currentSegment = [point];
-        continue;
-      }
-
-      currentSegment.push(point);
-    }
-
-    if (currentSegment.length > 1) {
-      segments.push(currentSegment);
-    }
-    if (segments.length === 0) {
-      return { pointSegments: [], issueCoords: [], toX: null, toY: null };
-    }
-
-    const lengths = segments.map((segment) => segmentLength(segment));
-    const mainIndex = lengths.indexOf(Math.max(...lengths));
-    const mainSegment = segments[mainIndex];
-    const connectThreshold = Math.max(mapDiag * 0.055, 0.00003);
-
-    const filteredSegments = segments.filter((segment, index) => {
-      if (index === mainIndex) return true;
-      if (segment.length < 3) return false;
-
-      const startToMain = minDistanceToSegmentEndpoints([segment[0]], mainSegment);
-      const endToMain = minDistanceToSegmentEndpoints([segment[segment.length - 1]], mainSegment);
-      const reconnectsBothEnds = startToMain <= connectThreshold && endToMain <= connectThreshold;
-      if (reconnectsBothEnds) return true;
-
-      const len = lengths[index];
-      const isLongChunk = len >= lengths[mainIndex] * 0.35;
-      if (isLongChunk) return true;
-
-      const straightness = segmentStraightness(segment);
-      const isIsolatedStraightArtifact = straightness > 0.975 && len < mapDiag * 0.45;
-      return !isIsolatedStraightArtifact;
-    });
-
-    const drawingSegments = filteredSegments.length > 0 ? filteredSegments : [mainSegment];
-    const drawingPoints = drawingSegments.flat();
-    if (drawingPoints.length === 0) {
-      return { pointSegments: [], issueCoords: [], toX: null, toY: null };
-    }
-
+    const rangeX = lonMax - lonMin || 1;
+    const rangeY = latMax - latMin || 1;
+    const mapDiag = Math.hypot(rangeX, rangeY);
     const pad = 20;
-    let minLat = drawingPoints[0].lat;
-    let maxLat = drawingPoints[0].lat;
-    let minLon = drawingPoints[0].lon;
-    let maxLon = drawingPoints[0].lon;
-    for (const point of drawingPoints) {
-      if (point.lat < minLat) minLat = point.lat;
-      if (point.lat > maxLat) maxLat = point.lat;
-      if (point.lon < minLon) minLon = point.lon;
-      if (point.lon > maxLon) maxLon = point.lon;
-    }
-
-    const rangeX = maxLon - minLon || 1;
-    const rangeY = maxLat - minLat || 1;
     const scaleX = (width - 2 * pad) / rangeX;
     const scaleY = (height - 2 * pad) / rangeY;
     const scale = Math.min(scaleX, scaleY);
@@ -198,10 +67,34 @@ export default function CircuitMap({ gpsPoints, issues = [], currentPosition, wi
     const offsetX = (width - contentW) / 2;
     const offsetY = (height - contentH) / 2;
 
-    const toXFn = (lon: number) => offsetX + (lon - minLon) * scale;
-    const toYFn = (lat: number) => height - (offsetY + (lat - minLat) * scale);
+    const toXFn = (lon: number) => offsetX + (lon - lonMin) * scale;
+    const toYFn = (lat: number) => height - (offsetY + (lat - latMin) * scale);
 
-    const pointsSegmentsStr = drawingSegments.map((segment) =>
+    // With single-lap data from backend, discontinuities should be rare.
+    // Break only on truly anomalous jumps (> 5% of coordinate range, matching Python lap_xy).
+    const maxJump = Math.max(mapDiag * 0.05, 0.001);
+    const segments: GPSPoint[][] = [];
+    let currentSegment: GPSPoint[] = [sanitized[0]];
+    for (let i = 1; i < sanitized.length; i++) {
+      const point = sanitized[i];
+      const prev = currentSegment[currentSegment.length - 1];
+      if (distance(prev, point) > maxJump) {
+        if (currentSegment.length > 1) {
+          segments.push(currentSegment);
+        }
+        currentSegment = [point];
+      } else {
+        currentSegment.push(point);
+      }
+    }
+    if (currentSegment.length > 1) {
+      segments.push(currentSegment);
+    }
+    if (segments.length === 0) {
+      return { pointSegments: [], issueCoords: [], toX: null, toY: null };
+    }
+
+    const pointsSegmentsStr = segments.map((segment) =>
       segment.map((point) => `${toXFn(point.lon)},${toYFn(point.lat)}`).join(' '),
     );
 

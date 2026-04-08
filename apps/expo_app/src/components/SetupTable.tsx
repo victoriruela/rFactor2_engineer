@@ -152,7 +152,7 @@ const styles = StyleSheet.create({
   cardRowReason: {
     flexDirection: 'column',
     paddingVertical: 4,
-    paddingTopToLargeWidth: 8,
+    paddingTop: 8,
   },
   cardLabel: {
     color: '#888',

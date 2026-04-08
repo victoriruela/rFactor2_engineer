@@ -199,7 +199,7 @@ func (h *AnalysisHandler) LoadSessionTelemetry(c *gin.Context) {
 
 	stats := telData.SessionStats()
 	resp := &domain.AnalysisResponse{
-		CircuitData:         telData.ExtractGPS(),
+		CircuitData:         parsers.ExtractGPS(telData, 2000),
 		IssuesOnMap:         []domain.IssueMarker{},
 		DrivingAnalysis:     "",
 		SetupAnalysis:       map[string][]domain.SetupChange{},
@@ -260,7 +260,7 @@ func (h *AnalysisHandler) analyzeFilesWithProgress(c *gin.Context, telPath, svmP
 	}
 
 	resp.TelemetryTimeSeries = timeSeries
-	resp.CircuitData = telData.ExtractGPS()
+	resp.CircuitData = parsers.ExtractGPS(telData, 2000)
 	return resp, nil
 }
 

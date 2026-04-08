@@ -86,10 +86,10 @@ export default function TelemetryScreen() {
     [telemetrySeries],
   );
 
-  const mapPoints = Array.isArray(analysisResult?.circuit_data) && analysisResult.circuit_data.length >= 2
-    ? analysisResult.circuit_data
-    : selectedLapGpsPoints.length >= 2
+  const mapPoints = selectedLapGpsPoints.length >= 2
     ? selectedLapGpsPoints
+    : Array.isArray(analysisResult?.circuit_data) && analysisResult.circuit_data.length >= 2
+    ? analysisResult.circuit_data
     : allTelemetryGpsPoints.length >= 2
     ? allTelemetryGpsPoints
     : [];
