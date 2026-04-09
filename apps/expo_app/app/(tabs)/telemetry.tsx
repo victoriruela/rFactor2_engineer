@@ -104,7 +104,6 @@ export default function TelemetryScreen() {
   }, [laps]);
 
   const lapSelectorVisible = hasTelemetry && availableLaps.length > 0;
-  const lapSelectorStickyIndex = lapSelectorVisible ? (stats ? 2 : 1) : -1;
 
   const handleCursorIndex = useCallback((_: number, sample: { lat: number; lon: number }) => {
     if (sample.lat !== 0 || sample.lon !== 0) {
@@ -130,10 +129,54 @@ export default function TelemetryScreen() {
 
   return (
     <View style={styles.container}>
+      {/* Fixed top panel: map + lap selector — always visible */}
+      <View style={styles.fixedPanel}>
+        {hasCircuit && (
+          <View style={styles.mapSection}>
+            <Text style={styles.sectionTitle}>Mapa del Circuito</Text>
+            <CircuitMap
+              gpsPoints={mapPoints}
+              issues={analysisResult.issues_on_map}
+              currentPosition={cursorPosition}
+              width={Math.max(windowWidth - 32, 320)}
+              height={isWide ? 260 : 180}
+            />
+          </View>
+        )}
+        {!hasCircuit && (
+          <View style={styles.noCircuitBadge}>
+            <Text style={styles.noCircuitText}>Sin datos GPS para trazar el circuito</Text>
+          </View>
+        )}
+        {lapSelectorVisible && (
+          <View style={styles.lapSelectorPanel}>
+            <View style={styles.lapSelectorRow}>
+              {availableLaps.map((lap) => {
+                const isActive = lap === selectedLap;
+                const isBest = bestLapNumber != null && lap === bestLapNumber;
+                return (
+                  <Text
+                    key={lap}
+                    style={[
+                      styles.lapChip,
+                      isBest ? styles.lapChipBest : null,
+                      isActive ? styles.lapChipActive : null,
+                    ]}
+                    onPress={() => setSelectedLap(lap)}
+                  >
+                    {isBest ? '★ ' : ''}Vuelta {lap}
+                  </Text>
+                );
+              })}
+            </View>
+          </View>
+        )}
+      </View>
+
+      {/* Scrollable body: stats + charts + lap table */}
       <ScrollView
         style={styles.scrollView}
         contentContainerStyle={styles.content}
-        stickyHeaderIndices={lapSelectorVisible ? [lapSelectorStickyIndex] : undefined}
       >
         {/* Session stats banner */}
         {stats && (
@@ -161,50 +204,6 @@ export default function TelemetryScreen() {
           </View>
         )}
 
-        {/* Circuit map (full width, before charts) */}
-        {hasCircuit && (
-          <View style={styles.mapSection}>
-            <Text style={styles.sectionTitle}>Mapa del Circuito</Text>
-            <CircuitMap
-              gpsPoints={mapPoints}
-              issues={analysisResult.issues_on_map}
-              currentPosition={cursorPosition}
-              width={Math.max(windowWidth - 32, 320)}
-              height={isWide ? 360 : 260}
-            />
-          </View>
-        )}
-        {!hasCircuit && (
-          <View style={styles.noCircuitBadge}>
-            <Text style={styles.noCircuitText}>Sin datos GPS para trazar el circuito</Text>
-          </View>
-        )}
-
-        {lapSelectorVisible && (
-          <View style={styles.lapSelectorSticky}>
-            <View style={styles.lapSelectorRow}>
-              {availableLaps.map((lap) => {
-                const isActive = lap === selectedLap;
-                const isBest = bestLapNumber != null && lap === bestLapNumber;
-                return (
-                  <Text
-                    key={lap}
-                    style={[
-                      styles.lapChip,
-                      isBest ? styles.lapChipBest : null,
-                      isActive ? styles.lapChipActive : null,
-                    ]}
-                    onPress={() => setSelectedLap(lap)}
-                  >
-                    {isBest ? '★ ' : ''}Vuelta {lap}
-                  </Text>
-                );
-              })}
-            </View>
-          </View>
-        )}
-
-        {/* Telemetry charts */}
         {hasTelemetry && (
           <View style={styles.chartsSection}>
             <Text style={styles.sectionTitle}>Telemetria</Text>
@@ -278,6 +277,14 @@ const styles = StyleSheet.create({
   },
   scrollView: {
     flex: 1,
+  },
+  fixedPanel: {
+    backgroundColor: '#090919',
+    borderBottomWidth: 1,
+    borderBottomColor: '#1e1e3a',
+    paddingHorizontal: 16,
+    paddingTop: 12,
+    paddingBottom: 8,
   },
   content: {
     padding: 16,
@@ -366,15 +373,9 @@ const styles = StyleSheet.create({
     marginBottom: 20,
     marginHorizontal: -16, // bleed to edges
   },
-  lapSelectorSticky: {
-    paddingHorizontal: 16,
+  lapSelectorPanel: {
     paddingTop: 8,
-    paddingBottom: 8,
-    borderBottomWidth: 1,
-    borderBottomColor: '#1e1e3a',
-    backgroundColor: '#090919',
-    marginHorizontal: -16,
-    marginBottom: 8,
+    paddingBottom: 4,
   },
   lapSelectorRow: {
     flexDirection: 'row',

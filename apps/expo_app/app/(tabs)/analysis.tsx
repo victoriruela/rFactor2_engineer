@@ -1,7 +1,7 @@
 ﻿import { useCallback, useEffect, useState } from 'react';
 import { View, Text, StyleSheet, Pressable, ScrollView, ActivityIndicator, TextInput } from 'react-native';
 import { useAppStore } from '../../src/store/useAppStore';
-import { analyzeFiles, analyzeSessionStream, listModels, listSessions } from '../../src/api';
+import { analyzeFiles, analyzeSessionStream, listModels, listSessions, setSessionState } from '../../src/api';
 import type { ProgressEvent } from '../../src/api';
 import SetupTable from '../../src/components/SetupTable';
 import MarkdownText from '../../src/components/MarkdownText';
@@ -66,6 +66,7 @@ export default function AnalysisScreen() {
           (ev) => setProgressMessages((prev) => [...prev, ev]),
         );
         setAnalysisResult(result);
+        setSessionState(targetSessionId, 'analysis_complete');
         // Minimize progress when analysis completes
         setProgressExpanded(false);
       } else {

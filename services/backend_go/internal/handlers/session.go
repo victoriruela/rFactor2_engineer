@@ -132,3 +132,41 @@ func (h *SessionHandler) CleanupAll(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{"status": "cleaned"})
 }
+
+// DeleteSession handles DELETE /api/sessions/:session_id
+func (h *SessionHandler) DeleteSession(c *gin.Context) {
+	clientSessionID := middleware.GetSessionID(c)
+	targetID := c.Param("session_id")
+
+	// Path traversal guard
+	if strings.Contains(targetID, "..") || strings.Contains(targetID, "/") || strings.Contains(targetID, "\\") {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid session id"})
+		return
+	}
+
+	sessDir := filepath.Join(h.DataDir, clientSessionID, targetID)
+
+	// Verify path is within expected directory
+	absPath, err := filepath.Abs(sessDir)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid path"})
+		return
+	}
+	absDataDir, _ := filepath.Abs(filepath.Join(h.DataDir, clientSessionID))
+	if !strings.HasPrefix(absPath, absDataDir) {
+		c.JSON(http.StatusForbidden, gin.H{"error": "access denied"})
+		return
+	}
+
+	if _, err := os.Stat(sessDir); os.IsNotExist(err) {
+		c.JSON(http.StatusNotFound, gin.H{"error": "session not found"})
+		return
+	}
+
+	if err := os.RemoveAll(sessDir); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "delete failed"})
+		return
+	}
+
+	c.Status(http.StatusNoContent)
+}
