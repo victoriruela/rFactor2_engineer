@@ -232,7 +232,7 @@ export default function AnalysisScreen() {
           ) : null}
 
           {/* Setup Recommendations */}
-          {Object.values(analysisResult.setup_analysis).some((items) => items.length > 0) ? (
+          {Object.values(analysisResult.setup_analysis ?? {}).some((items) => items.length > 0) ? (
             <View style={styles.section}>
               <Text style={styles.sectionTitle}>Recomendaciones de Setup</Text>
               {lockedParameters.size > 0 && (
@@ -242,7 +242,7 @@ export default function AnalysisScreen() {
                   </Text>
                 </View>
               )}
-              <SetupTable changes={analysisResult.setup_analysis} />
+              <SetupTable changes={analysisResult.setup_analysis ?? {}} />
             </View>
           ) : null}
         </>
