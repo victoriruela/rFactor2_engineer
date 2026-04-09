@@ -24,7 +24,23 @@ export function resolveApiBaseUrl(input: ResolveApiBaseUrlInput = {}): string {
   }
 
   if (input.isWeb && input.windowOrigin) {
-    return `${trimTrailingSlashes(input.windowOrigin)}/api`;
+    // In production the Go backend serves the frontend from the same origin.
+    // In development the Expo bundler runs on a different port (8081, 8082…)
+    // than the Go backend (8080), so same-origin /api would point at the
+    // bundler instead of the backend. Only use origin-based resolution when
+    // the origin is NOT a local non-backend address.
+    try {
+      const url = new URL(input.windowOrigin);
+      const isLocalDevPort =
+        (url.hostname === 'localhost' || url.hostname === '127.0.0.1') &&
+        url.port !== '' &&
+        url.port !== '8080';
+      if (!isLocalDevPort) {
+        return `${trimTrailingSlashes(input.windowOrigin)}/api`;
+      }
+    } catch {
+      return `${trimTrailingSlashes(input.windowOrigin)}/api`;
+    }
   }
 
   return 'http://localhost:8080/api';

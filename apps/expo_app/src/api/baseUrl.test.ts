@@ -21,4 +21,19 @@ describe('resolveApiBaseUrl', () => {
   it('falls back to localhost only when no env and no web origin are available', () => {
     expect(resolveApiBaseUrl({ isWeb: false })).toBe('http://localhost:8080/api');
   });
+
+  it('falls back to localhost:8080 when origin is a local Expo dev server port', () => {
+    expect(
+      resolveApiBaseUrl({ isWeb: true, windowOrigin: 'http://localhost:8082' }),
+    ).toBe('http://localhost:8080/api');
+    expect(
+      resolveApiBaseUrl({ isWeb: true, windowOrigin: 'http://localhost:8081' }),
+    ).toBe('http://localhost:8080/api');
+  });
+
+  it('uses same-origin /api when origin is the backend port (8080)', () => {
+    expect(
+      resolveApiBaseUrl({ isWeb: true, windowOrigin: 'http://localhost:8080' }),
+    ).toBe('http://localhost:8080/api');
+  });
 });

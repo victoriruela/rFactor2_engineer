@@ -77,6 +77,7 @@ func main() {
 		// Sessions
 		api.GET("/sessions", sessionH.ListSessions)
 		api.GET("/sessions/:session_id/file/:filename", sessionH.DownloadFile)
+		api.DELETE("/sessions/:session_id", sessionH.DeleteSession)
 		api.POST("/cleanup", sessionH.Cleanup)
 		api.POST("/cleanup_all", sessionH.CleanupAll)
 

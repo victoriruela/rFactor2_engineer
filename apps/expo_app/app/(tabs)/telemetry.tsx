@@ -1,7 +1,7 @@
 ﻿import { useCallback, useEffect, useMemo, useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, useWindowDimensions } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, useWindowDimensions, Pressable } from 'react-native';
 import { useAppStore } from '../../src/store/useAppStore';
-import type { GPSPoint } from '../../src/api';
+import type { GPSPoint, TelemetrySample } from '../../src/api';
 import CircuitMap from '../../src/components/CircuitMap';
 import TelemetryCharts from '../../src/components/TelemetryCharts';
 
@@ -12,12 +12,35 @@ function formatLapTime(seconds: number): string {
   return `${m}:${s.toFixed(3).padStart(6, '0')}`;
 }
 
+function formatCursorTimestamp(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds < 0) return '--:--.---';
+  const totalMs = Math.round(seconds * 1000);
+  const minutes = Math.floor(totalMs / 60000);
+  const secondsPart = (totalMs % 60000) / 1000;
+  return `${minutes.toString().padStart(2, '0')}:${secondsPart.toFixed(3).padStart(6, '0')}`;
+}
+
+function normalizePedalPercent(value: number): number {
+  if (!Number.isFinite(value)) return 0;
+  return Math.abs(value) <= 1 ? value * 100 : value;
+}
+
+function formatPedalPercent(value: number): string {
+  const pct = normalizePedalPercent(value);
+  return `${pct.toLocaleString('es-ES', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })}%`;
+}
+
 export default function TelemetryScreen() {
   const { analysisResult } = useAppStore();
   const [cursorPosition, setCursorPosition] = useState<GPSPoint | null>(null);
+  const [cursorSample, setCursorSample] = useState<TelemetrySample | null>(null);
   const [selectedLap, setSelectedLap] = useState<number | null>(null);
-  const { width: windowWidth } = useWindowDimensions();
+  const { width: windowWidth, height: windowHeight } = useWindowDimensions();
   const isWide = windowWidth >= 900;
+  const topPanelAsColumns = windowWidth >= 1100;
 
   const telemetrySeries = Array.isArray(analysisResult?.telemetry_series)
     ? analysisResult.telemetry_series
@@ -51,6 +74,71 @@ export default function TelemetryScreen() {
     if (selectedLap == null) return telemetrySeries;
     return telemetrySeries.filter((s) => s.lap === selectedLap);
   }, [telemetrySeries, selectedLap]);
+
+  const selectedLapTimeOffset = useMemo(() => {
+    if (selectedLapSamples.length === 0) return 0;
+    return selectedLapSamples.reduce(
+      (min, sample) => (sample.t < min ? sample.t : min),
+      selectedLapSamples[0].t,
+    );
+  }, [selectedLapSamples]);
+
+  // Max/min throttle and brake per lap — same artifact filter as TelemetryCharts.
+  const lapPedalStats = useMemo(() => {
+    // Must match constants in TelemetryCharts.tsx
+    const ACTIVE_THR = 5, ACTIVE_BRK = 5, MIN_SAMPLES = 60;
+
+    function filterArtifacts(values: number[], threshold: number): number[] {
+      const out = [...values];
+      let i = 0;
+      while (i < out.length) {
+        if (out[i] <= threshold) { i++; continue; }
+        const start = i;
+        while (i < out.length && out[i] > threshold) i++;
+        const end = i - 1;
+        if (end - start + 1 < MIN_SAMPLES) {
+          for (let j = start; j <= end; j++) out[j] = 0;
+        }
+      }
+      return out;
+    }
+
+    // Group normalized samples by lap.
+    const groups = new Map<number, { thr: number[]; brk: number[] }>();
+    for (const s of telemetrySeries) {
+      if (!Number.isFinite(s.lap) || s.lap <= 0) continue;
+      const thr = Math.abs(s.thr) <= 1 ? s.thr * 100 : s.thr;
+      const brk = Math.abs(s.brk) <= 1 ? s.brk * 100 : s.brk;
+      const g = groups.get(s.lap);
+      if (!g) { groups.set(s.lap, { thr: [thr], brk: [brk] }); }
+      else { g.thr.push(thr); g.brk.push(brk); }
+    }
+
+    // Filter artifacts then compute max/min per lap.
+    const result = new Map<number, { maxThr: number; minThr: number; maxBrk: number; minBrk: number }>();
+    for (const [lap, { thr, brk }] of groups) {
+      const ft = filterArtifacts(thr, ACTIVE_THR);
+      const fb = filterArtifacts(brk, ACTIVE_BRK);
+      let maxThr = 0, minThr = Infinity, maxBrk = 0, minBrk = Infinity;
+      for (const v of ft) { if (v > maxThr) maxThr = v; if (v < minThr) minThr = v; }
+      for (const v of fb) { if (v > maxBrk) maxBrk = v; if (v < minBrk) minBrk = v; }
+      result.set(lap, {
+        maxThr, minThr: minThr === Infinity ? 0 : minThr,
+        maxBrk, minBrk: minBrk === Infinity ? 0 : minBrk,
+      });
+    }
+    return result;
+  }, [telemetrySeries]);
+
+  useEffect(() => {
+    if (selectedLapSamples.length > 0) {
+      setCursorSample(selectedLapSamples[0]);
+      setCursorPosition({ lat: selectedLapSamples[0].lat, lon: selectedLapSamples[0].lon });
+    } else {
+      setCursorSample(null);
+      setCursorPosition(null);
+    }
+  }, [selectedLapSamples]);
 
   const selectedLapGpsPoints = useMemo(
     () =>
@@ -104,12 +192,22 @@ export default function TelemetryScreen() {
   }, [laps]);
 
   const lapSelectorVisible = hasTelemetry && availableLaps.length > 0;
-  const lapSelectorStickyIndex = lapSelectorVisible ? (stats ? 2 : 1) : -1;
+  const targetTopPanelHeight = Math.max(Math.floor(windowHeight * 0.4), 220);
+  const topPanelHeight = Math.min(targetTopPanelHeight, 380);
+  const mapWidth = topPanelAsColumns
+    ? Math.max(Math.min(windowWidth * 0.52, 920), 540)
+    : Math.max(windowWidth - 48, 320);
+  const mapHeight = topPanelAsColumns
+    ? Math.max(Math.min(topPanelHeight - 56, 320), 240)
+    : isWide
+    ? 280
+    : 220;
 
-  const handleCursorIndex = useCallback((_: number, sample: { lat: number; lon: number }) => {
+  const handleCursorIndex = useCallback((_: number, sample: TelemetrySample) => {
     if (sample.lat !== 0 || sample.lon !== 0) {
       setCursorPosition({ lat: sample.lat, lon: sample.lon });
     }
+    setCursorSample(sample);
   }, []);
 
   if (!analysisResult) {
@@ -130,87 +228,131 @@ export default function TelemetryScreen() {
 
   return (
     <View style={styles.container}>
+      {/* Fixed top panel: left stats + center map + right lap selector */}
+      <View style={styles.fixedPanel}>
+        <View style={[styles.fixedGrid, topPanelAsColumns ? styles.fixedGridRow : styles.fixedGridColumn]}>
+          <View style={[styles.fixedInfoColumn, topPanelAsColumns ? styles.fixedInfoColumnDesktop : null]}>
+            <Text style={styles.sectionTitle}>Resumen</Text>
+            <View style={styles.infoCard}>
+              <Text style={styles.infoLabel}>Circuito</Text>
+              <Text style={styles.infoValue} numberOfLines={2}>
+                {stats?.circuit_name || 'Desconocido'}
+              </Text>
+            </View>
+            <View style={styles.infoCard}>
+              <Text style={styles.infoLabel}>Vueltas</Text>
+              <Text style={styles.infoValue}>{stats?.total_laps ?? 0}</Text>
+            </View>
+            <View style={styles.infoCard}>
+              <Text style={styles.infoLabel}>Mejor vuelta</Text>
+              <Text style={[styles.infoValue, styles.infoValueAccent]}>
+                {formatLapTime(stats?.best_lap_time ?? 0)}
+              </Text>
+            </View>
+            <View style={styles.infoCard}>
+              <Text style={styles.infoLabel}>Media</Text>
+              <Text style={styles.infoValue}>{formatLapTime(stats?.avg_lap_time ?? 0)}</Text>
+            </View>
+          </View>
+
+          <View style={styles.fixedMapColumn}>
+            {hasCircuit && (
+              <View style={styles.mapSection}>
+                <Text style={styles.sectionTitle}>Mapa del Circuito</Text>
+                <CircuitMap
+                  gpsPoints={mapPoints}
+                  issues={analysisResult.issues_on_map}
+                  currentPosition={cursorPosition}
+                  width={mapWidth}
+                  height={mapHeight}
+                />
+              </View>
+            )}
+            {!hasCircuit && (
+              <View style={styles.noCircuitBadge}>
+                <Text style={styles.noCircuitText}>Sin datos GPS para trazar el circuito</Text>
+              </View>
+            )}
+          </View>
+
+          <View
+            style={[
+              styles.fixedLapsColumn,
+              topPanelAsColumns ? styles.fixedLapsColumnDesktop : null,
+              topPanelAsColumns ? { maxHeight: mapHeight + 34 } : null,
+            ]}
+          >
+            <Text style={styles.sectionTitle}>Selector de Vuelta</Text>
+            <View style={styles.lapSelectorPanel}>
+              <ScrollView
+                style={styles.lapSelectorScroll}
+                contentContainerStyle={styles.lapSelectorList}
+                nestedScrollEnabled
+                showsVerticalScrollIndicator={false}
+              >
+                {lapSelectorVisible ? (
+                  availableLaps.map((lap) => {
+                    const isActive = lap === selectedLap;
+                    const isBest = bestLapNumber != null && lap === bestLapNumber;
+                    return (
+                      <Pressable
+                        key={lap}
+                        style={[
+                          styles.lapRow,
+                          isBest ? styles.lapRowBest : null,
+                          isActive ? styles.lapRowActive : null,
+                        ]}
+                        onPress={() => setSelectedLap(lap)}
+                      >
+                        <Text style={[styles.lapRowText, isActive ? styles.lapRowTextActive : null]}>
+                          Vuelta {lap}
+                        </Text>
+                        {isBest ? (
+                          <Text style={[styles.lapRowBadge, isActive ? styles.lapRowBadgeActive : null]}>★ Mejor</Text>
+                        ) : null}
+                      </Pressable>
+                    );
+                  })
+                ) : (
+                  <Text style={styles.noLapsText}>Sin vueltas disponibles</Text>
+                )}
+              </ScrollView>
+            </View>
+          </View>
+        </View>
+
+        {cursorSample && (
+          <View style={styles.fixedCursorBar}>
+            <Text style={styles.fixedCursorBarText}>
+              t = {formatCursorTimestamp(Math.max(0, cursorSample.t - selectedLapTimeOffset))} {' | '} Vuelta{' '}
+              <Text style={styles.fixedCursorBarHighlight}>{cursorSample.lap}</Text>
+              {' | '}
+              <Text style={styles.fixedCursorSpeed}>{cursorSample.spd.toFixed(0)} km/h</Text>
+              {'  '}
+              <Text style={styles.fixedCursorThrottle}>{formatPedalPercent(cursorSample.thr)}</Text>
+              {' '}
+              <Text style={styles.fixedCursorBrake}>{formatPedalPercent(cursorSample.brk)}</Text>
+              {'  '}
+              <Text style={styles.fixedCursorRpm}>{cursorSample.rpm.toFixed(0)} rpm</Text>
+              {'  '}
+              <Text style={styles.fixedCursorGear}>{Math.round(cursorSample.gear)}ª</Text>
+            </Text>
+          </View>
+        )}
+      </View>
+
+      {/* Scrollable body: charts + lap table */}
       <ScrollView
         style={styles.scrollView}
         contentContainerStyle={styles.content}
-        stickyHeaderIndices={lapSelectorVisible ? [lapSelectorStickyIndex] : undefined}
       >
-        {/* Session stats banner */}
-        {stats && (
-          <View style={styles.statsBanner}>
-            <View style={styles.statCard}>
-              <Text style={styles.statCardLabel}>VUELTAS</Text>
-              <Text style={styles.statCardValue}>{stats.total_laps}</Text>
-            </View>
-            <View style={[styles.statCard, styles.statCardAccent]}>
-              <Text style={styles.statCardLabel}>MEJOR VUELTA</Text>
-              <Text style={[styles.statCardValue, styles.statCardValueAccent]}>
-                {formatLapTime(stats.best_lap_time)}
-              </Text>
-            </View>
-            <View style={styles.statCard}>
-              <Text style={styles.statCardLabel}>MEDIA</Text>
-              <Text style={styles.statCardValue}>{formatLapTime(stats.avg_lap_time)}</Text>
-            </View>
-            {stats.circuit_name ? (
-              <View style={styles.statCard}>
-                <Text style={styles.statCardLabel}>CIRCUITO</Text>
-                <Text style={styles.statCardValue}>{stats.circuit_name}</Text>
-              </View>
-            ) : null}
-          </View>
-        )}
-
-        {/* Circuit map (full width, before charts) */}
-        {hasCircuit && (
-          <View style={styles.mapSection}>
-            <Text style={styles.sectionTitle}>Mapa del Circuito</Text>
-            <CircuitMap
-              gpsPoints={mapPoints}
-              issues={analysisResult.issues_on_map}
-              currentPosition={cursorPosition}
-              width={Math.max(windowWidth - 32, 320)}
-              height={isWide ? 360 : 260}
-            />
-          </View>
-        )}
-        {!hasCircuit && (
-          <View style={styles.noCircuitBadge}>
-            <Text style={styles.noCircuitText}>Sin datos GPS para trazar el circuito</Text>
-          </View>
-        )}
-
-        {lapSelectorVisible && (
-          <View style={styles.lapSelectorSticky}>
-            <View style={styles.lapSelectorRow}>
-              {availableLaps.map((lap) => {
-                const isActive = lap === selectedLap;
-                const isBest = bestLapNumber != null && lap === bestLapNumber;
-                return (
-                  <Text
-                    key={lap}
-                    style={[
-                      styles.lapChip,
-                      isBest ? styles.lapChipBest : null,
-                      isActive ? styles.lapChipActive : null,
-                    ]}
-                    onPress={() => setSelectedLap(lap)}
-                  >
-                    {isBest ? '★ ' : ''}Vuelta {lap}
-                  </Text>
-                );
-              })}
-            </View>
-          </View>
-        )}
-
-        {/* Telemetry charts */}
         {hasTelemetry && (
           <View style={styles.chartsSection}>
             <Text style={styles.sectionTitle}>Telemetria</Text>
             <TelemetryCharts
               samples={selectedLapSamples}
               onIndexChange={handleCursorIndex}
+              showCursorBar={false}
             />
           </View>
         )}
@@ -226,7 +368,11 @@ export default function TelemetryScreen() {
               <Text style={[styles.tableCell, styles.tableCellHdr, { flex: 1 }]}>Avg km/h</Text>
               <Text style={[styles.tableCell, styles.tableCellHdr, { flex: 1 }]}>Max km/h</Text>
               {isWide && <Text style={[styles.tableCell, styles.tableCellHdr, { flex: 0.9 }]}>Aceler.</Text>}
+              {isWide && <Text style={[styles.tableCell, styles.tableCellHdr, { flex: 0.85, color: '#66bb6a' }]}>Acel.↑</Text>}
+              {isWide && <Text style={[styles.tableCell, styles.tableCellHdr, { flex: 0.85, color: '#66bb6a' }]}>Acel.↓</Text>}
               {isWide && <Text style={[styles.tableCell, styles.tableCellHdr, { flex: 0.9 }]}>Freno</Text>}
+              {isWide && <Text style={[styles.tableCell, styles.tableCellHdr, { flex: 0.85, color: '#ef5350' }]}>Freno↑</Text>}
+              {isWide && <Text style={[styles.tableCell, styles.tableCellHdr, { flex: 0.85, color: '#ef5350' }]}>Freno↓</Text>}
               {isWide && <Text style={[styles.tableCell, styles.tableCellHdr, { flex: 1 }]}>RPM avg</Text>}
             </View>
             {[...laps]
@@ -248,14 +394,40 @@ export default function TelemetryScreen() {
                     <Text style={[styles.tableCell, { flex: 1 }]}>{lap.max_speed.toFixed(1)}</Text>
                     {isWide && (
                       <Text style={[styles.tableCell, { flex: 0.9, color: '#66bb6a' }]}>
-                        {lap.avg_throttle != null ? `${(lap.avg_throttle * 100).toFixed(0)}%` : '—'}
+                        {lap.avg_throttle != null ? formatPedalPercent(lap.avg_throttle) : '—'}
                       </Text>
                     )}
+                    {isWide && (() => {
+                      const ps = lapPedalStats.get(lap.lap);
+                      return (
+                        <>
+                          <Text style={[styles.tableCell, { flex: 0.85, color: '#66bb6a' }]}>
+                            {ps != null ? `${ps.maxThr.toFixed(0)}%` : '—'}
+                          </Text>
+                          <Text style={[styles.tableCell, { flex: 0.85, color: '#66bb6a' }]}>
+                            {ps != null ? `${ps.minThr.toFixed(0)}%` : '—'}
+                          </Text>
+                        </>
+                      );
+                    })()}
                     {isWide && (
                       <Text style={[styles.tableCell, { flex: 0.9, color: '#ef5350' }]}>
-                        {lap.avg_brake != null ? `${(lap.avg_brake * 100).toFixed(0)}%` : '—'}
+                        {lap.avg_brake != null ? formatPedalPercent(lap.avg_brake) : '—'}
                       </Text>
                     )}
+                    {isWide && (() => {
+                      const ps = lapPedalStats.get(lap.lap);
+                      return (
+                        <>
+                          <Text style={[styles.tableCell, { flex: 0.85, color: '#ef5350' }]}>
+                            {ps != null ? `${ps.maxBrk.toFixed(0)}%` : '—'}
+                          </Text>
+                          <Text style={[styles.tableCell, { flex: 0.85, color: '#ef5350' }]}>
+                            {ps != null ? `${ps.minBrk.toFixed(0)}%` : '—'}
+                          </Text>
+                        </>
+                      );
+                    })()}
                     {isWide && (
                       <Text style={[styles.tableCell, { flex: 1, color: '#ffa726' }]}>
                         {lap.avg_rpm != null ? `${Math.round(lap.avg_rpm)}` : '—'}
@@ -279,6 +451,72 @@ const styles = StyleSheet.create({
   scrollView: {
     flex: 1,
   },
+  fixedPanel: {
+    backgroundColor: '#090919',
+    borderBottomWidth: 1,
+    borderBottomColor: '#1e1e3a',
+    paddingHorizontal: 16,
+    paddingTop: 12,
+    paddingBottom: 8,
+  },
+  fixedCursorBar: {
+    marginTop: 8,
+    backgroundColor: '#111128',
+    borderWidth: 1,
+    borderColor: '#1e1e3a',
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+  },
+  fixedCursorBarText: {
+    color: '#aaa',
+    fontSize: 13,
+    fontFamily: 'monospace',
+  },
+  fixedCursorBarHighlight: {
+    color: '#fff',
+    fontWeight: '700',
+  },
+  fixedCursorSpeed: {
+    color: '#4fc3f7',
+  },
+  fixedCursorThrottle: {
+    color: '#66bb6a',
+  },
+  fixedCursorBrake: {
+    color: '#ef5350',
+  },
+  fixedCursorRpm: {
+    color: '#ffa726',
+  },
+  fixedCursorGear: {
+    color: '#ce93d8',
+  },
+  fixedGrid: {
+    gap: 14,
+  },
+  fixedGridRow: {
+    flexDirection: 'row',
+    alignItems: 'stretch',
+  },
+  fixedGridColumn: {
+    flexDirection: 'column',
+  },
+  fixedInfoColumn: {
+    gap: 8,
+  },
+  fixedInfoColumnDesktop: {
+    width: 220,
+  },
+  fixedMapColumn: {
+    flex: 1,
+  },
+  fixedLapsColumn: {
+    minHeight: 100,
+  },
+  fixedLapsColumnDesktop: {
+    width: 250,
+  },
   content: {
     padding: 16,
     paddingBottom: 40,
@@ -295,43 +533,29 @@ const styles = StyleSheet.create({
     fontStyle: 'italic',
     textAlign: 'center',
   },
-  // â”€â”€ Stats banner â”€â”€
-  statsBanner: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 10,
-    marginBottom: 20,
-  },
-  statCard: {
-    flex: 1,
-    minWidth: 100,
+  infoCard: {
     backgroundColor: '#111128',
     borderRadius: 8,
-    padding: 14,
-    alignItems: 'center',
+    padding: 10,
     borderWidth: 1,
     borderColor: '#1e1e3a',
   },
-  statCardAccent: {
-    borderColor: '#4caf50',
-    backgroundColor: '#0a140a',
-  },
-  statCardLabel: {
+  infoLabel: {
     color: '#555',
     fontSize: 10,
     fontWeight: '700',
-    letterSpacing: 1,
-    marginBottom: 6,
+    letterSpacing: 0.8,
+    textTransform: 'uppercase',
+    marginBottom: 4,
   },
-  statCardValue: {
+  infoValue: {
     color: '#ddd',
-    fontSize: 18,
+    fontSize: 16,
     fontWeight: '700',
     fontFamily: 'monospace',
   },
-  statCardValueAccent: {
+  infoValueAccent: {
     color: '#4caf50',
-    fontSize: 20,
   },
   // â”€â”€ Section titles â”€â”€
   sectionTitle: {
@@ -345,7 +569,7 @@ const styles = StyleSheet.create({
   },
   // â”€â”€ Map â”€â”€
   mapSection: {
-    marginBottom: 20,
+    marginBottom: 8,
   },
   noCircuitBadge: {
     backgroundColor: '#111120',
@@ -366,42 +590,61 @@ const styles = StyleSheet.create({
     marginBottom: 20,
     marginHorizontal: -16, // bleed to edges
   },
-  lapSelectorSticky: {
-    paddingHorizontal: 16,
+  lapSelectorPanel: {
     paddingTop: 8,
+    paddingBottom: 4,
+    backgroundColor: '#111120',
+    borderWidth: 1,
+    borderColor: '#222240',
+    borderRadius: 8,
+    paddingHorizontal: 10,
+  },
+  lapSelectorScroll: {
+    maxHeight: 250,
+  },
+  lapSelectorList: {
+    gap: 8,
     paddingBottom: 8,
-    borderBottomWidth: 1,
-    borderBottomColor: '#1e1e3a',
-    backgroundColor: '#090919',
-    marginHorizontal: -16,
-    marginBottom: 8,
   },
-  lapSelectorRow: {
+  lapRow: {
     flexDirection: 'row',
-    flexWrap: 'wrap',
-    rowGap: 8,
-    columnGap: 8,
-  },
-  lapChip: {
-    color: '#9aa0c4',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    minHeight: 34,
     borderWidth: 1,
     borderColor: '#2a2a48',
     backgroundColor: '#101026',
-    borderRadius: 14,
-    paddingHorizontal: 12,
+    borderRadius: 8,
+    paddingHorizontal: 10,
     paddingVertical: 6,
-    fontSize: 12,
-    overflow: 'hidden',
   },
-  lapChipBest: {
+  lapRowBest: {
     borderColor: '#4caf50',
-    color: '#8edc92',
   },
-  lapChipActive: {
-    color: '#0b1b0b',
+  lapRowActive: {
     backgroundColor: '#66bb6a',
     borderColor: '#66bb6a',
+  },
+  lapRowText: {
+    color: '#b2b7d6',
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  lapRowTextActive: {
+    color: '#0b1b0b',
+  },
+  lapRowBadge: {
+    color: '#8edc92',
+    fontSize: 11,
     fontWeight: '700',
+  },
+  lapRowBadgeActive: {
+    color: '#123b12',
+  },
+  noLapsText: {
+    color: '#666',
+    fontSize: 12,
+    fontStyle: 'italic',
   },
   // â”€â”€ Lap table â”€â”€
   tableSection: {

@@ -11,6 +11,7 @@ import type { TelemetrySample } from '../api';
 interface Props {
   samples: TelemetrySample[] | null | undefined;
   onIndexChange?: (index: number, sample: TelemetrySample) => void;
+  showCursorBar?: boolean;
 }
 
 const CHART_HEIGHT = 160;
@@ -64,6 +65,31 @@ const CHARTS: ChartConfig[] = [
   },
 ];
 
+function formatCursorTimestamp(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds < 0) return '--:--.---';
+  const totalMs = Math.round(seconds * 1000);
+  const minutes = Math.floor(totalMs / 60000);
+  const secondsPart = (totalMs % 60000) / 1000;
+  return `${minutes.toString().padStart(2, '0')}:${secondsPart.toFixed(3).padStart(6, '0')}`;
+}
+
+function normalizePedalPercent(value: number): number {
+  if (!Number.isFinite(value)) return 0;
+  return Math.abs(value) <= 1 ? value * 100 : value;
+}
+
+function finiteOrZero(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : 0;
+}
+
+function formatPedalPercent(value: number): string {
+  const pct = normalizePedalPercent(value);
+  return `${pct.toLocaleString('es-ES', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })}%`;
+}
+
 function normalise(values: number[]): { norm: number[]; min: number; max: number } {
   if (values.length === 0) {
     return { norm: [], min: 0, max: 0 };
@@ -83,6 +109,14 @@ function normalise(values: number[]): { norm: number[]; min: number; max: number
   };
 }
 
+function normaliseToRange(values: number[], min: number, max: number): number[] {
+  const range = max - min || 1;
+  return values.map((v) => {
+    const n = (v - min) / range;
+    return Math.max(0, Math.min(1, n));
+  });
+}
+
 function smoothSeries(values: number[], windowRadius: number): number[] {
   if (values.length < 5 || windowRadius <= 0) return values;
   const out = new Array<number>(values.length);
@@ -100,18 +134,118 @@ function smoothSeries(values: number[], windowRadius: number): number[] {
   return out;
 }
 
+/**
+ * Remove pedal artifact zones that are physically impossible.
+ * Any continuous active segment shorter than MIN_PEDAL_SAMPLES is zeroed out.
+ * At 100 Hz, 30 samples = 300 ms — the minimum realistic pedal application.
+ */
+const BRAKE_ACTIVE_THRESHOLD = 5;    // % above which brake is considered "on"
+const THROTTLE_ACTIVE_THRESHOLD = 5; // % above which throttle is considered "on"
+const MIN_PEDAL_SAMPLES = 60;         // shorter zones are sensor artifacts (~600 ms at 100 Hz)
+
+function removePedalArtifacts(values: number[], activeThreshold: number): number[] {
+  if (values.length < MIN_PEDAL_SAMPLES) return values;
+  const out = [...values];
+  let i = 0;
+  while (i < out.length) {
+    if (out[i] <= activeThreshold) {
+      i++;
+      continue;
+    }
+    // Walk to end of active zone.
+    const start = i;
+    while (i < out.length && out[i] > activeThreshold) {
+      i++;
+    }
+    const end = i - 1;
+    // Short zone → artifact: zero it out.
+    if (end - start + 1 < MIN_PEDAL_SAMPLES) {
+      for (let j = start; j <= end; j++) {
+        out[j] = 0;
+      }
+    }
+  }
+  return out;
+}
+
+/**
+ * During gear changes the telemetry briefly reports gear = 0 (neutral).
+ * Replace each zero with the last known valid gear to avoid downward needles.
+ */
+function removeGearZeros(values: number[]): number[] {
+  const out = [...values];
+  let lastValid = 1; // default to 1st gear if data starts with zeros
+  for (let i = 0; i < out.length; i++) {
+    if (out[i] <= 0) {
+      out[i] = lastValid;
+    } else {
+      lastValid = out[i];
+    }
+  }
+  return out;
+}
+
+function computeStats(values: number[]): { min: number; max: number; avg: number } {
+  if (values.length === 0) return { min: 0, max: 0, avg: 0 };
+  let mn = values[0], mx = values[0], sum = 0;
+  for (const v of values) {
+    if (v < mn) mn = v;
+    if (v > mx) mx = v;
+    sum += v;
+  }
+  return { min: mn, max: mx, avg: sum / values.length };
+}
+
+function formatStatValue(value: number, label: string): string {
+  switch (label) {
+    case 'Acelerador / Freno': return `${value.toFixed(0)}%`;
+    case 'Marcha':             return `${Math.round(value)}ª`;
+    case 'RPM':                return value >= 1000 ? `${(value / 1000).toFixed(1)}k` : value.toFixed(0);
+    case 'Velocidad':          return `${value.toFixed(0)} km/h`;
+    default:                   return value.toFixed(1);
+  }
+}
+
+/**
+ * When sample count exceeds pixel count, reduce to one representative value per pixel
+ * using the median of each bucket. Median is immune to outlier spikes: a single
+ * errorneous sample (or a short burst of 10–20 bad samples) in a 50+ sample bucket
+ * stays below the median and maps to ~0, eliminating needle artifacts.
+ */
+function downsampleToPixels(values: number[], pixelCount: number): number[] {
+  const n = values.length;
+  if (n <= pixelCount) return values;
+  const result = new Array<number>(pixelCount);
+  for (let p = 0; p < pixelCount; p++) {
+    const start = Math.floor((p / pixelCount) * n);
+    const end = Math.floor(((p + 1) / pixelCount) * n) - 1;
+    if (start >= n) { result[p] = values[n - 1]; continue; }
+    if (start > end) { result[p] = values[start]; continue; }
+    // Sort a copy of the slice and take the median.
+    const bucket = values.slice(start, end + 1).sort((a, b) => a - b);
+    const mid = Math.floor(bucket.length / 2);
+    result[p] = bucket.length % 2 === 0
+      ? (bucket[mid - 1] + bucket[mid]) / 2
+      : bucket[mid];
+  }
+  return result;
+}
+
 function buildPolylinePoints(norm: number[], innerW: number, innerH: number, n: number): string {
   if (n < 2) return '';
-  return norm
+  const pixelCount = Math.max(2, Math.floor(innerW));
+  const pts = n > pixelCount ? downsampleToPixels(norm, pixelCount) : norm;
+  const m = pts.length;
+  return pts
     .map((v, i) => {
-      const x = PAD_LEFT + (i / (n - 1)) * innerW;
+      const x = PAD_LEFT + (i / (m - 1)) * innerW;
       const y = PAD_TOP + (1 - v) * innerH;
-      return `${x.toFixed(1)},${y.toFixed(1)}`;
+      return `${x.toFixed(2)},${y.toFixed(2)}`;
     })
     .join(' ');
 }
 
-export default function TelemetryCharts({ samples, onIndexChange }: Props) {
+export default function TelemetryCharts({ samples, onIndexChange, showCursorBar = true }: Props) {
   const [cursorIdx, setCursorIdx] = useState<number>(0);
   const { width: screenW } = Dimensions.get('window');
   const safeSamples = Array.isArray(samples) ? samples : [];
@@ -119,17 +253,58 @@ export default function TelemetryCharts({ samples, onIndexChange }: Props) {
   const innerW = chartWidth - PAD_LEFT - PAD_RIGHT;
   const innerH = CHART_HEIGHT - PAD_TOP - PAD_BOTTOM;
   const n = safeSamples.length;
+  const lapTimeOffset = useMemo(() => {
+    if (safeSamples.length === 0) return 0;
+    return safeSamples.reduce((min, sample) => (sample.t < min ? sample.t : min), safeSamples[0].t);
+  }, [safeSamples]);
 
   // Precompute per-chart normalised data once
   const chartData = useMemo(
     () =>
-      CHARTS.map((cfg) =>
-        cfg.keys.map((k) => {
-          const raw = safeSamples.map((s) => (s[k] as number) ?? 0);
-          const smoothed = smoothSeries(raw, cfg.smoothRadius ?? 0);
-          return { raw: smoothed, ...normalise(smoothed) };
-        }),
-      ),
+      CHARTS.map((cfg) => {
+        const isPedalsChart = cfg.label === 'Acelerador / Freno';
+
+        const isGearChart = cfg.label === 'Marcha';
+
+        const series = cfg.keys.map((k) => {
+          const raw = safeSamples.map((s) => finiteOrZero(s[k]));
+          let transformed = isPedalsChart ? raw.map((v) => normalizePedalPercent(v)) : raw;
+          if (isPedalsChart && k === 'brk') {
+            transformed = removePedalArtifacts(transformed, BRAKE_ACTIVE_THRESHOLD);
+          } else if (isPedalsChart && k === 'thr') {
+            transformed = removePedalArtifacts(transformed, THROTTLE_ACTIVE_THRESHOLD);
+          } else if (isGearChart) {
+            transformed = removeGearZeros(transformed);
+          }
+          return smoothSeries(transformed, cfg.smoothRadius ?? 0);
+        });
+
+        let min = Number.POSITIVE_INFINITY;
+        let max = Number.NEGATIVE_INFINITY;
+
+        if (isPedalsChart) {
+          min = 0;
+          max = 100;
+        } else {
+          for (const values of series) {
+            for (const value of values) {
+              if (value < min) min = value;
+              if (value > max) max = value;
+            }
+          }
+          if (!Number.isFinite(min) || !Number.isFinite(max)) {
+            min = 0;
+            max = 1;
+          }
+        }
+
+        return series.map((values) => ({
+          raw: values,
+          norm: normaliseToRange(values, min, max),
+          min,
+          max,
+        }));
+      }),
     [safeSamples],
   );
 
@@ -182,17 +357,17 @@ export default function TelemetryCharts({ samples, onIndexChange }: Props) {
   return (
     <View style={styles.container}>
       {/* Cursor info bar */}
-      {curSample && (
+      {showCursorBar && curSample && (
         <View style={styles.cursorBar}>
           <Text style={styles.cursorBarText}>
-            t = {curSample.t.toFixed(2)}s &nbsp;|&nbsp; Vuelta{' '}
+            t = {formatCursorTimestamp(Math.max(0, curSample.t - lapTimeOffset))} &nbsp;|&nbsp; Vuelta{' '}
             <Text style={styles.cursorBarHighlight}>{curSample.lap}</Text>
             &nbsp;|&nbsp;
             <Text style={{ color: '#4fc3f7' }}>{curSample.spd.toFixed(0)} km/h</Text>
             &nbsp;&nbsp;
-            <Text style={{ color: '#66bb6a' }}>{(curSample.thr * 100).toFixed(0)}%</Text>
+            <Text style={{ color: '#66bb6a' }}>{formatPedalPercent(curSample.thr)}</Text>
             &nbsp;
-            <Text style={{ color: '#ef5350' }}>{(curSample.brk * 100).toFixed(0)}%</Text>
+            <Text style={{ color: '#ef5350' }}>{formatPedalPercent(curSample.brk)}</Text>
             &nbsp;&nbsp;
             <Text style={{ color: '#ffa726' }}>{curSample.rpm.toFixed(0)} rpm</Text>
             &nbsp;&nbsp;
@@ -208,8 +383,26 @@ export default function TelemetryCharts({ samples, onIndexChange }: Props) {
 
         return (
           <View key={cfg.label} style={styles.chartWrap}>
-            {/* Chart label */}
-            <Text style={styles.chartLabel}>{cfg.label}</Text>
+            {/* Chart label + stats row */}
+            <View style={styles.chartLabelRow}>
+              <Text style={styles.chartLabel}>{cfg.label}</Text>
+              <View style={styles.chartStatsRow}>
+                {seriesData.map((sd, si) => {
+                  const stats = computeStats(sd.raw);
+                  const fmt = (v: number) => formatStatValue(v, cfg.label);
+                  return (
+                    <View key={si} style={styles.chartStatGroup}>
+                      {cfg.keys.length > 1 && (
+                        <View style={[styles.statDot, { backgroundColor: cfg.colors[si] ?? '#aaa' }]} />
+                      )}
+                      <Text style={[styles.chartStatText, { color: cfg.colors[si] ?? '#888' }]}>
+                        min {fmt(stats.min)}{'  '}avg {fmt(stats.avg)}{'  '}max {fmt(stats.max)}
+                      </Text>
+                    </View>
+                  );
+                })}
+              </View>
+            </View>
 
             {/* SVG chart — use a div wrapper on Web for mouse events */}
             <View
@@ -368,15 +561,39 @@ const styles = StyleSheet.create({
   chartWrap: {
     marginTop: 4,
   },
-  chartLabel: {
-    color: '#888',
-    fontSize: 11,
-    fontWeight: '600',
-    textTransform: 'uppercase',
+  chartLabelRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
     paddingHorizontal: 16,
     paddingTop: 8,
     paddingBottom: 2,
+  },
+  chartLabel: {
+    color: '#888',
+    fontSize: 13,
+    fontWeight: '600',
+    textTransform: 'uppercase',
     letterSpacing: 0.5,
+  },
+  chartStatsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 16,
+  },
+  chartStatGroup: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+  },
+  statDot: {
+    width: 7,
+    height: 7,
+    borderRadius: 4,
+  },
+  chartStatText: {
+    fontSize: 13,
+    fontFamily: 'monospace',
   },
   chartContainer: {
     cursor: 'crosshair',

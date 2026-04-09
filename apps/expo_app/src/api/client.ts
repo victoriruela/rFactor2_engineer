@@ -9,9 +9,21 @@ const API_URL = resolveApiBaseUrl({
 
 let sessionId: string | null = null;
 
+const SESSION_ID_KEY = 'rf2_client_session_id';
+
 function getSessionId(): string {
   if (!sessionId) {
-    sessionId = `web-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+    if (typeof window !== 'undefined' && window.localStorage) {
+      const stored = localStorage.getItem(SESSION_ID_KEY);
+      if (stored) {
+        sessionId = stored;
+      } else {
+        sessionId = `web-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+        localStorage.setItem(SESSION_ID_KEY, sessionId);
+      }
+    } else {
+      sessionId = `web-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+    }
   }
   return sessionId;
 }
@@ -57,6 +69,48 @@ export interface SessionInfo {
 export async function listSessions(): Promise<SessionInfo[]> {
   const { data } = await api.get('/sessions');
   return data.sessions ?? [];
+}
+
+export async function deleteSession(sessionId: string): Promise<void> {
+  await api.delete(`/sessions/${sessionId}`);
+}
+
+// ── Session state helpers (localStorage) ──
+
+export type SessionState = 'uploaded' | 'telemetry_loaded' | 'analysis_complete';
+
+const SESSION_STATES_KEY = 'rf2_session_states';
+
+function readSessionStates(): Record<string, SessionState> {
+  if (typeof window === 'undefined' || !window.localStorage) return {};
+  try {
+    return JSON.parse(localStorage.getItem(SESSION_STATES_KEY) ?? '{}');
+  } catch {
+    return {};
+  }
+}
+
+export function getSessionStates(): Record<string, SessionState> {
+  return readSessionStates();
+}
+
+export function setSessionState(id: string, state: SessionState): void {
+  if (typeof window === 'undefined' || !window.localStorage) return;
+  const current = readSessionStates();
+  current[id] = state;
+  localStorage.setItem(SESSION_STATES_KEY, JSON.stringify(current));
+}
+
+export function removeSessionState(id: string): void {
+  if (typeof window === 'undefined' || !window.localStorage) return;
+  const current = readSessionStates();
+  delete current[id];
+  localStorage.setItem(SESSION_STATES_KEY, JSON.stringify(current));
+}
+
+export function clearAllSessionStates(): void {
+  if (typeof window === 'undefined' || !window.localStorage) return;
+  localStorage.removeItem(SESSION_STATES_KEY);
 }
 
 export async function getSetup(sessionId: string): Promise<Record<string, SetupChange[]>> {

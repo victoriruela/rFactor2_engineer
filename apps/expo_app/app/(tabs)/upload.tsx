@@ -1,9 +1,8 @@
 import { useState, useCallback } from 'react';
-import { View, Text, StyleSheet, Pressable, Platform } from 'react-native';
+import { View, Text, StyleSheet, Pressable, Platform, ScrollView } from 'react-native';
 import { useAppStore } from '../../src/store/useAppStore';
-import { uploadFile, getSetup, loadSessionTelemetry } from '../../src/api';
+import { uploadFile, getSetup, loadSessionTelemetry, setSessionState } from '../../src/api';
 import SetupCompleteSection from '../../src/components/SetupCompleteSection';
-import type { SetupChange } from '../../src/api';
 
 export default function UploadScreen() {
   const {
@@ -13,10 +12,10 @@ export default function UploadScreen() {
     isUploading, setUploading,
     setActiveSessionId,
     setAnalysisResult,
+    fullSetup, setFullSetup,
   } = useAppStore();
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
-  const [fullSetup, setFullSetup] = useState<Record<string, SetupChange[]> | null>(null);
 
   const pickFile = useCallback(async (type: 'telemetry' | 'svm') => {
     if (Platform.OS === 'web') {
@@ -53,9 +52,11 @@ export default function UploadScreen() {
       }
 
       setActiveSessionId(svmSessionId);
+      setSessionState(svmSessionId, 'uploaded');
 
       const telemetryPayload = await loadSessionTelemetry(svmSessionId);
       setAnalysisResult(telemetryPayload);
+      setSessionState(svmSessionId, 'telemetry_loaded');
 
       const setup = await getSetup(svmSessionId);
       setFullSetup(setup);
@@ -73,49 +74,55 @@ export default function UploadScreen() {
     setUploadProgress,
     setActiveSessionId,
     setAnalysisResult,
+    setFullSetup,
   ]);
 
   return (
-    <View style={styles.container}>
-      <Text style={styles.title}>Subir Archivos</Text>
+    <ScrollView
+      style={styles.container}
+      contentContainerStyle={styles.content}
+    >
+      <View style={styles.formWrapper}>
+        <Text style={styles.title}>Subir Archivos</Text>
 
-      <Pressable style={styles.pickBtn} onPress={() => pickFile('telemetry')}>
-        <Text style={styles.pickText}>
-          {telemetryFile ? `📊 ${telemetryFile.name}` : 'Seleccionar telemetría (.mat/.csv)'}
-        </Text>
-      </Pressable>
-
-      <Pressable style={styles.pickBtn} onPress={() => pickFile('svm')}>
-        <Text style={styles.pickText}>
-          {svmFile ? `🔧 ${svmFile.name}` : 'Seleccionar setup (.svm)'}
-        </Text>
-      </Pressable>
-
-      {isUploading ? (
-        <View style={styles.progressContainer}>
-          <View style={[styles.progressBar, { width: `${uploadProgress}%` }]} />
-          <Text style={styles.progressText}>{Math.round(uploadProgress)}%</Text>
-        </View>
-      ) : (
-        <Pressable
-          style={[styles.uploadBtn, (!telemetryFile || !svmFile) && styles.disabled]}
-          onPress={handleUpload}
-          disabled={!telemetryFile || !svmFile}
-        >
-          <Text style={styles.uploadText}>Subir Archivos</Text>
+        <Pressable style={styles.pickBtn} onPress={() => pickFile('telemetry')}>
+          <Text style={styles.pickText}>
+            {telemetryFile ? `📊 ${telemetryFile.name}` : 'Seleccionar telemetría (.mat/.csv)'}
+          </Text>
         </Pressable>
-      )}
 
-      {error && <Text style={styles.error}>{error}</Text>}
-      {success && <Text style={styles.success}>Archivos subidos correctamente</Text>}
+        <Pressable style={styles.pickBtn} onPress={() => pickFile('svm')}>
+          <Text style={styles.pickText}>
+            {svmFile ? `🔧 ${svmFile.name}` : 'Seleccionar setup (.svm)'}
+          </Text>
+        </Pressable>
 
-      {/* Display full setup if loaded */}
-      {fullSetup && (
-        <View style={styles.setupSection}>
-          <SetupCompleteSection fullSetup={fullSetup} />
-        </View>
-      )}
-    </View>
+        {isUploading ? (
+          <View style={styles.progressContainer}>
+            <View style={[styles.progressBar, { width: `${uploadProgress}%` }]} />
+            <Text style={styles.progressText}>{Math.round(uploadProgress)}%</Text>
+          </View>
+        ) : (
+          <Pressable
+            style={[styles.uploadBtn, (!telemetryFile || !svmFile) && styles.disabled]}
+            onPress={handleUpload}
+            disabled={!telemetryFile || !svmFile}
+          >
+            <Text style={styles.uploadText}>Subir Archivos</Text>
+          </Pressable>
+        )}
+
+        {error && <Text style={styles.error}>{error}</Text>}
+        {success && <Text style={styles.success}>Archivos subidos correctamente</Text>}
+
+        {/* Display full setup if loaded */}
+        {fullSetup && (
+          <View style={styles.setupSection}>
+            <SetupCompleteSection fullSetup={fullSetup} />
+          </View>
+        )}
+      </View>
+    </ScrollView>
   );
 }
 
@@ -123,9 +130,16 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#0f0f23',
-    padding: 24,
+  },
+  content: {
+    flexGrow: 1,
     alignItems: 'center',
-    justifyContent: 'center',
+    padding: 24,
+  },
+  formWrapper: {
+    width: '100%',
+    maxWidth: 600,
+    alignItems: 'center',
   },
   title: {
     fontSize: 24,

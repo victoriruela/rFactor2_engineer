@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { AnalysisResponse, SessionInfo, ModelInfo, TrackInfo } from '../api';
+import type { AnalysisResponse, SessionInfo, ModelInfo, TrackInfo, SetupChange } from '../api';
 
 interface AppState {
   // Health
@@ -22,9 +22,11 @@ interface AppState {
   isAnalyzing: boolean;
   analysisResult: AnalysisResponse | null;
   analysisError: string | null;
+  fullSetup: Record<string, SetupChange[]> | null;
   setAnalyzing: (v: boolean) => void;
   setAnalysisResult: (r: AnalysisResponse | null) => void;
   setAnalysisError: (e: string | null) => void;
+  setFullSetup: (data: Record<string, SetupChange[]> | null) => void;
 
   // Models
   models: ModelInfo[];
@@ -68,9 +70,11 @@ export const useAppStore = create<AppState>((set) => ({
   isAnalyzing: false,
   analysisResult: null,
   analysisError: null,
+  fullSetup: null,
   setAnalyzing: (isAnalyzing) => set({ isAnalyzing }),
   setAnalysisResult: (analysisResult) => set({ analysisResult, analysisError: null }),
   setAnalysisError: (analysisError) => set({ analysisError }),
+  setFullSetup: (fullSetup) => set({ fullSetup }),
 
   models: [],
   selectedModel: 'llama3.2:latest',
