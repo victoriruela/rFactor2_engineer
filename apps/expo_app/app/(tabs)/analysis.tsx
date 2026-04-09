@@ -1,7 +1,7 @@
 ﻿import { useCallback, useEffect, useState } from 'react';
 import { View, Text, StyleSheet, Pressable, ScrollView, ActivityIndicator, TextInput } from 'react-native';
 import { useAppStore } from '../../src/store/useAppStore';
-import { analyzeFiles, analyzeSessionStream, listModels, listSessions } from '../../src/api';
+import { analyzeFiles, analyzeSessionStream, listModels, listSessions, setSessionState } from '../../src/api';
 import type { ProgressEvent } from '../../src/api';
 import SetupTable from '../../src/components/SetupTable';
 import MarkdownText from '../../src/components/MarkdownText';
@@ -66,6 +66,7 @@ export default function AnalysisScreen() {
           (ev) => setProgressMessages((prev) => [...prev, ev]),
         );
         setAnalysisResult(result);
+        setSessionState(targetSessionId, 'analysis_complete');
         // Minimize progress when analysis completes
         setProgressExpanded(false);
       } else {
@@ -231,7 +232,7 @@ export default function AnalysisScreen() {
           ) : null}
 
           {/* Setup Recommendations */}
-          {Object.values(analysisResult.setup_analysis).some((items) => items.length > 0) ? (
+          {Object.values(analysisResult.setup_analysis ?? {}).some((items) => items.length > 0) ? (
             <View style={styles.section}>
               <Text style={styles.sectionTitle}>Recomendaciones de Setup</Text>
               {lockedParameters.size > 0 && (
@@ -241,7 +242,7 @@ export default function AnalysisScreen() {
                   </Text>
                 </View>
               )}
-              <SetupTable changes={analysisResult.setup_analysis} />
+              <SetupTable changes={analysisResult.setup_analysis ?? {}} />
             </View>
           ) : null}
         </>
