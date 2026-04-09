@@ -209,6 +209,80 @@ export interface TelemetrySample {
   lat: number;
   lon: number;
   lap: number;
+
+  // Steering / drivetrain
+  steer: number;
+  steer_torque: number;
+  clutch: number;
+
+  // G-forces
+  g_lat: number;
+  g_long: number;
+  g_vert: number;
+
+  // Ride heights (mm)
+  ride_h_fl: number;
+  ride_h_fr: number;
+  ride_h_rl: number;
+  ride_h_rr: number;
+
+  // Brake temperatures (°C)
+  brake_t_fl: number;
+  brake_t_fr: number;
+  brake_t_rl: number;
+  brake_t_rr: number;
+  brake_bias: number;
+
+  // Tyre pressures (kPa)
+  tyre_p_fl: number;
+  tyre_p_fr: number;
+  tyre_p_rl: number;
+  tyre_p_rr: number;
+
+  // Tyre temp centre (°C)
+  tyre_t_fl: number;
+  tyre_t_fr: number;
+  tyre_t_rl: number;
+  tyre_t_rr: number;
+
+  // Tyre temp inner/outer (°C)
+  tyre_t_fl_inner: number;
+  tyre_t_fl_outer: number;
+  tyre_t_fr_inner: number;
+  tyre_t_fr_outer: number;
+  tyre_t_rl_inner: number;
+  tyre_t_rl_outer: number;
+  tyre_t_rr_inner: number;
+  tyre_t_rr_outer: number;
+
+  // Tyre wear (0-1)
+  tyre_w_fl: number;
+  tyre_w_fr: number;
+  tyre_w_rl: number;
+  tyre_w_rr: number;
+
+  // Tyre load (N)
+  tyre_l_fl: number;
+  tyre_l_fr: number;
+  tyre_l_rl: number;
+  tyre_l_rr: number;
+
+  // Grip fraction (0-1)
+  grip_fl: number;
+  grip_fr: number;
+  grip_rl: number;
+  grip_rr: number;
+
+  // Wheel rotation speed (rad/s)
+  wheel_sp_fl: number;
+  wheel_sp_fr: number;
+  wheel_sp_rl: number;
+  wheel_sp_rr: number;
+
+  // Engine
+  oil_temp: number;
+  water_temp: number;
+  fuel_level: number;
 }
 
 export interface SessionStats {

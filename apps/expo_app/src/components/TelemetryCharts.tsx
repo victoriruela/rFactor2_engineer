@@ -12,6 +12,7 @@ interface Props {
   samples: TelemetrySample[] | null | undefined;
   onIndexChange?: (index: number, sample: TelemetrySample) => void;
   showCursorBar?: boolean;
+  charts?: ChartConfig[];
 }
 
 const CHART_HEIGHT = 160;
@@ -21,11 +22,12 @@ const PAD_TOP = 10;
 const PAD_BOTTOM = 26;
 const GRID_LINES = 4; // number of horizontal grid divisions
 
-interface ChartConfig {
+export interface ChartConfig {
   label: string;
   keys: Array<keyof TelemetrySample>;
   colors: string[];
   unit: string;
+  seriesLabels?: string[];
   formatFn?: (v: number) => string;
   smoothRadius?: number;
 }
@@ -245,7 +247,7 @@ function buildPolylinePoints(norm: number[], innerW: number, innerH: number, n: 
     .join(' ');
 }
 
-export default function TelemetryCharts({ samples, onIndexChange, showCursorBar = true }: Props) {
+export default function TelemetryCharts({ samples, onIndexChange, showCursorBar = true, charts: chartsProp }: Props) {
   const [cursorIdx, setCursorIdx] = useState<number>(0);
   const { width: screenW } = Dimensions.get('window');
   const safeSamples = Array.isArray(samples) ? samples : [];
@@ -253,6 +255,7 @@ export default function TelemetryCharts({ samples, onIndexChange, showCursorBar 
   const innerW = chartWidth - PAD_LEFT - PAD_RIGHT;
   const innerH = CHART_HEIGHT - PAD_TOP - PAD_BOTTOM;
   const n = safeSamples.length;
+  const activeCharts = chartsProp ?? CHARTS;
   const lapTimeOffset = useMemo(() => {
     if (safeSamples.length === 0) return 0;
     return safeSamples.reduce((min, sample) => (sample.t < min ? sample.t : min), safeSamples[0].t);
@@ -261,7 +264,7 @@ export default function TelemetryCharts({ samples, onIndexChange, showCursorBar 
   // Precompute per-chart normalised data once
   const chartData = useMemo(
     () =>
-      CHARTS.map((cfg) => {
+      activeCharts.map((cfg) => {
         const isPedalsChart = cfg.label === 'Acelerador / Freno';
 
         const isGearChart = cfg.label === 'Marcha';
@@ -305,7 +308,7 @@ export default function TelemetryCharts({ samples, onIndexChange, showCursorBar 
           max,
         }));
       }),
-    [safeSamples],
+    [safeSamples, activeCharts],
   );
 
   // Precompute polyline points strings (expensive, cache them)
@@ -376,7 +379,7 @@ export default function TelemetryCharts({ samples, onIndexChange, showCursorBar 
         </View>
       )}
 
-      {CHARTS.map((cfg, ci) => {
+      {activeCharts.map((cfg, ci) => {
         const seriesData = chartData[ci];
         if (!seriesData || seriesData.length === 0) return null;
         const grid = gridLinesForChart(seriesData[0].min, seriesData[0].max);
@@ -516,16 +519,17 @@ export default function TelemetryCharts({ samples, onIndexChange, showCursorBar 
 
       {/* Legend row */}
       <View style={styles.legend}>
-        {CHARTS.flatMap((cfg, ci) =>
+        {activeCharts.flatMap((cfg, ci) =>
           cfg.keys.map((k, si) => (
             <View key={`${ci}-${si}`} style={styles.legendItem}>
               <View style={[styles.legendDot, { backgroundColor: cfg.colors[si] }]} />
               <Text style={styles.legendText}>
-                {cfg.keys.length > 1
-                  ? si === 0
-                    ? 'Acelerador'
-                    : 'Freno'
-                  : cfg.label}
+                {cfg.seriesLabels?.[si] ??
+                  (cfg.keys.length > 1
+                    ? si === 0
+                      ? 'Acelerador'
+                      : 'Freno'
+                    : cfg.label)}
               </Text>
             </View>
           )),

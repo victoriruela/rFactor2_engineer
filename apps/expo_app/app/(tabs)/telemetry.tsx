@@ -3,7 +3,50 @@ import { View, Text, StyleSheet, ScrollView, useWindowDimensions, Pressable } fr
 import { useAppStore } from '../../src/store/useAppStore';
 import type { GPSPoint, TelemetrySample } from '../../src/api';
 import CircuitMap from '../../src/components/CircuitMap';
-import TelemetryCharts from '../../src/components/TelemetryCharts';
+import TelemetryCharts, { type ChartConfig } from '../../src/components/TelemetryCharts';
+
+const CORNER_COLORS = ['#4fc3f7', '#ff8a65', '#81c784', '#ce93d8'];
+const CORNER_LABELS = ['FL', 'FR', 'RL', 'RR'];
+
+const CHART_TABS = ['Conducción', 'Neumáticos', 'Suspensión', 'Frenos', 'Motor', 'Dirección'] as const;
+type ChartTab = typeof CHART_TABS[number];
+
+const TAB_CHARTS: Record<ChartTab, ChartConfig[]> = {
+  'Conducción': [
+    { label: 'Velocidad',          keys: ['spd'],              colors: ['#4fc3f7'],             unit: 'km/h', smoothRadius: 2 },
+    { label: 'Acelerador / Freno', keys: ['thr', 'brk'],       colors: ['#66bb6a', '#ef5350'],  unit: '%',    smoothRadius: 1 },
+    { label: 'RPM',                keys: ['rpm'],              colors: ['#ffa726'],             unit: 'rpm',  smoothRadius: 2 },
+    { label: 'Marcha',             keys: ['gear'],             colors: ['#ce93d8'],             unit: '',     smoothRadius: 0 },
+  ],
+  'Neumáticos': [
+    { label: 'Temp. Neumático',    keys: ['tyre_t_fl', 'tyre_t_fr', 'tyre_t_rl', 'tyre_t_rr'],       colors: CORNER_COLORS, seriesLabels: CORNER_LABELS, unit: '°C',   smoothRadius: 3 },
+    { label: 'Presión Neumático',  keys: ['tyre_p_fl', 'tyre_p_fr', 'tyre_p_rl', 'tyre_p_rr'],       colors: CORNER_COLORS, seriesLabels: CORNER_LABELS, unit: 'kPa',  smoothRadius: 3 },
+    { label: 'Desgaste Neumático', keys: ['tyre_w_fl', 'tyre_w_fr', 'tyre_w_rl', 'tyre_w_rr'],       colors: CORNER_COLORS, seriesLabels: CORNER_LABELS, unit: '',     smoothRadius: 2 },
+    { label: 'Carga Neumático',    keys: ['tyre_l_fl', 'tyre_l_fr', 'tyre_l_rl', 'tyre_l_rr'],       colors: CORNER_COLORS, seriesLabels: CORNER_LABELS, unit: 'N',    smoothRadius: 2 },
+    { label: 'Grip Fraction',      keys: ['grip_fl', 'grip_fr', 'grip_rl', 'grip_rr'],               colors: CORNER_COLORS, seriesLabels: CORNER_LABELS, unit: '',     smoothRadius: 2 },
+    { label: 'Vel. Rueda',         keys: ['wheel_sp_fl', 'wheel_sp_fr', 'wheel_sp_rl', 'wheel_sp_rr'], colors: CORNER_COLORS, seriesLabels: CORNER_LABELS, unit: 'rad/s', smoothRadius: 2 },
+  ],
+  'Suspensión': [
+    { label: 'Altura Suspensión',      keys: ['ride_h_fl', 'ride_h_fr', 'ride_h_rl', 'ride_h_rr'], colors: CORNER_COLORS, seriesLabels: CORNER_LABELS, unit: 'mm', smoothRadius: 2 },
+    { label: 'G-Fuerza Lateral',       keys: ['g_lat'],  colors: ['#f48fb1'], unit: 'g',  smoothRadius: 2 },
+    { label: 'G-Fuerza Longitudinal',  keys: ['g_long'], colors: ['#80cbc4'], unit: 'g',  smoothRadius: 2 },
+    { label: 'G-Fuerza Vertical',      keys: ['g_vert'], colors: ['#fff176'], unit: 'g',  smoothRadius: 2 },
+  ],
+  'Frenos': [
+    { label: 'Temp. Freno',  keys: ['brake_t_fl', 'brake_t_fr', 'brake_t_rl', 'brake_t_rr'], colors: CORNER_COLORS, seriesLabels: CORNER_LABELS, unit: '°C', smoothRadius: 2 },
+    { label: 'Sesgo Freno',  keys: ['brake_bias'], colors: ['#ef5350'], unit: '%', smoothRadius: 2 },
+  ],
+  'Motor': [
+    { label: 'Temp. Aceite',       keys: ['oil_temp'],   colors: ['#ffb74d'], unit: '°C', smoothRadius: 3 },
+    { label: 'Temp. Agua',         keys: ['water_temp'], colors: ['#4fc3f7'], unit: '°C', smoothRadius: 3 },
+    { label: 'Combustible',        keys: ['fuel_level'], colors: ['#81c784'], unit: 'L',  smoothRadius: 2 },
+    { label: 'Embrague',           keys: ['clutch'],     colors: ['#ce93d8'], unit: '%',  smoothRadius: 1 },
+  ],
+  'Dirección': [
+    { label: 'Ángulo Volante',    keys: ['steer'],        colors: ['#f48fb1'], unit: '°',  smoothRadius: 2 },
+    { label: 'Par Columna Dir.', keys: ['steer_torque'], colors: ['#80cbc4'], unit: 'Nm', smoothRadius: 2 },
+  ],
+};
 
 function formatLapTime(seconds: number): string {
   if (seconds <= 0) return '--';
@@ -38,6 +81,7 @@ export default function TelemetryScreen() {
   const [cursorPosition, setCursorPosition] = useState<GPSPoint | null>(null);
   const [cursorSample, setCursorSample] = useState<TelemetrySample | null>(null);
   const [selectedLap, setSelectedLap] = useState<number | null>(null);
+  const [chartTab, setChartTab] = useState<ChartTab>('Conducción');
   const { width: windowWidth, height: windowHeight } = useWindowDimensions();
   const isWide = windowWidth >= 900;
   const topPanelAsColumns = windowWidth >= 1100;
@@ -349,10 +393,25 @@ export default function TelemetryScreen() {
         {hasTelemetry && (
           <View style={styles.chartsSection}>
             <Text style={styles.sectionTitle}>Telemetria</Text>
+            {/* Sub-tab bar */}
+            <View style={styles.chartTabBar}>
+              {CHART_TABS.map((tab) => (
+                <Pressable
+                  key={tab}
+                  style={[styles.chartTabItem, chartTab === tab && styles.chartTabItemActive]}
+                  onPress={() => setChartTab(tab)}
+                >
+                  <Text style={[styles.chartTabLabel, chartTab === tab && styles.chartTabLabelActive]}>
+                    {tab}
+                  </Text>
+                </Pressable>
+              ))}
+            </View>
             <TelemetryCharts
               samples={selectedLapSamples}
               onIndexChange={handleCursorIndex}
               showCursorBar={false}
+              charts={TAB_CHARTS[chartTab]}
             />
           </View>
         )}
@@ -683,5 +742,34 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     letterSpacing: 0.8,
     textTransform: 'uppercase',
+  },
+  // ── Chart sub-tab bar ──
+  chartTabBar: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+    paddingHorizontal: 16,
+    paddingBottom: 10,
+    paddingTop: 2,
+  },
+  chartTabItem: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 20,
+    backgroundColor: '#111128',
+    borderWidth: 1,
+    borderColor: '#2a2a48',
+  },
+  chartTabItemActive: {
+    backgroundColor: '#1a3a6a',
+    borderColor: '#4fc3f7',
+  },
+  chartTabLabel: {
+    color: '#666',
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  chartTabLabelActive: {
+    color: '#4fc3f7',
   },
 });
