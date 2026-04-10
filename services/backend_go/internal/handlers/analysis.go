@@ -86,6 +86,7 @@ func (h *AnalysisHandler) Analyze(c *gin.Context) {
 	svmFiles := form.File["svm"]
 	model := strings.TrimSpace(c.PostForm("model"))
 	provider := strings.TrimSpace(c.PostForm("provider"))
+	fixedParams := extractFixedParams(c)
 
 	if len(telemetryFiles) == 0 || len(svmFiles) == 0 {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "both telemetry and svm files are required"})
@@ -121,7 +122,7 @@ func (h *AnalysisHandler) Analyze(c *gin.Context) {
 		return
 	}
 
-	resp, err := h.analyzeFiles(c, telPath, svmPath, runner)
+	resp, err := h.analyzeFiles(c, telPath, svmPath, runner, fixedParams)
 	if err != nil {
 		log.Error().Err(err).Msg("analysis failed")
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -142,6 +143,7 @@ func (h *AnalysisHandler) AnalyzeSession(c *gin.Context) {
 	}
 	model := strings.TrimSpace(c.PostForm("model"))
 	provider := strings.TrimSpace(c.PostForm("provider"))
+	fixedParams := extractFixedParams(c)
 
 	telPath, svmPath, err := h.resolveSessionFilePaths(sessionID, uploadSessionID)
 	if err != nil {
@@ -155,7 +157,7 @@ func (h *AnalysisHandler) AnalyzeSession(c *gin.Context) {
 		return
 	}
 
-	resp, err := h.analyzeFiles(c, telPath, svmPath, runner)
+	resp, err := h.analyzeFiles(c, telPath, svmPath, runner, fixedParams)
 	if err != nil {
 		log.Error().Err(err).Msg("analysis failed")
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -175,7 +177,7 @@ func (h *AnalysisHandler) LoadSessionTelemetry(c *gin.Context) {
 		return
 	}
 
-	telPath, _, err := h.resolveSessionFilePaths(sessionID, uploadSessionID)
+	telPath, err := h.resolveTelemetryFilePath(sessionID, uploadSessionID)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
@@ -207,7 +209,7 @@ func (h *AnalysisHandler) LoadSessionTelemetry(c *gin.Context) {
 		SessionStats:        &stats,
 		LapsData:            stats.Laps,
 		AgentReports:        []domain.SectionReport{},
-		TelemetrySummary:    buildTelemetrySummary(telData),
+		TelemetrySummary:    agents.BuildEnhancedTelemetrySummary(telData),
 		ChiefReasoning:      "",
 		TelemetryTimeSeries: telData.ExtractTimeSeries(),
 	}
@@ -215,11 +217,34 @@ func (h *AnalysisHandler) LoadSessionTelemetry(c *gin.Context) {
 	c.JSON(http.StatusOK, resp)
 }
 
-func (h *AnalysisHandler) analyzeFiles(c *gin.Context, telPath, svmPath string, runner analyzer) (*domain.AnalysisResponse, error) {
-	return h.analyzeFilesWithProgress(c, telPath, svmPath, runner, nil)
+func (h *AnalysisHandler) resolveTelemetryFilePath(clientSessionID, uploadSessionID string) (string, error) {
+	sessDir := filepath.Join(h.DataDir, clientSessionID, uploadSessionID)
+
+	entries, err := os.ReadDir(sessDir)
+	if err != nil {
+		return "", fmt.Errorf("session not found")
+	}
+
+	for _, entry := range entries {
+		if entry.IsDir() || strings.HasPrefix(entry.Name(), "_") {
+			continue
+		}
+
+		ext := strings.ToLower(filepath.Ext(entry.Name()))
+		switch ext {
+		case ".mat", ".csv":
+			return filepath.Join(sessDir, entry.Name()), nil
+		}
+	}
+
+	return "", fmt.Errorf("telemetry file not found in session")
 }
 
-func (h *AnalysisHandler) analyzeFilesWithProgress(c *gin.Context, telPath, svmPath string, runner analyzer, progress agents.ProgressFn) (*domain.AnalysisResponse, error) {
+func (h *AnalysisHandler) analyzeFiles(c *gin.Context, telPath, svmPath string, runner analyzer, fixedParams []string) (*domain.AnalysisResponse, error) {
+	return h.analyzeFilesWithProgress(c, telPath, svmPath, runner, fixedParams, nil)
+}
+
+func (h *AnalysisHandler) analyzeFilesWithProgress(c *gin.Context, telPath, svmPath string, runner analyzer, fixedParams []string, progress agents.ProgressFn) (*domain.AnalysisResponse, error) {
 	// Parse telemetry
 	ext := strings.ToLower(filepath.Ext(telPath))
 	var telData *domain.TelemetryData
@@ -244,16 +269,16 @@ func (h *AnalysisHandler) analyzeFilesWithProgress(c *gin.Context, telPath, svmP
 	}
 
 	// Build telemetry summary and session stats
-	summary := buildTelemetrySummary(telData)
+	summary := agents.BuildEnhancedTelemetrySummary(telData)
 	sts := telData.SessionStats()
 	timeSeries := telData.ExtractTimeSeries()
 
 	// Run pipeline (with optional progress callback)
 	var resp *domain.AnalysisResponse
 	if p, ok := runner.(*agents.Pipeline); ok && progress != nil {
-		resp, err = p.AnalyzeWithProgress(c.Request.Context(), summary, &sts, setup, nil, progress)
+		resp, err = p.AnalyzeWithProgress(c.Request.Context(), summary, &sts, setup, fixedParams, progress)
 	} else {
-		resp, err = runner.Analyze(c.Request.Context(), summary, &sts, setup, nil)
+		resp, err = runner.Analyze(c.Request.Context(), summary, &sts, setup, fixedParams)
 	}
 	if err != nil {
 		return nil, err
@@ -313,7 +338,8 @@ func (h *AnalysisHandler) AnalyzeStream(c *gin.Context) {
 		sendSSE("progress", ev)
 	}
 
-	resp, err := h.analyzeFilesWithProgress(c, telPath, svmPath, runner, progress)
+	fixedParams := extractFixedParams(c)
+	resp, err := h.analyzeFilesWithProgress(c, telPath, svmPath, runner, fixedParams, progress)
 	if err != nil {
 		log.Error().Err(err).Msg("stream analysis failed")
 		sendSSE("error", gin.H{"error": err.Error()})
@@ -325,6 +351,29 @@ func (h *AnalysisHandler) AnalyzeStream(c *gin.Context) {
 	if canFlush {
 		flusher.Flush()
 	}
+}
+
+func extractFixedParams(c *gin.Context) []string {
+	raw := c.PostFormArray("fixed_params")
+	if len(raw) == 0 {
+		return nil
+	}
+
+	seen := make(map[string]struct{})
+	result := make([]string, 0, len(raw))
+	for _, param := range raw {
+		trimmed := strings.TrimSpace(param)
+		if trimmed == "" {
+			continue
+		}
+		key := strings.ToLower(trimmed)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		result = append(result, trimmed)
+	}
+	return result
 }
 
 func (h *AnalysisHandler) resolveSessionFilePaths(clientSessionID, uploadSessionID string) (string, string, error) {
@@ -359,53 +408,4 @@ func (h *AnalysisHandler) resolveSessionFilePaths(clientSessionID, uploadSession
 	}
 
 	return telPath, svmPath, nil
-}
-
-func buildTelemetrySummary(td *domain.TelemetryData) string {
-	var sb strings.Builder
-	sb.WriteString("=== TELEMETRY SUMMARY ===\n")
-	sb.WriteString(fmt.Sprintf("Channels: %d\n", len(td.Channels)))
-	sb.WriteString(fmt.Sprintf("Time column: %s\n", td.TimeCol))
-	sb.WriteString(fmt.Sprintf("Lap column: %s\n\n", td.LapCol))
-
-	stats := td.SessionStats()
-	sb.WriteString(fmt.Sprintf("Total laps: %d\n", stats.TotalLaps))
-	sb.WriteString(fmt.Sprintf("Best lap time: %.3f s\n", stats.BestLapTime))
-	sb.WriteString(fmt.Sprintf("Average lap time: %.3f s\n\n", stats.AvgLapTime))
-
-	// Channel summary (min/max/avg for key channels)
-	keyChannels := []string{
-		"Speed", "Throttle", "Brake", "Steering",
-		"RPM", "Gear", "LateralAcceleration", "LongitudinalAcceleration",
-	}
-	for _, ch := range keyChannels {
-		data, ok := td.Channels[ch]
-		if !ok {
-			continue
-		}
-		min, max, avg := channelStats(data)
-		sb.WriteString(fmt.Sprintf("%s: min=%.2f max=%.2f avg=%.2f\n", ch, min, max, avg))
-	}
-
-	return sb.String()
-}
-
-func channelStats(data []float64) (min, max, avg float64) {
-	if len(data) == 0 {
-		return 0, 0, 0
-	}
-	min = data[0]
-	max = data[0]
-	sum := 0.0
-	for _, v := range data {
-		if v < min {
-			min = v
-		}
-		if v > max {
-			max = v
-		}
-		sum += v
-	}
-	avg = sum / float64(len(data))
-	return
 }

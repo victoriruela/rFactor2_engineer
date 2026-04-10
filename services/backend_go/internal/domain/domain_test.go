@@ -161,6 +161,46 @@ func TestTelemetryData_ExtractTimeSeries_ReplacesInvalidGPSValues(t *testing.T) 
 	}
 }
 
+func TestTelemetryData_ExtractTimeSeries_CapsLargePayload(t *testing.T) {
+	const n = 25000
+	lap := make([]float64, n)
+	time := make([]float64, n)
+	speed := make([]float64, n)
+	lat := make([]float64, n)
+	lon := make([]float64, n)
+
+	for i := 0; i < n; i++ {
+		lap[i] = 1
+		time[i] = float64(i) * 0.01
+		speed[i] = 100 + float64(i%50)
+		lat[i] = 41.0 + float64(i)*0.00001
+		lon[i] = 2.0 + float64(i)*0.00001
+	}
+
+	td := &domain.TelemetryData{
+		LapCol:  "Lap",
+		TimeCol: "Time",
+		Channels: map[string][]float64{
+			"Lap":           lap,
+			"Time":          time,
+			"Speed":         speed,
+			"GPS Latitude":  lat,
+			"GPS Longitude": lon,
+		},
+	}
+
+	series := td.ExtractTimeSeries()
+	if len(series) != 12000 {
+		t.Fatalf("expected capped telemetry series length 12000, got %d", len(series))
+	}
+	if series[0].T != 0 {
+		t.Fatalf("expected first sample to be preserved, got t=%f", series[0].T)
+	}
+	if series[len(series)-1].T != time[n-1] {
+		t.Fatalf("expected last sample to be preserved, got t=%f want=%f", series[len(series)-1].T, time[n-1])
+	}
+}
+
 func TestTelemetryData_SessionStats_UsesLapTimeChannelPrecision(t *testing.T) {
 	td := &domain.TelemetryData{
 		LapCol:  "Lap",

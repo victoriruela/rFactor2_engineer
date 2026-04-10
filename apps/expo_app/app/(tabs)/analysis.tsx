@@ -1,19 +1,29 @@
-﻿import { useCallback, useEffect, useState } from 'react';
+﻿import { useCallback, useEffect, useMemo, useState } from 'react';
 import { View, Text, StyleSheet, Pressable, ScrollView, ActivityIndicator, TextInput } from 'react-native';
 import { useAppStore } from '../../src/store/useAppStore';
-import { analyzeFiles, analyzeSessionStream, listModels, listSessions, setSessionState } from '../../src/api';
-import type { ProgressEvent } from '../../src/api';
+import { analyzeFiles, analyzeSessionStream, getSetup, listModels, listSessions, setSessionState } from '../../src/api';
+import type { ProgressEvent, SetupChange } from '../../src/api';
 import SetupTable from '../../src/components/SetupTable';
 import MarkdownText from '../../src/components/MarkdownText';
 import ChiefReasoningFormatter from '../../src/components/ChiefReasoningFormatter';
+import TelemetryExpertAnalysisFormatter from '../../src/components/TelemetryExpertAnalysisFormatter';
 import SetupCompleteSection from '../../src/components/SetupCompleteSection';
 import LockedParametersPanel from '../../src/components/LockedParametersPanel';
+import { toSpanishParameterName } from '../../src/utils/labelTranslator';
 
 const AGENT_LABELS: Record<string, string> = {
   driving: 'Análisis de conducción',
+  telemetry: 'Experto de telemetría',
   specialist: 'Especialista de setup',
   chief: 'Ingeniero jefe',
 };
+
+function formatLapTime(seconds: number): string {
+  if (seconds <= 0) return '--';
+  const m = Math.floor(seconds / 60);
+  const s = seconds % 60;
+  return `${m}:${s.toFixed(3).padStart(6, '0')}`;
+}
 
 export default function AnalysisScreen() {
   const {
@@ -27,21 +37,95 @@ export default function AnalysisScreen() {
     lockedParameters,
     activeSessionId,
     setActiveSessionId,
+    fullSetup,
+    setFullSetup,
   } = useAppStore();
   const [modelsLoaded, setModelsLoaded] = useState(false);
+  const [modelsRefreshing, setModelsRefreshing] = useState(false);
+  const [modelsError, setModelsError] = useState<string | null>(null);
   const [progressMessages, setProgressMessages] = useState<ProgressEvent[]>([]);
   const [progressExpanded, setProgressExpanded] = useState(true);
 
-  useEffect(() => {
-    listModels()
-      .then((m) => { setModels(m); setModelsLoaded(true); })
-      .catch(() => setModelsLoaded(true));
+  const refreshModels = useCallback(async () => {
+    setModelsRefreshing(true);
+    setModelsError(null);
+    try {
+      const m = await listModels();
+      setModels(m);
+      setModelsLoaded(true);
+      if (m.length === 0) {
+        setModelsError('No se encontraron modelos en Ollama.');
+      }
+    } catch {
+      setModelsLoaded(true);
+      setModelsError('No se pudieron cargar los modelos de Ollama.');
+    } finally {
+      setModelsRefreshing(false);
+    }
   }, [setModels]);
 
-  const handleAnalyze = useCallback(async () => {
-    if (!telemetryFile || !svmFile) {
-      setAnalysisError('Sube ambos archivos primero en la pestaña "Upload"');
+  useEffect(() => {
+    void refreshModels();
+  }, [refreshModels]);
+
+  useEffect(() => {
+    // Ensure setup is available in Analysis tab for loaded sessions (including after reload)
+    if (!activeSessionId || fullSetup) {
       return;
+    }
+    getSetup(activeSessionId)
+      .then((setup) => setFullSetup(setup))
+      .catch(() => {
+        // Ignore setup preload errors; user can still run analysis.
+      });
+  }, [activeSessionId, fullSetup, setFullSetup]);
+
+  const effectiveFullSetup = fullSetup ?? analysisResult?.full_setup ?? null;
+
+  const filteredSetupAnalysis = useMemo<Record<string, SetupChange[]>>(() => {
+    const source = analysisResult?.setup_analysis ?? {};
+    const normalize = (value?: string) => (value ?? '').trim();
+
+    return Object.fromEntries(
+      Object.entries(source)
+        .map(([section, items]) => {
+          const filteredItems = items.filter((item) => {
+            const oldValue = normalize(item.old_value);
+            const newValue = normalize(item.new_value);
+            if (!newValue) {
+              return false;
+            }
+            return newValue !== oldValue;
+          });
+          return [section, filteredItems];
+        })
+        .filter(([, items]) => items.length > 0),
+    );
+  }, [analysisResult?.setup_analysis]);
+
+  const handleAnalyze = useCallback(async () => {
+    // Check if we can start analysis with an existing session or fresh upload
+    let targetSessionId = activeSessionId;
+    const hasLocalFiles = telemetryFile && svmFile;
+
+    if (!hasLocalFiles && !targetSessionId) {
+      // No local files and no existing session → require upload
+      setAnalysisError('Sube ambos archivos primero en la pestaña "Subida"');
+      return;
+    }
+
+    // If no local files but session exists, try to use the session ID
+    if (!hasLocalFiles && targetSessionId) {
+      // Session is already loaded; we can proceed with analysis
+    } else if (!targetSessionId) {
+      // We have local files but no session ID yet, try to find one
+      try {
+        const availableSessions = await listSessions();
+        targetSessionId = availableSessions[0]?.id ?? null;
+      } catch (e) {
+        // If no session found, we'll use direct file upload below
+        targetSessionId = null;
+      }
     }
 
     setAnalyzing(true);
@@ -50,31 +134,29 @@ export default function AnalysisScreen() {
     setProgressExpanded(true);
 
     try {
-      let targetSessionId = activeSessionId;
-      if (!targetSessionId) {
-        const availableSessions = await listSessions();
-        targetSessionId = availableSessions[0]?.id ?? null;
-      }
-
       if (targetSessionId) {
         setActiveSessionId(targetSessionId);
-        // Use streaming endpoint
+        // Use streaming endpoint with existing session
         const result = await analyzeSessionStream(
           targetSessionId,
           selectedModel,
           selectedProvider,
+          Array.from(lockedParameters),
           (ev) => setProgressMessages((prev) => [...prev, ev]),
         );
         setAnalysisResult(result);
         setSessionState(targetSessionId, 'analysis_complete');
         // Minimize progress when analysis completes
         setProgressExpanded(false);
-      } else {
-        // Fallback: direct multipart (no streaming)
+      } else if (hasLocalFiles) {
+        // Fallback: direct multipart with uploaded files
         setProgressMessages([{ type: 'progress', agent: 'driving', message: 'Enviando archivos y analizando...' }]);
-        const result = await analyzeFiles(telemetryFile, svmFile, selectedModel, selectedProvider);
+        const result = await analyzeFiles(telemetryFile, svmFile, selectedModel, selectedProvider, Array.from(lockedParameters));
         setAnalysisResult(result);
         setProgressExpanded(false);
+      } else {
+        // Should not reach here, but handle edge case
+        throw new Error('No session or files available for analysis');
       }
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : 'Error en el análisis';
@@ -87,6 +169,7 @@ export default function AnalysisScreen() {
     svmFile,
     selectedModel,
     selectedProvider,
+    lockedParameters,
     activeSessionId,
     setActiveSessionId,
     setAnalyzing,
@@ -99,9 +182,19 @@ export default function AnalysisScreen() {
       <Text style={styles.title}>Análisis AI</Text>
 
       {/* Model selector */}
-      {modelsLoaded && models.length > 0 && (
+      <View style={styles.modelHeaderRow}>
+        <Text style={styles.label}>Modelos de Ollama:</Text>
+        <Pressable
+          style={[styles.refreshBtn, modelsRefreshing && styles.disabled]}
+          onPress={refreshModels}
+          disabled={modelsRefreshing}
+        >
+          <Text style={styles.refreshBtnText}>{modelsRefreshing ? 'Refrescando...' : 'Refrescar modelos'}</Text>
+        </Pressable>
+      </View>
+
+      {modelsLoaded && models.length > 0 ? (
         <View style={styles.modelRow}>
-          <Text style={styles.label}>Modelo:</Text>
           <View style={styles.modelList}>
             {models.map((m) => (
               <Pressable
@@ -116,10 +209,12 @@ export default function AnalysisScreen() {
             ))}
           </View>
         </View>
-      )}
+      ) : null}
+
+      {modelsError ? <Text style={styles.modelError}>{modelsError}</Text> : null}
 
       <View style={styles.modelConfigRow}>
-        <Text style={styles.label}>Modelo manual:</Text>
+        <Text style={styles.label}>Modelo (manual):</Text>
         <TextInput
           style={styles.modelInput}
           value={selectedModel}
@@ -147,16 +242,16 @@ export default function AnalysisScreen() {
       {analysisError && <Text style={styles.error}>{analysisError}</Text>}
 
       {/* Locked parameters panel */}
-      {analysisResult?.full_setup && (
+      {effectiveFullSetup && (
         <View style={styles.section}>
-          <LockedParametersPanel fullSetup={analysisResult.full_setup} />
+          <LockedParametersPanel fullSetup={effectiveFullSetup} />
         </View>
       )}
 
       {/* Setup completo section */}
-      {analysisResult?.full_setup && (
+      {effectiveFullSetup && (
         <View style={styles.section}>
-          <SetupCompleteSection fullSetup={analysisResult.full_setup} />
+          <SetupCompleteSection fullSetup={effectiveFullSetup} />
         </View>
       )}
 
@@ -208,11 +303,11 @@ export default function AnalysisScreen() {
                 </View>
                 <View style={styles.stat}>
                   <Text style={styles.statLabel}>Mejor Vuelta</Text>
-                  <Text style={styles.statValue}>{analysisResult.session_stats.best_lap_time.toFixed(3)}s</Text>
+                  <Text style={styles.statValue}>{formatLapTime(analysisResult.session_stats.best_lap_time)}</Text>
                 </View>
                 <View style={styles.stat}>
                   <Text style={styles.statLabel}>Vuelta Media</Text>
-                  <Text style={styles.statValue}>{analysisResult.session_stats.avg_lap_time.toFixed(3)}s</Text>
+                  <Text style={styles.statValue}>{formatLapTime(analysisResult.session_stats.avg_lap_time)}</Text>
                 </View>
               </View>
             </View>
@@ -224,25 +319,32 @@ export default function AnalysisScreen() {
             <MarkdownText text={analysisResult.driving_analysis} />
           </View>
 
-          {/* Chief reasoning - formatted nicely */}
+          {/* Setup Recommendations */}
+          {Object.values(filteredSetupAnalysis).some((items) => items.length > 0) ? (
+            <View style={styles.section}>
+              <Text style={styles.sectionTitle}>Recomendaciones del setup</Text>
+              {lockedParameters.size > 0 && (
+                <View style={styles.lockedNotice}>
+                  <Text style={styles.lockedNoticeText}>
+                    Parámetros fijados: {Array.from(lockedParameters).map((p) => toSpanishParameterName(p)).join(', ')}
+                  </Text>
+                </View>
+              )}
+              <SetupTable changes={filteredSetupAnalysis} />
+            </View>
+          ) : null}
+
+          {/* Chief reasoning at the end */}
           {analysisResult.chief_reasoning ? (
             <View style={styles.section}>
               <ChiefReasoningFormatter reasoning={analysisResult.chief_reasoning} />
             </View>
           ) : null}
 
-          {/* Setup Recommendations */}
-          {Object.values(analysisResult.setup_analysis ?? {}).some((items) => items.length > 0) ? (
+          {/* Telemetry Expert Analysis */}
+          {analysisResult.telemetry_analysis ? (
             <View style={styles.section}>
-              <Text style={styles.sectionTitle}>Recomendaciones de Setup</Text>
-              {lockedParameters.size > 0 && (
-                <View style={styles.lockedNotice}>
-                  <Text style={styles.lockedNoticeText}>
-                    Parámetros fijados: {Array.from(lockedParameters).join(', ')}
-                  </Text>
-                </View>
-              )}
-              <SetupTable changes={analysisResult.setup_analysis ?? {}} />
+              <TelemetryExpertAnalysisFormatter analysis={analysisResult.telemetry_analysis} />
             </View>
           ) : null}
         </>
@@ -258,23 +360,30 @@ const styles = StyleSheet.create({
   },
   content: {
     padding: 24,
-    alignItems: 'center',
+    alignItems: 'stretch',
   },
   title: {
     fontSize: 24,
     fontWeight: 'bold',
     color: '#fff',
     marginBottom: 24,
+    textAlign: 'left',
   },
   modelRow: {
     flexDirection: 'row',
-    alignItems: 'center',
     marginBottom: 16,
     flexWrap: 'wrap',
+    width: '100%',
+  },
+  modelHeaderRow: {
+    width: '100%',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 10,
   },
   modelConfigRow: {
     width: '100%',
-    maxWidth: 520,
     marginBottom: 16,
   },
   modelInput: {
@@ -297,6 +406,24 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: 8,
+  },
+  refreshBtn: {
+    backgroundColor: '#1a1a3e',
+    borderWidth: 1,
+    borderColor: '#333',
+    borderRadius: 8,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+  },
+  refreshBtnText: {
+    color: '#ddd',
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  modelError: {
+    color: '#ff9800',
+    fontSize: 12,
+    marginBottom: 12,
   },
   modelChip: {
     paddingVertical: 6,
@@ -325,6 +452,7 @@ const styles = StyleSheet.create({
     marginBottom: 24,
     minWidth: 200,
     alignItems: 'center',
+    alignSelf: 'flex-start',
   },
   disabled: {
     opacity: 0.5,
@@ -340,7 +468,6 @@ const styles = StyleSheet.create({
   },
   section: {
     width: '100%',
-    maxWidth: 800,
     marginBottom: 24,
   },
   sectionTitle: {

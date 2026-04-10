@@ -1,8 +1,7 @@
 import { useState, useCallback } from 'react';
 import { View, Text, StyleSheet, Pressable, Platform, ScrollView } from 'react-native';
 import { useAppStore } from '../../src/store/useAppStore';
-import { uploadFile, getSetup, loadSessionTelemetry, setSessionState } from '../../src/api';
-import SetupCompleteSection from '../../src/components/SetupCompleteSection';
+import { uploadFile, getSetup, loadSessionTelemetry, setSessionState, getLastLockedParameters } from '../../src/api';
 
 export default function UploadScreen() {
   const {
@@ -12,7 +11,8 @@ export default function UploadScreen() {
     isUploading, setUploading,
     setActiveSessionId,
     setAnalysisResult,
-    fullSetup, setFullSetup,
+    setFullSetup,
+    setLockedParameters,
   } = useAppStore();
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
@@ -60,6 +60,17 @@ export default function UploadScreen() {
 
       const setup = await getSetup(svmSessionId);
       setFullSetup(setup);
+
+      // Apply last saved locked-parameter selection to the new session.
+      // Ignore params that do not exist in the newly loaded setup.
+      const availableParams = new Set(
+        Object.values(setup)
+          .flatMap((items) => items.map((item) => item.parameter))
+          .filter((p) => typeof p === 'string' && p.trim().length > 0),
+      );
+      const restoredLocked = getLastLockedParameters().filter((param) => availableParams.has(param));
+      setLockedParameters(new Set(restoredLocked));
+
       setSuccess(true);
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : 'Error de subida';
@@ -75,6 +86,7 @@ export default function UploadScreen() {
     setActiveSessionId,
     setAnalysisResult,
     setFullSetup,
+    setLockedParameters,
   ]);
 
   return (
@@ -114,13 +126,6 @@ export default function UploadScreen() {
 
         {error && <Text style={styles.error}>{error}</Text>}
         {success && <Text style={styles.success}>Archivos subidos correctamente</Text>}
-
-        {/* Display full setup if loaded */}
-        {fullSetup && (
-          <View style={styles.setupSection}>
-            <SetupCompleteSection fullSetup={fullSetup} />
-          </View>
-        )}
       </View>
     </ScrollView>
   );
@@ -210,11 +215,5 @@ const styles = StyleSheet.create({
   success: {
     color: '#4caf50',
     marginTop: 16,
-  },
-  setupSection: {
-    width: '100%',
-    maxWidth: 600,
-    marginTop: 32,
-    paddingHorizontal: 16,
   },
 });

@@ -64,14 +64,14 @@ function parseReasoning(raw: string): ReasoningItem[] {
 
     // Fallback: treat whole object as single item
     return [{ text: JSON.stringify(obj, null, 2) }];
-  } catch (e) {
+  } catch {
     // Not JSON, treat as plain text/markdown
     return [{ text: raw }];
   }
 }
 
 export default function ChiefReasoningFormatter({ reasoning }: Props) {
-  const [expanded, setExpanded] = useState(true);
+  const [expanded, setExpanded] = useState(false);
   const items = parseReasoning(reasoning);
 
   if (items.length === 0) {
@@ -88,19 +88,16 @@ export default function ChiefReasoningFormatter({ reasoning }: Props) {
           {expanded ? '▼' : '▶'} Razonamiento del Ingeniero Jefe
         </Text>
       </Pressable>
-
-      {expanded && (
+      {expanded ? (
         <View style={styles.content}>
           {items.map((item, idx) => (
             <View key={idx} style={styles.item}>
-              {item.section && (
-                <Text style={styles.sectionTitle}>{item.section}</Text>
-              )}
+              {item.section ? <Text style={styles.sectionTitle}>{item.section}</Text> : null}
               <MarkdownText text={item.text} />
             </View>
           ))}
         </View>
-      )}
+      ) : null}
     </View>
   );
 }
