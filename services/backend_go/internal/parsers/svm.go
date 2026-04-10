@@ -24,7 +24,7 @@ func ParseSVMFile(path string) (*domain.Setup, error) {
 
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "//") {
+		if line == "" {
 			continue
 		}
 
@@ -37,11 +37,32 @@ func ParseSVMFile(path string) (*domain.Setup, error) {
 			continue
 		}
 
-		if idx := strings.IndexByte(line, '='); idx > 0 && currentSection != "" {
-			key := strings.TrimSpace(line[:idx])
-			value := strings.TrimSpace(line[idx+1:])
-			if sec, ok := setup.Sections[currentSection]; ok {
-				sec.Params[key] = value
+		// Check for active (non-commented) key=value
+		if !strings.HasPrefix(line, "//") {
+			if idx := strings.IndexByte(line, '='); idx > 0 && currentSection != "" {
+				key := strings.TrimSpace(line[:idx])
+				value := strings.TrimSpace(line[idx+1:])
+				if sec, ok := setup.Sections[currentSection]; ok {
+					sec.Params[key] = value
+				}
+			}
+			continue
+		}
+
+		// Commented-out line: check if it is a setting (//Key=value pattern)
+		remainder := strings.TrimPrefix(line, "//")
+		if idx := strings.IndexByte(remainder, '='); idx > 0 && currentSection != "" {
+			key := strings.TrimSpace(remainder[:idx])
+			// Accept only identifier-like keys (letters + digits, typically ending in "Setting")
+			if isSettingKey(key) {
+				value := strings.TrimSpace(remainder[idx+1:])
+				if sec, ok := setup.Sections[currentSection]; ok {
+					// Only add if not already present from an active line
+					if _, exists := sec.Params[key]; !exists {
+						sec.Params[key] = value
+						sec.ReadOnlyParams = append(sec.ReadOnlyParams, key)
+					}
+				}
 			}
 		}
 	}
@@ -51,6 +72,20 @@ func ParseSVMFile(path string) (*domain.Setup, error) {
 	}
 
 	return setup, nil
+}
+
+// isSettingKey checks whether a raw key string looks like a valid rF2 setting identifier.
+// Valid keys start with an uppercase letter and contain only alphanumeric characters.
+func isSettingKey(key string) bool {
+	if len(key) == 0 || key[0] < 'A' || key[0] > 'Z' {
+		return false
+	}
+	for _, c := range key {
+		if !((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')) {
+			return false
+		}
+	}
+	return true
 }
 
 // CleanValue extracts the display value from an SVM parameter.

@@ -62,7 +62,7 @@ Ciclo de vida completo (TODO→IN PROGRESS→ON HOLD→DONE): `docs/asana-workfl
 
 ## AI Agent Pipeline
 
-Pipeline en `internal/agents/pipeline.go` — cuatro agentes en secuencia:
+Pipeline en `internal/agents/pipeline.go` — seis agentes en secuencia:
 
 ### 1. Translation Agent (una vez, cacheado)
 Prompt: `TRANSLATOR_PROMPT` en `internal/agents/prompts.go`.
@@ -70,28 +70,48 @@ Traduce nombres de sección/parámetro nuevos al español. Resultados guardados 
 
 ### 2. Driving Analysis Agent
 Prompt: `DRIVING_PROMPT`.
-Input: resumen de telemetría + stats de sesión.
+Input: resumen de telemetría enriquecido (con análisis por zonas) + stats de sesión.
 Output: 5 puntos de mejora de conducción con valores numéricos reales, organizados por **curvas numeradas** ("Curva 1", "Curva 2"…) con tipo de curva (horquilla, chicane, ese rápida…). Compara la misma curva entre vueltas. Prohibido sugerir cambios de setup.
 
-### 3. Section Specialist Agents (goroutines concurrentes)
-Prompt: `SECTION_AGENT_PROMPT`.
+### 3. Telemetry Domain Specialists (goroutines concurrentes) — NUEVO
+Dos agentes expertos por dominio de telemetría, ejecutados en paralelo:
+
+**Braking Expert** (`BRAKING_EXPERT_PROMPT`):
+- Analiza zonas de frenada: eficiencia, distribución de temp de frenos, trail braking, consistencia entre vueltas.
+- Output JSON: `{"findings":[{"finding","recommendation","affected_sections"}], "summary"}`.
+
+**Cornering/Balance Expert** (`CORNERING_EXPERT_PROMPT`):
+- Analiza equilibrio en curvas: subviraje/sobreviraje, grip por rueda, ride heights, roll, tyre temps, tracción en salida.
+- Output JSON: `{"findings":[{"finding","recommendation","affected_sections"}], "summary"}`.
+
+Los hallazgos de estos expertos se inyectan como contexto adicional en los prompts de los especialistas de setup y del ingeniero jefe.
+
+### 4. Section Specialist Agents (goroutines concurrentes)
+Prompt: `SECTION_AGENT_PROMPT` (enriquecido con `{telemetry_insights}`).
 Un agente por sección via `sync.WaitGroup`. Secciones procesadas: `GENERAL, FRONTWING, REARWING, BODYAERO, SUSPENSION, CONTROLS, ENGINE, DRIVELINE, FRONTLEFT, FRONTRIGHT, REARLEFT, REARRIGHT`.
 Secciones omitidas: `BASIC, LEFTFENDER, RIGHTFENDER`. Parámetros `Gear*Setting` también omitidos.
-Input: telemetría completa + parámetros actuales de la sección + lista de params fijos.
+Input: telemetría completa + **hallazgos de expertos de telemetría** + parámetros actuales de la sección + lista de params fijos.
 Output JSON: `{"items":[{"parameter","new_value","reason"}], "summary"}`.
 
-### 4. Chief Engineer Agent
-Prompt: `CHIEF_ENGINEER_PROMPT`.
-Consolida todos los informes de especialistas. Reglas clave:
-- Revisa TODAS las propuestas vs. telemetría completa
+### 5. Chief Engineer Agent
+Prompt: `CHIEF_ENGINEER_PROMPT` (enriquecido con `{telemetry_insights}`).
+Consolida todos los informes de especialistas junto con los hallazgos de los expertos de telemetría. Reglas clave:
+- Revisa TODAS las propuestas vs. telemetría completa y hallazgos de expertos
 - Aprueba cambios con mérito técnico; rechaza redundantes o contradictorios
-- **Ownership de reason**: acepta sin cambios → copia reason del especialista; modifica → escribe su propio reason
+- **Ownership de reason**: acepta sin cambios → copia reason del especialista; modifica → escribe su propio reason referenciando datos de telemetría
 - Impone simetría de ejes (FL≈FR, RL≈RR) salvo que telemetría justifique asimetría
-- `chief_reasoning` es **obligatorio siempre**
+- `chief_reasoning` es **obligatorio siempre**, debe incluir referencias a hallazgos de telemetría
 Output JSON: `{"full_setup":{"sections":[…]}, "chief_reasoning":"…"}`.
 
 ### Response Formatting
-Combina recomendaciones del chief con setup original, calcula porcentajes de cambio. Secciones sin cambios propuestos se **excluyen** del output.
+Combina recomendaciones del chief con setup original, calcula porcentajes de cambio. Secciones sin cambios propuestos se **excluyen** del output. El campo `telemetry_analysis` contiene el texto formateado de los expertos de telemetría para mostrar en el frontend.
+
+### Zone Segmentation (zones.go) — NUEVO
+`BuildEnhancedTelemetrySummary()` genera un resumen de telemetría enriquecido que incluye:
+1. **Resumen general**: canales disponibles, stats de sesión, min/max/avg por canal.
+2. **Comparación por vueltas**: tabla con tiempo, velocidad media/max, acelerador/freno.
+3. **Análisis por zonas de la mejor vuelta**: cada frenada, curva, tracción y recta con datos detallados (velocidad, freno, G-forces, temps de freno, ride heights, tyre temps, grip por rueda, indicadores de sub/sobreviraje).
+4. **Consistencia entre vueltas**: número de frenadas y curvas por vuelta.
 
 ## Data Flow
 
@@ -100,10 +120,11 @@ Combina recomendaciones del chief con setup original, calcula porcentajes de cam
 3. GPS extraído para circuit map (por defecto una vuelta y submuestreado a 2000 puntos máx.)
 4. Stats por vuelta calculados (velocidad, acelerador, freno, RPM, combustible, desgaste, temps)
 5. Telemetría submuestreada (~50 puntos/vuelta, top 100 columnas) → CSV string para IA
-6. Resumen construido: nombre del circuito + stats + resúmenes de vuelta + CSV detallado
+5b. `telemetry_series` para frontend se limita por backend a 12000 muestras máximas para evitar payloads gigantes en `/api/session_telemetry`.
+6. Resumen enriquecido construido: overview + comparación por vueltas + análisis por zonas + consistencia
 7. Resumen + mapa de setup → `pipeline.Analyze()`
-8. Pipeline multi-agente (driving → specialists [goroutines] → chief)
-9. Resultados formateados con nombres amigables + porcentajes de cambio → respuesta JSON
+8. Pipeline multi-agente (driving → telemetry specialists [goroutines] → setup specialists [goroutines] → chief)
+9. Resultados formateados con nombres amigables + porcentajes de cambio + análisis de telemetría → respuesta JSON
 
 Constantes de submuestreo: `PARSING_CONSTANTS.md:"## AI Subsampling"`
 

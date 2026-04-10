@@ -15,6 +15,7 @@ type AnalysisResponse struct {
 	CircuitData         []GPSPoint               `json:"circuit_data"`
 	IssuesOnMap         []IssueMarker            `json:"issues_on_map"`
 	DrivingAnalysis     string                   `json:"driving_analysis"`
+	TelemetryAnalysis   string                   `json:"telemetry_analysis,omitempty"`
 	SetupAnalysis       map[string][]SetupChange `json:"setup_analysis"`
 	FullSetup           map[string][]SetupChange `json:"full_setup"`
 	SessionStats        *SessionStats            `json:"session_stats"`

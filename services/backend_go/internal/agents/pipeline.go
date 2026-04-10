@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/viciruela/rfactor2-engineer/internal/domain"
 	"github.com/viciruela/rfactor2-engineer/internal/ollama"
+	"github.com/viciruela/rfactor2-engineer/internal/parsers"
 )
 
 // SkippedSections are setup sections excluded from specialist analysis.
@@ -65,11 +67,15 @@ func (p *Pipeline) AnalyzeWithProgress(ctx context.Context, telemetrySummary str
 		}
 	}
 
+	// Collect read-only params from setup sections and add to fixed params
+	allFixedParams := mergeReadOnlyParams(setup, fixedParams)
+	filteredSetup := excludeFixedParamsFromSetup(setup, allFixedParams)
+
 	if err := p.Client.EnsureRunning(ctx); err != nil {
 		return nil, fmt.Errorf("ensuring ollama: %w", err)
 	}
 
-	fixedParamsJSON, _ := json.Marshal(fixedParams)
+	fixedParamsJSON, _ := json.Marshal(allFixedParams)
 
 	// 1. Driving analysis
 	emit(ProgressEvent{Type: "progress", Agent: "driving", Message: "Analizando datos de conducción con el agente de telemetría..."})
@@ -83,28 +89,41 @@ func (p *Pipeline) AnalyzeWithProgress(ctx context.Context, telemetrySummary str
 		emit(ProgressEvent{Type: "progress", Agent: "driving", Message: "Análisis de conducción completado."})
 	}
 
-	// 2. Section specialists (concurrent goroutines)
+	// 2. Telemetry domain specialists (braking, cornering, tyre, mechanical balance — all parallel)
+	emit(ProgressEvent{Type: "progress", Agent: "telemetry", Message: "Lanzando expertos de telemetría (frenado, curvas, neumáticos, equilibrio mecánico)..."})
+	log.Info().Msg("Running telemetry domain specialists...")
+	telemetryInsights, telemetryAnalysis := p.runTelemetrySpecialists(ctx, telemetrySummary, sessionStats, emit)
+
+	// 3. Section specialists (one per section, in parallel)
 	emit(ProgressEvent{Type: "progress", Agent: "specialist", Message: "Lanzando agentes especialistas de setup por secciones..."})
 	log.Info().Msg("Running section specialist agents...")
-	specialistReports := p.runSpecialistsWithProgress(ctx, telemetrySummary, setup, string(fixedParamsJSON), emit)
+	specialistReports := filterLockedChanges(
+		filterInvalidSectionReports(
+			p.runSpecialistsWithProgress(ctx, telemetrySummary, filteredSetup, string(fixedParamsJSON), telemetryInsights, emit),
+			filteredSetup,
+		),
+		allFixedParams,
+	)
 
-	// 3. Chief engineer consolidation
+	// 4. Chief engineer consolidation
 	emit(ProgressEvent{Type: "progress", Agent: "chief", Message: "Ingeniero jefe consolidando propuestas de los especialistas..."})
 	log.Info().Msg("Running chief engineer agent...")
-	chiefResult, err := p.runChiefEngineer(ctx, telemetrySummary, setup, specialistReports, string(fixedParamsJSON))
+	chiefResult, err := p.runChiefEngineer(ctx, telemetrySummary, filteredSetup, specialistReports, string(fixedParamsJSON), telemetryInsights)
 	if err != nil {
 		log.Error().Err(err).Msg("Chief engineer failed")
 		chiefResult = &chiefOutput{Reasoning: "Error en el ingeniero jefe: " + err.Error()}
 		emit(ProgressEvent{Type: "progress", Agent: "chief", Message: "Error en ingeniero jefe: " + err.Error()})
 	} else {
+		chiefResult = filterLockedChiefOutput(chiefResult, allFixedParams)
+		chiefResult = filterInvalidSetupParams(chiefResult, filteredSetup)
 		emit(ProgressEvent{Type: "progress", Agent: "chief", Message: "Ingeniero jefe: " + truncate(chiefResult.Reasoning, 300)})
 	}
 
-	// 4. Post-processing: axle symmetry
-	enforceAxleSymmetry(chiefResult, setup)
+	// 5. Post-processing: axle symmetry
+	enforceAxleSymmetry(chiefResult, filteredSetup)
 
-	// 5. Format response
-	return p.formatResponse(drivingAnalysis, specialistReports, chiefResult, setup, sessionStats, telemetrySummary), nil
+	// 6. Format response
+	return p.formatResponse(drivingAnalysis, telemetryAnalysis, specialistReports, chiefResult, filteredSetup, sessionStats, telemetrySummary), nil
 }
 
 func truncate(s string, max int) string {
@@ -123,11 +142,465 @@ func (p *Pipeline) runDrivingAgent(ctx context.Context, summary string, stats *d
 	return p.Client.Generate(ctx, prompt, "")
 }
 
-func (p *Pipeline) runSpecialists(ctx context.Context, summary string, setup *domain.Setup, fixedParams string) []domain.SectionReport {
-	return p.runSpecialistsWithProgress(ctx, summary, setup, fixedParams, nil)
+// --- Telemetry domain specialists ---
+
+// telemetryFinding represents a single insight from a telemetry expert.
+type telemetryFinding struct {
+	Finding          string   `json:"finding"`
+	Recommendation   string   `json:"recommendation"`
+	AffectedSections []string `json:"affected_sections"`
 }
 
-func (p *Pipeline) runSpecialistsWithProgress(ctx context.Context, summary string, setup *domain.Setup, fixedParams string, emit ProgressFn) []domain.SectionReport {
+// telemetryExpertOutput is the parsed JSON output from a telemetry specialist.
+type telemetryExpertOutput struct {
+	Findings []telemetryFinding `json:"findings"`
+	Summary  string             `json:"summary"`
+}
+
+// runTelemetrySpecialists runs braking, cornering, tyre and mechanical balance experts in parallel.
+// Returns: (insightsText for injection into setup prompts, analysisText for frontend display)
+func (p *Pipeline) runTelemetrySpecialists(ctx context.Context, summary string, stats *domain.SessionStats, emit ProgressFn) (string, string) {
+	var wg sync.WaitGroup
+	var brakingResult, corneringResult, tyreResult, mechanicalResult string
+	var brakingParsed, corneringParsed, tyreParsed, mechanicalParsed *telemetryExpertOutput
+
+	wg.Add(4)
+
+	go func() {
+		defer wg.Done()
+		if emit != nil {
+			emit(ProgressEvent{Type: "progress", Agent: "telemetry", Section: "braking", Message: "Experto en frenado analizando zonas de frenada..."})
+		}
+		raw, err := p.runBrakingExpert(ctx, summary, stats)
+		if err != nil {
+			log.Error().Err(err).Msg("Braking expert failed")
+			brakingResult = "Error en el experto de frenado: " + err.Error()
+			return
+		}
+		brakingResult = raw
+		brakingParsed = parseTelemetryExpertOutput(raw)
+		if emit != nil {
+			msg := "Experto en frenado completado"
+			if brakingParsed != nil && len(brakingParsed.Findings) > 0 {
+				msg += fmt.Sprintf(" (%d hallazgos)", len(brakingParsed.Findings))
+			}
+			emit(ProgressEvent{Type: "progress", Agent: "telemetry", Section: "braking", Message: msg})
+		}
+	}()
+
+	go func() {
+		defer wg.Done()
+		if emit != nil {
+			emit(ProgressEvent{Type: "progress", Agent: "telemetry", Section: "cornering", Message: "Experto en equilibrio analizando curvas..."})
+		}
+		raw, err := p.runCorneringExpert(ctx, summary, stats)
+		if err != nil {
+			log.Error().Err(err).Msg("Cornering expert failed")
+			corneringResult = "Error en el experto de equilibrio: " + err.Error()
+			return
+		}
+		corneringResult = raw
+		corneringParsed = parseTelemetryExpertOutput(raw)
+		if emit != nil {
+			msg := "Experto en equilibrio completado"
+			if corneringParsed != nil && len(corneringParsed.Findings) > 0 {
+				msg += fmt.Sprintf(" (%d hallazgos)", len(corneringParsed.Findings))
+			}
+			emit(ProgressEvent{Type: "progress", Agent: "telemetry", Section: "cornering", Message: msg})
+		}
+	}()
+
+	go func() {
+		defer wg.Done()
+		if emit != nil {
+			emit(ProgressEvent{Type: "progress", Agent: "telemetry", Section: "tyres", Message: "Experto en neumáticos analizando temperaturas y grip..."})
+		}
+		raw, err := p.runTyreExpert(ctx, summary, stats)
+		if err != nil {
+			log.Error().Err(err).Msg("Tyre expert failed")
+			tyreResult = "Error en el experto de neumáticos: " + err.Error()
+			return
+		}
+		tyreResult = raw
+		tyreParsed = parseTelemetryExpertOutput(raw)
+		if emit != nil {
+			msg := "Experto en neumáticos completado"
+			if tyreParsed != nil && len(tyreParsed.Findings) > 0 {
+				msg += fmt.Sprintf(" (%d hallazgos)", len(tyreParsed.Findings))
+			}
+			emit(ProgressEvent{Type: "progress", Agent: "telemetry", Section: "tyres", Message: msg})
+		}
+	}()
+
+	go func() {
+		defer wg.Done()
+		if emit != nil {
+			emit(ProgressEvent{Type: "progress", Agent: "telemetry", Section: "mechanical", Message: "Experto en equilibrio mecánico analizando suspensión y cargas..."})
+		}
+		raw, err := p.runMechanicalBalanceExpert(ctx, summary, stats)
+		if err != nil {
+			log.Error().Err(err).Msg("Mechanical balance expert failed")
+			mechanicalResult = "Error en el experto de equilibrio mecánico: " + err.Error()
+			return
+		}
+		mechanicalResult = raw
+		mechanicalParsed = parseTelemetryExpertOutput(raw)
+		if emit != nil {
+			msg := "Experto en equilibrio mecánico completado"
+			if mechanicalParsed != nil && len(mechanicalParsed.Findings) > 0 {
+				msg += fmt.Sprintf(" (%d hallazgos)", len(mechanicalParsed.Findings))
+			}
+			emit(ProgressEvent{Type: "progress", Agent: "telemetry", Section: "mechanical", Message: msg})
+		}
+	}()
+
+	wg.Wait()
+
+	// Build structured insights text for injection into setup prompt
+	insightsText := buildTelemetryInsightsText(brakingParsed, corneringParsed, tyreParsed, mechanicalParsed)
+
+	// Build analysis text for frontend display
+	analysisText := buildTelemetryAnalysisDisplay(
+		brakingParsed, brakingResult,
+		corneringParsed, corneringResult,
+		tyreParsed, tyreResult,
+		mechanicalParsed, mechanicalResult,
+	)
+
+	return insightsText, analysisText
+}
+
+func (p *Pipeline) runBrakingExpert(ctx context.Context, summary string, stats *domain.SessionStats) (string, error) {
+	prompt := strings.ReplaceAll(BRAKING_EXPERT_PROMPT, "{telemetry_summary}", summary)
+	statsJSON, _ := json.MarshalIndent(stats, "", "  ")
+	prompt = strings.ReplaceAll(prompt, "{session_stats}", string(statsJSON))
+	return p.Client.Generate(ctx, prompt, "")
+}
+
+func (p *Pipeline) runCorneringExpert(ctx context.Context, summary string, stats *domain.SessionStats) (string, error) {
+	prompt := strings.ReplaceAll(CORNERING_EXPERT_PROMPT, "{telemetry_summary}", summary)
+	statsJSON, _ := json.MarshalIndent(stats, "", "  ")
+	prompt = strings.ReplaceAll(prompt, "{session_stats}", string(statsJSON))
+	return p.Client.Generate(ctx, prompt, "")
+}
+
+func (p *Pipeline) runTyreExpert(ctx context.Context, summary string, stats *domain.SessionStats) (string, error) {
+	prompt := strings.ReplaceAll(TYRE_EXPERT_PROMPT, "{telemetry_summary}", summary)
+	statsJSON, _ := json.MarshalIndent(stats, "", "  ")
+	prompt = strings.ReplaceAll(prompt, "{session_stats}", string(statsJSON))
+	return p.Client.Generate(ctx, prompt, "")
+}
+
+func (p *Pipeline) runMechanicalBalanceExpert(ctx context.Context, summary string, stats *domain.SessionStats) (string, error) {
+	prompt := strings.ReplaceAll(MECHANICAL_BALANCE_PROMPT, "{telemetry_summary}", summary)
+	statsJSON, _ := json.MarshalIndent(stats, "", "  ")
+	prompt = strings.ReplaceAll(prompt, "{session_stats}", string(statsJSON))
+	return p.Client.Generate(ctx, prompt, "")
+}
+
+func parseTelemetryExpertOutput(raw string) *telemetryExpertOutput {
+	jsonStr := ExtractJSON(raw)
+	if jsonStr == "" {
+		return nil
+	}
+	var out telemetryExpertOutput
+	if err := json.Unmarshal([]byte(jsonStr), &out); err != nil {
+		return nil
+	}
+	return &out
+}
+
+func buildTelemetryInsightsText(braking, cornering, tyre, mechanical *telemetryExpertOutput) string {
+	var sb strings.Builder
+
+	type expertEntry struct {
+		label  string
+		output *telemetryExpertOutput
+	}
+	experts := []expertEntry{
+		{"EXPERTO EN FRENADO", braking},
+		{"EXPERTO EN EQUILIBRIO Y CURVAS", cornering},
+		{"EXPERTO EN NEUMÁTICOS", tyre},
+		{"EXPERTO EN EQUILIBRIO MECÁNICO", mechanical},
+	}
+
+	for _, e := range experts {
+		if e.output == nil || (len(e.output.Findings) == 0 && e.output.Summary == "") {
+			continue
+		}
+		sb.WriteString("=== " + e.label + " ===\n")
+		if e.output.Summary != "" {
+			sb.WriteString(e.output.Summary + "\n\n")
+		}
+		for i, f := range e.output.Findings {
+			sb.WriteString(fmt.Sprintf("%d. %s\n", i+1, f.Finding))
+			if f.Recommendation != "" {
+				sb.WriteString(fmt.Sprintf("   → Recomendación: %s\n", f.Recommendation))
+			}
+			if len(f.AffectedSections) > 0 {
+				sb.WriteString(fmt.Sprintf("   → Secciones afectadas: %s\n", strings.Join(f.AffectedSections, ", ")))
+			}
+		}
+		sb.WriteString("\n")
+	}
+
+	if sb.Len() == 0 {
+		return "No se obtuvieron hallazgos de los expertos de telemetría."
+	}
+	return sb.String()
+}
+
+func buildTelemetryAnalysisDisplay(
+	braking *telemetryExpertOutput, brakingRaw string,
+	cornering *telemetryExpertOutput, corneringRaw string,
+	tyre *telemetryExpertOutput, tyreRaw string,
+	mechanical *telemetryExpertOutput, mechanicalRaw string,
+) string {
+	var sb strings.Builder
+
+	type expertEntry struct {
+		label  string
+		parsed *telemetryExpertOutput
+		raw    string
+	}
+	experts := []expertEntry{
+		{"Experto en Frenado", braking, brakingRaw},
+		{"Experto en Equilibrio y Curvas", cornering, corneringRaw},
+		{"Experto en Neumáticos", tyre, tyreRaw},
+		{"Experto en Equilibrio Mecánico", mechanical, mechanicalRaw},
+	}
+
+	for _, e := range experts {
+		sb.WriteString("## Análisis del " + e.label + "\n\n")
+		if e.parsed != nil && e.parsed.Summary != "" {
+			sb.WriteString(e.parsed.Summary + "\n\n")
+			for i, f := range e.parsed.Findings {
+				sb.WriteString(fmt.Sprintf("**%d.** %s\n", i+1, f.Finding))
+				if f.Recommendation != "" {
+					sb.WriteString(fmt.Sprintf("   *Recomendación:* %s\n\n", f.Recommendation))
+				}
+			}
+		} else if e.raw != "" {
+			sb.WriteString(e.raw + "\n\n")
+		} else {
+			sb.WriteString("No disponible.\n\n")
+		}
+	}
+
+	return sb.String()
+}
+
+// --- Global setup agent (replaces per-section specialists + chief engineer) ---
+
+// chiefOutput holds the consolidated setup recommendations.
+type chiefOutput struct {
+	Sections  []domain.SectionReport
+	Reasoning string
+}
+
+// globalSetupOutput is the parsed JSON output from the global setup agent.
+type globalSetupOutput struct {
+	Sections  []domain.SectionReport `json:"sections"`
+	Reasoning string                 `json:"reasoning"`
+}
+
+func (p *Pipeline) runGlobalSetupAgent(ctx context.Context, summary string, setup *domain.Setup, fixedParams string, telemetryInsights string) (*chiefOutput, error) {
+	setupBySection := buildSetupParamsBySection(setup)
+
+	prompt := strings.ReplaceAll(GLOBAL_SETUP_AGENT_PROMPT, "{telemetry_summary}", summary)
+	prompt = strings.ReplaceAll(prompt, "{setup_params_by_section}", setupBySection)
+	prompt = strings.ReplaceAll(prompt, "{fixed_params}", fixedParams)
+	prompt = strings.ReplaceAll(prompt, "{telemetry_insights}", telemetryInsights)
+
+	response, err := p.Client.Generate(ctx, prompt, "")
+	if err != nil {
+		return nil, err
+	}
+
+	return parseGlobalSetupResponse(response)
+}
+
+// buildSetupParamsBySection builds a human-readable listing of section → params with current values.
+func buildSetupParamsBySection(setup *domain.Setup) string {
+	if setup == nil {
+		return "No hay datos de setup disponibles."
+	}
+
+	// Sort sections for deterministic output
+	sections := make([]string, 0, len(setup.Sections))
+	for name := range setup.Sections {
+		if SkippedSections[name] {
+			continue
+		}
+		sections = append(sections, name)
+	}
+	sort.Strings(sections)
+
+	var sb strings.Builder
+	for _, secName := range sections {
+		sec := setup.Sections[secName]
+		if sec == nil || len(sec.Params) == 0 {
+			continue
+		}
+
+		// Collect non-gear params sorted
+		params := make([]string, 0, len(sec.Params))
+		for k := range sec.Params {
+			if !isGearParam(k) {
+				params = append(params, k)
+			}
+		}
+		if len(params) == 0 {
+			continue
+		}
+		sort.Strings(params)
+
+		sb.WriteString(fmt.Sprintf("[%s]\n", secName))
+		for _, paramName := range params {
+			sb.WriteString(fmt.Sprintf("  %s (actual: %s)\n", paramName, sec.Params[paramName]))
+		}
+		sb.WriteString("\n")
+	}
+	return sb.String()
+}
+
+func parseGlobalSetupResponse(response string) (*chiefOutput, error) {
+	jsonStr := ExtractJSON(response)
+	if jsonStr == "" {
+		return &chiefOutput{Reasoning: response}, nil
+	}
+
+	var raw struct {
+		Sections []struct {
+			Section string            `json:"section"`
+			Items   []json.RawMessage `json:"items"`
+		} `json:"sections"`
+		// Also accept the existing chief format for backward compat
+		FullSetup struct {
+			Sections []struct {
+				Section string            `json:"section"`
+				Items   []json.RawMessage `json:"items"`
+			} `json:"sections"`
+		} `json:"full_setup"`
+		Reasoning      string `json:"reasoning"`
+		ChiefReasoning string `json:"chief_reasoning"`
+	}
+	if err := json.Unmarshal([]byte(jsonStr), &raw); err != nil {
+		return &chiefOutput{Reasoning: response}, nil
+	}
+
+	// Accept either top-level "sections" or nested "full_setup.sections"
+	rawSections := raw.Sections
+	if len(rawSections) == 0 {
+		rawSections = raw.FullSetup.Sections
+	}
+	reasoning := raw.Reasoning
+	if reasoning == "" {
+		reasoning = raw.ChiefReasoning
+	}
+
+	var sections []domain.SectionReport
+	for _, sec := range rawSections {
+		var changes []domain.SetupChange
+		for _, rawItem := range sec.Items {
+			change := normalizeSetupChange(rawItem)
+			if change.Parameter != "" {
+				changes = append(changes, change)
+			}
+		}
+		sections = append(sections, domain.SectionReport{
+			Section: sec.Section,
+			Items:   changes,
+		})
+	}
+
+	return &chiefOutput{
+		Sections:  sections,
+		Reasoning: reasoning,
+	}, nil
+}
+
+// filterInvalidSetupParams removes proposed changes where the parameter does not exist in the setup section.
+func filterInvalidSetupParams(chief *chiefOutput, setup *domain.Setup) *chiefOutput {
+	if chief == nil || setup == nil {
+		return chief
+	}
+
+	filteredSections := make([]domain.SectionReport, 0, len(chief.Sections))
+	for _, section := range chief.Sections {
+		sec, ok := setup.Sections[section.Section]
+		if !ok {
+			// Unknown section — drop entire section
+			log.Warn().Str("section", section.Section).Msg("Global setup agent proposed unknown section; dropping")
+			continue
+		}
+
+		validItems := make([]domain.SetupChange, 0, len(section.Items))
+		for _, item := range section.Items {
+			if _, exists := sec.Params[item.Parameter]; exists {
+				validItems = append(validItems, item)
+			} else {
+				log.Warn().Str("section", section.Section).Str("param", item.Parameter).Msg("Global setup agent proposed non-existent param; dropping")
+			}
+		}
+		section.Items = validItems
+		filteredSections = append(filteredSections, section)
+	}
+
+	chief.Sections = filteredSections
+	return chief
+}
+
+// countSectionsWithChanges returns the number of sections in a chiefOutput that have at least one change.
+func countSectionsWithChanges(chief *chiefOutput) int {
+	if chief == nil {
+		return 0
+	}
+	count := 0
+	for _, sec := range chief.Sections {
+		if len(sec.Items) > 0 {
+			count++
+		}
+	}
+	return count
+}
+
+// mergeReadOnlyParams extends user-supplied fixedParams with read-only params from all setup sections.
+func mergeReadOnlyParams(setup *domain.Setup, fixedParams []string) []string {
+	if setup == nil {
+		return fixedParams
+	}
+
+	seen := make(map[string]struct{}, len(fixedParams))
+	result := make([]string, 0, len(fixedParams))
+	for _, p := range fixedParams {
+		key := normalizeParamKey(p)
+		if _, dup := seen[key]; !dup {
+			seen[key] = struct{}{}
+			result = append(result, p)
+		}
+	}
+
+	for _, sec := range setup.Sections {
+		if sec == nil {
+			continue
+		}
+		for _, paramName := range sec.ReadOnlyParams {
+			key := normalizeParamKey(paramName)
+			if _, already := seen[key]; !already {
+				seen[key] = struct{}{}
+				result = append(result, paramName)
+			}
+		}
+	}
+	return result
+}
+
+func (p *Pipeline) runSpecialists(ctx context.Context, summary string, setup *domain.Setup, fixedParams string, telemetryInsights string) []domain.SectionReport {
+	return p.runSpecialistsWithProgress(ctx, summary, setup, fixedParams, telemetryInsights, nil)
+}
+
+func (p *Pipeline) runSpecialistsWithProgress(ctx context.Context, summary string, setup *domain.Setup, fixedParams string, telemetryInsights string, emit ProgressFn) []domain.SectionReport {
 	var mu sync.Mutex
 	var wg sync.WaitGroup
 	var reports []domain.SectionReport
@@ -157,7 +630,7 @@ func (p *Pipeline) runSpecialistsWithProgress(ctx context.Context, summary strin
 				emit(ProgressEvent{Type: "progress", Agent: "specialist", Section: secName, Message: "Especialista analizando sección: " + secName})
 			}
 
-			report, err := p.runSingleSpecialist(ctx, summary, secName, sec, fixedParams)
+			report, err := p.runSingleSpecialist(ctx, summary, secName, sec, fixedParams, telemetryInsights)
 			if err != nil {
 				log.Error().Err(err).Str("section", secName).Msg("Specialist failed")
 				report = &domain.SectionReport{
@@ -184,13 +657,14 @@ func (p *Pipeline) runSpecialistsWithProgress(ctx context.Context, summary strin
 	return reports
 }
 
-func (p *Pipeline) runSingleSpecialist(ctx context.Context, summary, sectionName string, section *domain.SetupSection, fixedParams string) (*domain.SectionReport, error) {
-	paramsJSON, _ := json.MarshalIndent(section.Params, "", "  ")
+func (p *Pipeline) runSingleSpecialist(ctx context.Context, summary, sectionName string, section *domain.SetupSection, fixedParams string, telemetryInsights string) (*domain.SectionReport, error) {
+	paramsJSON, _ := json.MarshalIndent(formatSetupParamsForLLM(section.Params), "", "  ")
 
 	prompt := strings.ReplaceAll(SECTION_AGENT_PROMPT, "{section_name}", sectionName)
 	prompt = strings.ReplaceAll(prompt, "{telemetry_summary}", summary)
 	prompt = strings.ReplaceAll(prompt, "{section_params}", string(paramsJSON))
 	prompt = strings.ReplaceAll(prompt, "{fixed_params}", fixedParams)
+	prompt = strings.ReplaceAll(prompt, "{telemetry_insights}", telemetryInsights)
 
 	response, err := p.Client.Generate(ctx, prompt, "")
 	if err != nil {
@@ -201,33 +675,63 @@ func (p *Pipeline) runSingleSpecialist(ctx context.Context, summary, sectionName
 	if err != nil {
 		return nil, fmt.Errorf("parsing specialist response for %s: %w", sectionName, err)
 	}
+	if sec := section; sec != nil {
+		report = normalizeSectionReportValues(report, sec.Params)
+	}
 
 	return report, nil
 }
 
-type chiefOutput struct {
-	Sections  []domain.SectionReport
-	Reasoning string
-}
-
-func (p *Pipeline) runChiefEngineer(ctx context.Context, summary string, setup *domain.Setup, specialistReports []domain.SectionReport, fixedParams string) (*chiefOutput, error) {
-	setupJSON, _ := json.MarshalIndent(setup, "", "  ")
+// runChiefEngineer consolidates specialist reports into a final setup proposal.
+func (p *Pipeline) runChiefEngineer(ctx context.Context, summary string, setup *domain.Setup, specialistReports []domain.SectionReport, fixedParams string, telemetryInsights string) (*chiefOutput, error) {
 	reportsJSON, _ := json.MarshalIndent(specialistReports, "", "  ")
+	setupJSON, _ := json.MarshalIndent(formatSetupSectionsForLLM(setup.Sections), "", "  ")
 
 	prompt := strings.ReplaceAll(CHIEF_ENGINEER_PROMPT, "{telemetry_summary}", summary)
 	prompt = strings.ReplaceAll(prompt, "{full_setup}", string(setupJSON))
 	prompt = strings.ReplaceAll(prompt, "{specialist_reports}", string(reportsJSON))
 	prompt = strings.ReplaceAll(prompt, "{fixed_params}", fixedParams)
+	prompt = strings.ReplaceAll(prompt, "{telemetry_insights}", telemetryInsights)
 
 	response, err := p.Client.Generate(ctx, prompt, "")
 	if err != nil {
 		return nil, err
 	}
 
-	return parseChiefResponse(response)
+	chief, err := parseChiefResponse(response)
+	if err != nil {
+		return nil, fmt.Errorf("parsing chief response: %w", err)
+	}
+	chief = normalizeChiefValues(chief, setup)
+
+	return chief, nil
 }
 
-func (p *Pipeline) formatResponse(drivingAnalysis string, specialistReports []domain.SectionReport, chief *chiefOutput, setup *domain.Setup, stats *domain.SessionStats, summary string) *domain.AnalysisResponse {
+// filterInvalidSectionReports drops any SectionReport for a section that doesn't exist in setup,
+// and drops individual items whose parameter doesn't exist in that section.
+func filterInvalidSectionReports(reports []domain.SectionReport, setup *domain.Setup) []domain.SectionReport {
+	filtered := make([]domain.SectionReport, 0, len(reports))
+	for _, rep := range reports {
+		sec, ok := setup.Sections[rep.Section]
+		if !ok {
+			log.Warn().Str("section", rep.Section).Msg("Specialist proposed changes for unknown section — dropped")
+			continue
+		}
+		validItems := make([]domain.SetupChange, 0, len(rep.Items))
+		for _, item := range rep.Items {
+			if _, ok := sec.Params[item.Parameter]; ok {
+				validItems = append(validItems, item)
+			} else {
+				log.Warn().Str("section", rep.Section).Str("param", item.Parameter).Msg("Specialist proposed unknown param — dropped")
+			}
+		}
+		rep.Items = validItems
+		filtered = append(filtered, rep)
+	}
+	return filtered
+}
+
+func (p *Pipeline) formatResponse(drivingAnalysis string, telemetryAnalysis string, specialistReports []domain.SectionReport, chief *chiefOutput, setup *domain.Setup, stats *domain.SessionStats, summary string) *domain.AnalysisResponse {
 	setupAnalysis := make(map[string][]domain.SetupChange)
 	fullSetup := make(map[string][]domain.SetupChange)
 
@@ -239,8 +743,9 @@ func (p *Pipeline) formatResponse(drivingAnalysis string, specialistReports []do
 				// Compute change percentage
 				if origSec, ok := setup.Sections[sec.Section]; ok {
 					if origVal, ok := origSec.Params[item.Parameter]; ok {
-						change.OldValue = origVal
-						change.ChangePct = computeChangePct(origVal, item.NewValue)
+						change.NewValue = ensureUnitValue(item.NewValue, origVal)
+						change.OldValue = displaySetupValue(origVal)
+						change.ChangePct = computeChangePct(change.OldValue, change.NewValue)
 					}
 				}
 				changes = append(changes, change)
@@ -264,8 +769,9 @@ func (p *Pipeline) formatResponse(drivingAnalysis string, specialistReports []do
 				change := item
 				if origSec, ok := setup.Sections[rep.Section]; ok {
 					if origVal, ok := origSec.Params[item.Parameter]; ok {
-						change.OldValue = origVal
-						change.ChangePct = computeChangePct(origVal, item.NewValue)
+						change.NewValue = ensureUnitValue(item.NewValue, origVal)
+						change.OldValue = displaySetupValue(origVal)
+						change.ChangePct = computeChangePct(change.OldValue, change.NewValue)
 					}
 				}
 				changes = append(changes, change)
@@ -283,14 +789,123 @@ func (p *Pipeline) formatResponse(drivingAnalysis string, specialistReports []do
 	}
 
 	return &domain.AnalysisResponse{
-		DrivingAnalysis:  drivingAnalysis,
-		SetupAnalysis:    setupAnalysis,
-		FullSetup:        fullSetup,
-		SessionStats:     stats,
-		AgentReports:     specialistReports,
-		TelemetrySummary: summary,
-		ChiefReasoning:   chiefReasoning,
+		DrivingAnalysis:   drivingAnalysis,
+		TelemetryAnalysis: telemetryAnalysis,
+		SetupAnalysis:     setupAnalysis,
+		FullSetup:         fullSetup,
+		SessionStats:      stats,
+		AgentReports:      specialistReports,
+		TelemetrySummary:  summary,
+		ChiefReasoning:    chiefReasoning,
 	}
+}
+
+func formatSetupParamsForLLM(params map[string]string) map[string]string {
+	formatted := make(map[string]string, len(params))
+	for k, v := range params {
+		formatted[k] = displaySetupValue(v)
+	}
+	return formatted
+}
+
+func formatSetupSectionsForLLM(sections map[string]*domain.SetupSection) map[string]*domain.SetupSection {
+	formatted := make(map[string]*domain.SetupSection, len(sections))
+	for secName, sec := range sections {
+		if sec == nil {
+			continue
+		}
+		cloned := &domain.SetupSection{
+			Name:           sec.Name,
+			Params:         formatSetupParamsForLLM(sec.Params),
+			ReadOnlyParams: append([]string(nil), sec.ReadOnlyParams...),
+		}
+		formatted[secName] = cloned
+	}
+	return formatted
+}
+
+func normalizeSectionReportValues(report *domain.SectionReport, sectionParams map[string]string) *domain.SectionReport {
+	if report == nil {
+		return nil
+	}
+	for i := range report.Items {
+		param := report.Items[i].Parameter
+		orig, ok := sectionParams[param]
+		if !ok {
+			orig = ""
+		}
+		report.Items[i].NewValue = ensureUnitValue(report.Items[i].NewValue, orig)
+	}
+	return report
+}
+
+func normalizeChiefValues(chief *chiefOutput, setup *domain.Setup) *chiefOutput {
+	if chief == nil || setup == nil {
+		return chief
+	}
+	for secIdx := range chief.Sections {
+		sec := &chief.Sections[secIdx]
+		origSec, ok := setup.Sections[sec.Section]
+		if !ok || origSec == nil {
+			for i := range sec.Items {
+				sec.Items[i].NewValue = ensureUnitValue(sec.Items[i].NewValue, "")
+			}
+			continue
+		}
+		for i := range sec.Items {
+			param := sec.Items[i].Parameter
+			orig := origSec.Params[param]
+			sec.Items[i].NewValue = ensureUnitValue(sec.Items[i].NewValue, orig)
+		}
+	}
+	return chief
+}
+
+func displaySetupValue(raw string) string {
+	clean := strings.TrimSpace(parsers.CleanValue(raw))
+	if clean == "" {
+		return ""
+	}
+	if hasUnitText(clean) {
+		return clean
+	}
+	return clean + " deg"
+}
+
+func ensureUnitValue(value, originalRaw string) string {
+	val := strings.TrimSpace(value)
+	if val == "" {
+		return val
+	}
+	val = strings.TrimSpace(parsers.CleanValue(val))
+	if hasUnitText(val) {
+		return val
+	}
+	return val + " " + inferUnitFromOriginal(originalRaw)
+}
+
+func inferUnitFromOriginal(originalRaw string) string {
+	display := displaySetupValue(originalRaw)
+	if idx := firstUnitIndex(display); idx >= 0 {
+		unit := strings.TrimSpace(display[idx:])
+		if unit != "" {
+			return unit
+		}
+	}
+	return "deg"
+}
+
+func hasUnitText(s string) bool {
+	return firstUnitIndex(strings.TrimSpace(s)) >= 0
+}
+
+func firstUnitIndex(s string) int {
+	for i, r := range s {
+		if (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z') || r == '°' || r == '%' {
+			return i
+		}
+	}
+	return -1
 }
 
 // --- Parsing helpers ---
@@ -471,13 +1086,121 @@ func ExtractNumeric(s string) (float64, bool) {
 }
 
 func computeChangePct(oldRaw, newRaw string) string {
+	oldTrim := strings.TrimSpace(oldRaw)
+	newTrim := strings.TrimSpace(newRaw)
+
+	// Business rule: missing or unchanged target value must always be zero.
+	if newTrim == "" {
+		return "0.0%"
+	}
+	if oldTrim == newTrim {
+		return "0.0%"
+	}
+
 	oldVal, okOld := ExtractNumeric(oldRaw)
 	newVal, okNew := ExtractNumeric(newRaw)
 	if !okOld || !okNew || oldVal == 0 {
 		return ""
 	}
+	if math.Abs(newVal-oldVal) < 1e-9 {
+		return "0.0%"
+	}
 	pct := ((newVal - oldVal) / math.Abs(oldVal)) * 100
 	return fmt.Sprintf("%+.1f%%", pct)
+}
+
+func normalizeParamKey(name string) string {
+	return strings.ToLower(strings.TrimSpace(name))
+}
+
+func buildFixedParamSet(fixedParams []string) map[string]struct{} {
+	set := make(map[string]struct{}, len(fixedParams))
+	for _, param := range fixedParams {
+		key := normalizeParamKey(param)
+		if key == "" {
+			continue
+		}
+		set[key] = struct{}{}
+	}
+	return set
+}
+
+func excludeFixedParamsFromSetup(setup *domain.Setup, fixedParams []string) *domain.Setup {
+	if setup == nil {
+		return nil
+	}
+	blocked := buildFixedParamSet(fixedParams)
+	if len(blocked) == 0 {
+		return setup
+	}
+
+	clone := domain.NewSetup()
+	for sectionName, section := range setup.Sections {
+		if section == nil {
+			continue
+		}
+		params := make(map[string]string)
+		for paramName, paramValue := range section.Params {
+			if _, blockedParam := blocked[normalizeParamKey(paramName)]; blockedParam {
+				continue
+			}
+			params[paramName] = paramValue
+		}
+		if len(params) == 0 {
+			continue
+		}
+		clone.Sections[sectionName] = &domain.SetupSection{
+			Name:   section.Name,
+			Params: params,
+		}
+	}
+	return clone
+}
+
+func filterLockedChanges(reports []domain.SectionReport, fixedParams []string) []domain.SectionReport {
+	blocked := buildFixedParamSet(fixedParams)
+	if len(blocked) == 0 {
+		return reports
+	}
+
+	filtered := make([]domain.SectionReport, 0, len(reports))
+	for _, report := range reports {
+		items := make([]domain.SetupChange, 0, len(report.Items))
+		for _, item := range report.Items {
+			if _, blockedParam := blocked[normalizeParamKey(item.Parameter)]; blockedParam {
+				continue
+			}
+			items = append(items, item)
+		}
+		report.Items = items
+		filtered = append(filtered, report)
+	}
+	return filtered
+}
+
+func filterLockedChiefOutput(chief *chiefOutput, fixedParams []string) *chiefOutput {
+	if chief == nil {
+		return nil
+	}
+	blocked := buildFixedParamSet(fixedParams)
+	if len(blocked) == 0 {
+		return chief
+	}
+
+	filteredSections := make([]domain.SectionReport, 0, len(chief.Sections))
+	for _, section := range chief.Sections {
+		items := make([]domain.SetupChange, 0, len(section.Items))
+		for _, item := range section.Items {
+			if _, blockedParam := blocked[normalizeParamKey(item.Parameter)]; blockedParam {
+				continue
+			}
+			items = append(items, item)
+		}
+		section.Items = items
+		filteredSections = append(filteredSections, section)
+	}
+	chief.Sections = filteredSections
+	return chief
 }
 
 func isGearParam(name string) bool {

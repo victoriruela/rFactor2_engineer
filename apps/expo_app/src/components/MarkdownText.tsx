@@ -63,7 +63,7 @@ export default function MarkdownText({ text, style }: Props) {
 
         return (
           <View key={lineIdx} style={isBullet ? styles.bulletLine : undefined}>
-            {isBullet && <Text style={styles.bullet}>• </Text>}
+            {isBullet ? <Text style={styles.bullet}>• </Text> : null}
             <Text style={[styles.line, style]}>
               {segments.map((seg, segIdx) => (
                 <Text

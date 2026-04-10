@@ -48,7 +48,7 @@ export default function HomeScreen() {
       )}
 
       <Text style={styles.instructions}>
-        1. Ve a la pestaña "Upload" para subir tus archivos de telemetría (.mat/.csv) y setup (.svm){'\n'}
+        1. Ve a la pestaña "Subida" para subir tus archivos de telemetría (.mat/.csv) y setup (.svm){'\n'}
         2. Inicia el análisis en la pestaña "Análisis"{'\n'}
         3. Revisa los resultados: mapa del circuito, análisis de conducción y recomendaciones de setup
       </Text>

@@ -7,15 +7,19 @@ import React, { useState } from 'react';
 import { View, Text, StyleSheet, Pressable } from 'react-native';
 import { useAppStore } from '../store/useAppStore';
 import type { SetupChange } from '../api';
+import { getClicksDisplay, getValueDisplay } from '../utils/setupValueParser';
+import { toSpanishParameterName, toSpanishSectionName } from '../utils/labelTranslator';
 
 interface Props {
   fullSetup: Record<string, SetupChange[]>;
 }
 
 export default function SetupCompleteSection({ fullSetup }: Props) {
-  const [expanded, setExpanded] = useState(true);
+  const [expanded, setExpanded] = useState(false);
   const { lockedParameters, toggleLockedParameter } = useAppStore();
-  const sections = Object.entries(fullSetup).filter(([, items]) => items.length > 0);
+  const sections = Object.entries(fullSetup)
+    .map(([section, items]) => [section, items.filter((item) => !lockedParameters.has(item.parameter))] as const)
+    .filter(([, items]) => items.length > 0);
 
   if (sections.length === 0) {
     return null;
@@ -35,42 +39,43 @@ export default function SetupCompleteSection({ fullSetup }: Props) {
           {expanded ? '▼' : '▶'} Setup Actual Completo
         </Text>
       </Pressable>
-
-      {expanded && (
+      {expanded ? (
         <View style={styles.content}>
           {sections.map(([section, items]) => (
             <View key={section} style={styles.section}>
-              <Text style={styles.sectionName}>{section}</Text>
+              <Text style={styles.sectionName}>{toSpanishSectionName(section)}</Text>
               <View style={styles.paramsList}>
                 {items.map((param, idx) => {
                   const isLocked = lockedParameters.has(param.parameter);
+                  const clicks = getClicksDisplay(param.old_value);
+                  const valueDisplay = getValueDisplay(param.old_value);
                   return (
                     <Pressable
                       key={idx}
-                      style={[styles.paramRow, isLocked && styles.paramRowLocked]}
+                      style={styles.paramRow}
                       onPress={() => handleToggleLock(param.parameter)}
                     >
                       <View style={styles.paramInfo}>
-                        <Text style={styles.paramName}>{param.parameter}</Text>
-                        <Text style={styles.paramValue}>{param.old_value}</Text>
+                        <Text style={styles.paramName}>{toSpanishParameterName(param.parameter)}</Text>
+                        <View style={styles.paramDetailsRow}>
+                          <Text style={[styles.paramDetail, styles.clicksDetail]}>{clicks}</Text>
+                          <Text style={styles.paramValue}>{valueDisplay}</Text>
+                        </View>
                       </View>
-                      <Text style={[styles.lockIcon, isLocked && styles.lockIconActive]}>
-                        {isLocked ? '🔒' : '⭕'}
-                      </Text>
+                      <Text style={styles.lockIcon}>⭕</Text>
                     </Pressable>
                   );
                 })}
               </View>
             </View>
           ))}
-          
           <View style={styles.hint}>
             <Text style={styles.hintText}>
               Haz clic en un parámetro para marcarlo como 🔒 fijado (la IA no lo cambiará)
             </Text>
           </View>
         </View>
-      )}
+      ) : null}
     </View>
   );
 }
@@ -125,10 +130,6 @@ const styles = StyleSheet.create({
     borderBottomColor: '#222',
     backgroundColor: '#0d0d1f',
   },
-  paramRowLocked: {
-    backgroundColor: '#1a1f2e',
-    borderBottomColor: '#4caf50',
-  },
   paramInfo: {
     flex: 1,
     gap: 4,
@@ -138,19 +139,31 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '500',
   },
+  paramDetailsRow: {
+    flexDirection: 'row',
+    gap: 12,
+    alignItems: 'center',
+  },
+  paramDetail: {
+    fontSize: 11,
+    fontStyle: 'italic',
+  },
+  clicksDetail: {
+    color: '#66bb6a',
+    fontWeight: '600',
+    minWidth: 40,
+  },
   paramValue: {
     color: '#888',
     fontSize: 11,
     fontStyle: 'italic',
+    flex: 1,
   },
   lockIcon: {
     fontSize: 14,
     marginLeft: 8,
     minWidth: 24,
     textAlign: 'center',
-  },
-  lockIconActive: {
-    opacity: 1,
   },
   hint: {
     marginTop: 12,

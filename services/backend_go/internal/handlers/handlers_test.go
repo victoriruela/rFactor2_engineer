@@ -27,6 +27,7 @@ func newTestRouter(dataDir string) *gin.Engine {
 
 	client := ollama.NewClient("http://localhost:11434", "test", "")
 	sessionH := handlers.NewSessionHandler(dataDir)
+	analysisH := handlers.NewAnalysisHandler(dataDir, client)
 	modelsH := handlers.NewModelsHandler(client)
 	tracksH := handlers.NewTracksHandler()
 	uploadH := handlers.NewUploadHandler(dataDir)
@@ -37,6 +38,7 @@ func newTestRouter(dataDir string) *gin.Engine {
 	api.GET("/health", modelsH.HealthCheck)
 	api.GET("/models", modelsH.ListModels)
 	api.GET("/tracks", tracksH.ListTracks)
+	api.POST("/session_telemetry", analysisH.LoadSessionTelemetry)
 	api.POST("/uploads/init", uploadH.InitUpload)
 	api.PUT("/uploads/:upload_id/chunk", uploadH.UploadChunk)
 	api.POST("/uploads/:upload_id/complete", uploadH.CompleteUpload)
@@ -217,5 +219,38 @@ func TestChunkedUpload_CreatesSessionListedInSessions(t *testing.T) {
 	// Verify file actually landed in the derived session folder.
 	if _, err := os.Stat(filepath.Join(dir, "test-session", "race01", "race01.mat")); err != nil {
 		t.Fatalf("expected uploaded file in derived session folder: %v", err)
+	}
+}
+
+func TestLoadSessionTelemetry_AllowsTelemetryOnlySession(t *testing.T) {
+	dir := t.TempDir()
+	sessDir := filepath.Join(dir, "test-session", "telemetry-only")
+	if err := os.MkdirAll(sessDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Minimal CSV accepted by the parser: 14 metadata rows, header, units, then data.
+	csv := strings.Repeat("meta\n", 14) +
+		"Time,Speed,Lap,GPS Latitude,GPS Longitude\n" +
+		"s,km/h,-,deg,deg\n" +
+		"0.001,120.5,1,25.487,51.447\n" +
+		"0.002,121.0,1,25.488,51.448\n"
+	if err := os.WriteFile(filepath.Join(sessDir, "telemetry.csv"), []byte(csv), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	r := newTestRouter(dir)
+	req := httptest.NewRequest(http.MethodPost, "/api/session_telemetry", strings.NewReader("session_id=telemetry-only"))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("X-Client-Session-Id", "test-session")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	if !strings.Contains(w.Body.String(), "telemetry_series") {
+		t.Fatalf("expected telemetry payload, got: %s", w.Body.String())
 	}
 }
