@@ -196,136 +196,47 @@ export function clearAllSessionStates(): void {
 }
 
 // Saved UI state per backend session (one entry per session_id, overwritten on save)
-const SESSION_SNAPSHOTS_LIST_KEY = 'rf2_snapshots_v2';
-const LAST_LOCKED_PARAMS_KEY = 'rf2_last_locked_parameters_v1';
+// NOTE: Snapshot and locked-params persistence has been moved to file-based save/load
+// in the Datos tab. These functions are kept as stubs for backward compatibility
+// but no longer persist across sessions.
 
-// Keep snapshot payload bounded to avoid browser localStorage quota crashes.
-const SNAPSHOT_MAX_AGENT_REPORT_CHARS = 1200;
-
-function normalizeSnapshot(raw: Partial<SessionSnapshot>): SessionSnapshot {
-  const savedAt = raw.saved_at ?? new Date().toISOString();
-  const sessionId = raw.session_id ?? 'local';
-  return {
-    session_id: sessionId,
-    saved_at: savedAt,
-    state: raw.state ?? 'telemetry_loaded',
-    locked_parameters: Array.isArray(raw.locked_parameters) ? raw.locked_parameters : [],
-    analysis_result: raw.analysis_result ?? null,
-    full_setup: raw.full_setup ?? null,
-  };
+export interface SessionSnapshot {
+  session_id: string;
+  saved_at: string;
+  state: SessionState;
+  locked_parameters: string[];
+  analysis_result: AnalysisResponse | null;
+  full_setup: Record<string, SetupChange[]> | null;
 }
 
-function compactAnalysisForSnapshot(analysis: AnalysisResponse | null): AnalysisResponse | null {
-  if (!analysis) return null;
-
-  return {
-    ...analysis,
-    // These arrays dominate storage usage and are reloaded from backend on load.
-    circuit_data: [],
-    issues_on_map: [],
-    laps_data: [],
-    telemetry_series: [],
-    agent_reports: Array.isArray(analysis.agent_reports)
-      ? analysis.agent_reports.map((report) => ({
-          section: report?.section ?? '',
-          raw: typeof report?.raw === 'string'
-            ? report.raw.slice(0, SNAPSHOT_MAX_AGENT_REPORT_CHARS)
-            : '',
-        }))
-      : [],
-  };
+/** @deprecated No longer persists — use file-based save/load in Datos tab */
+export function getSessionSnapshot(_id: string): SessionSnapshot | null {
+  return null;
 }
 
-function compactSnapshotForStorage(snapshot: SessionSnapshot): SessionSnapshot {
-  return {
-    ...snapshot,
-    analysis_result: compactAnalysisForSnapshot(snapshot.analysis_result),
-  };
+/** @deprecated No longer persists — use file-based save/load in Datos tab */
+export function saveSessionSnapshot(_snapshot: SessionSnapshot): void {
+  // no-op
 }
 
-function persistSnapshotsWithFallback(snapshots: SessionSnapshot[]): void {
-  const sorted = [...snapshots].sort((a, b) => b.saved_at.localeCompare(a.saved_at));
-
-  const attempts: SessionSnapshot[][] = [
-    sorted,
-    sorted.map((entry) => compactSnapshotForStorage(entry)),
-    sorted.length > 0 ? [compactSnapshotForStorage(sorted[0])] : [],
-  ];
-
-  for (const candidate of attempts) {
-    try {
-      localStorage.setItem(SESSION_SNAPSHOTS_LIST_KEY, JSON.stringify(candidate));
-      return;
-    } catch {
-      // Continue trying with a smaller payload.
-    }
-  }
-
-  throw new Error('No se pudo guardar por limite de almacenamiento del navegador. Usa "Limpiar todo" y vuelve a intentar.');
-}
-
-function readAllSnapshots(): SessionSnapshot[] {
-  if (typeof window === 'undefined' || !window.localStorage) return [];
-  try {
-    const parsed = JSON.parse(localStorage.getItem(SESSION_SNAPSHOTS_LIST_KEY) ?? '[]');
-    if (!Array.isArray(parsed)) return [];
-    return parsed.map((entry) => normalizeSnapshot(entry as Partial<SessionSnapshot>));
-  } catch {
-    return [];
-  }
-}
-
-/** Returns saved state for one backend session (or null if none). */
-export function getSessionSnapshot(id: string): SessionSnapshot | null {
-  const all = readAllSnapshots().filter((s) => s.session_id === id);
-  if (all.length === 0) return null;
-  all.sort((a, b) => b.saved_at.localeCompare(a.saved_at));
-  return all[0];
-}
-
-/** Saves snapshot for a session, overwriting previous saved state for that session. */
-export function saveSessionSnapshot(snapshot: SessionSnapshot): void {
-  if (typeof window === 'undefined' || !window.localStorage) return;
-  const normalized = compactSnapshotForStorage(normalizeSnapshot(snapshot));
-  const all = readAllSnapshots().filter((s) => s.session_id !== normalized.session_id);
-  all.push(normalized);
-  persistSnapshotsWithFallback(all);
-}
-
-/** Removes saved state for one backend session. */
-export function removeSessionSnapshot(sessionId: string): void {
-  if (typeof window === 'undefined' || !window.localStorage) return;
-  const all = readAllSnapshots().filter(
-    (s) => s.session_id !== sessionId,
-  );
-  persistSnapshotsWithFallback(all);
+/** @deprecated No longer persists */
+export function removeSessionSnapshot(_sessionId: string): void {
+  // no-op
 }
 
 export function clearAllSessionSnapshots(): void {
   if (typeof window === 'undefined' || !window.localStorage) return;
-  localStorage.removeItem(SESSION_SNAPSHOTS_LIST_KEY);
+  localStorage.removeItem('rf2_snapshots_v2');
 }
 
-/** Stores a global copy of the latest locked-parameter selection (overwritten on each save). */
-export function saveLastLockedParameters(params: string[]): void {
-  if (typeof window === 'undefined' || !window.localStorage) return;
-  const normalized = Array.from(new Set(params.map((p) => p.trim()).filter((p) => p.length > 0)));
-  localStorage.setItem(LAST_LOCKED_PARAMS_KEY, JSON.stringify(normalized));
+/** @deprecated No longer persists — use file-based save/load in Datos tab */
+export function saveLastLockedParameters(_params: string[]): void {
+  // no-op
 }
 
-/** Returns the latest locked-parameter selection copy, or [] if unavailable. */
+/** @deprecated No longer persists — use file-based save/load in Datos tab */
 export function getLastLockedParameters(): string[] {
-  if (typeof window === 'undefined' || !window.localStorage) return [];
-  try {
-    const parsed = JSON.parse(localStorage.getItem(LAST_LOCKED_PARAMS_KEY) ?? '[]');
-    if (!Array.isArray(parsed)) return [];
-    return parsed
-      .filter((entry): entry is string => typeof entry === 'string')
-      .map((entry) => entry.trim())
-      .filter((entry) => entry.length > 0);
-  } catch {
-    return [];
-  }
+  return [];
 }
 
 export async function getSetup(sessionId: string): Promise<Record<string, SetupChange[]>> {

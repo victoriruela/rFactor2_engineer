@@ -7,8 +7,6 @@ import SetupTable from '../../src/components/SetupTable';
 import MarkdownText from '../../src/components/MarkdownText';
 import ChiefReasoningFormatter from '../../src/components/ChiefReasoningFormatter';
 import TelemetryExpertAnalysisFormatter from '../../src/components/TelemetryExpertAnalysisFormatter';
-import SetupCompleteSection from '../../src/components/SetupCompleteSection';
-import LockedParametersPanel from '../../src/components/LockedParametersPanel';
 import { toSpanishParameterName } from '../../src/utils/labelTranslator';
 
 const AGENT_LABELS: Record<string, string> = {
@@ -69,7 +67,7 @@ export default function AnalysisScreen() {
   }, [refreshModels]);
 
   useEffect(() => {
-    // Ensure setup is available in Analysis tab for loaded sessions (including after reload)
+    // Ensure setup is available for analysis (needed for locked params filtering)
     if (!activeSessionId || fullSetup) {
       return;
     }
@@ -79,8 +77,6 @@ export default function AnalysisScreen() {
         // Ignore setup preload errors; user can still run analysis.
       });
   }, [activeSessionId, fullSetup, setFullSetup]);
-
-  const effectiveFullSetup = fullSetup ?? analysisResult?.full_setup ?? null;
 
   const filteredSetupAnalysis = useMemo<Record<string, SetupChange[]>>(() => {
     const source = analysisResult?.setup_analysis ?? {};
@@ -240,20 +236,6 @@ export default function AnalysisScreen() {
       </Pressable>
 
       {analysisError && <Text style={styles.error}>{analysisError}</Text>}
-
-      {/* Locked parameters panel */}
-      {effectiveFullSetup && (
-        <View style={styles.section}>
-          <LockedParametersPanel fullSetup={effectiveFullSetup} />
-        </View>
-      )}
-
-      {/* Setup completo section */}
-      {effectiveFullSetup && (
-        <View style={styles.section}>
-          <SetupCompleteSection fullSetup={effectiveFullSetup} />
-        </View>
-      )}
 
       {/* Real-time progress log - collapsible */}
       {progressMessages.length > 0 && (

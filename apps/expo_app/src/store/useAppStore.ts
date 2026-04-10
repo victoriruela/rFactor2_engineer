@@ -1,16 +1,14 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import type { AnalysisResponse, SessionInfo, ModelInfo, TrackInfo, SetupChange } from '../api';
+import type { AnalysisResponse, ModelInfo, TrackInfo, SetupChange } from '../api';
 
 interface AppState {
   // Health
   serverStatus: 'unknown' | 'ok' | 'degraded' | 'offline';
   setServerStatus: (s: AppState['serverStatus']) => void;
 
-  // Sessions
-  sessions: SessionInfo[];
+  // Active session
   activeSessionId: string | null;
-  setSessions: (s: SessionInfo[]) => void;
   setActiveSessionId: (id: string | null) => void;
 
   // Upload
@@ -58,9 +56,7 @@ export const useAppStore = create<AppState>()(persist((set) => ({
   serverStatus: 'unknown',
   setServerStatus: (serverStatus) => set({ serverStatus }),
 
-  sessions: [],
   activeSessionId: null,
-  setSessions: (sessions) => set({ sessions }),
   setActiveSessionId: (activeSessionId) => set({ activeSessionId }),
 
   uploadProgress: 0,
