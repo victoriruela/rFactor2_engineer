@@ -97,6 +97,21 @@ npx eslint .
 
 See `AGENTS.md` → "Development Methodology" → "Semantic Release" for SemVer rules.
 
+### Branching Workflow — MANDATORY
+
+1. **`main`** is the production branch. Never commit directly to main.
+2. **`develop`** is the integration branch. Must be synced to main before starting new work.
+3. **Feature branches**: branch from `develop` as `feature/<name>`, develop, then merge back to `develop`.
+4. **Testing**: after merging to `develop`, run full test suite + manual validation.
+5. **Release**: create `release/vX.Y.Z` from `develop`, merge to `main`, tag, and deploy.
+6. **Post-release**: merge `main` back to `develop`, then start next feature.
+
+```
+main ←── release/vX.Y.Z ←── develop ←── feature/<name>
+```
+
+Agents must follow this workflow. Direct commits to `main` or `develop` are only allowed for documentation-only changes.
+
 ## Bypassing Hooks
 
 Hooks should **never** be bypassed during normal development. If a hook fails:

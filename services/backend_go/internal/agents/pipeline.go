@@ -122,7 +122,11 @@ func (p *Pipeline) AnalyzeWithProgress(ctx context.Context, telemetrySummary str
 	// 5. Post-processing: axle symmetry
 	enforceAxleSymmetry(chiefResult, filteredSetup)
 
-	// 6. Format response
+	// 6. Coherence pass: keep reason text aligned with final values after all guardrails.
+	normalizeSectionReasonsWithFinalValues(specialistReports, filteredSetup)
+	normalizeChiefReasonsWithFinalValues(chiefResult, filteredSetup)
+
+	// 7. Format response
 	return p.formatResponse(drivingAnalysis, telemetryAnalysis, specialistReports, chiefResult, filteredSetup, sessionStats, telemetrySummary), nil
 }
 
@@ -787,6 +791,11 @@ func (p *Pipeline) formatResponse(drivingAnalysis string, telemetryAnalysis stri
 	if chief != nil {
 		chiefReasoning = chief.Reasoning
 	}
+	if len(fullSetup) > 0 {
+		if strings.TrimSpace(chiefReasoning) == "" || strings.HasPrefix(chiefReasoning, "No se aplican cambios de setup") {
+			chiefReasoning = buildChiefReasoningFromSetupMap(fullSetup)
+		}
+	}
 
 	return &domain.AnalysisResponse{
 		DrivingAnalysis:   drivingAnalysis,
@@ -798,6 +807,32 @@ func (p *Pipeline) formatResponse(drivingAnalysis string, telemetryAnalysis stri
 		TelemetrySummary:  summary,
 		ChiefReasoning:    chiefReasoning,
 	}
+}
+
+func buildChiefReasoningFromSetupMap(fullSetup map[string][]domain.SetupChange) string {
+	sections := make([]string, 0, len(fullSetup))
+	for section := range fullSetup {
+		sections = append(sections, section)
+	}
+	sort.Strings(sections)
+
+	lines := make([]string, 0)
+	for _, section := range sections {
+		items := fullSetup[section]
+		for _, item := range items {
+			reason := strings.TrimSpace(item.Reason)
+			if reason == "" {
+				reason = fmt.Sprintf("Ajustar de %s a %s: ajuste respaldado por telemetría y lógica de ingeniería de pista.", item.OldValue, item.NewValue)
+			}
+			lines = append(lines, fmt.Sprintf("- %s / %s: %s", section, item.Parameter, reason))
+		}
+	}
+
+	if len(lines) == 0 {
+		return "No se aplican cambios de setup tras consolidar guardarraíles y coherencia física."
+	}
+
+	return "Estrategia final validada por telemetría y guardarraíles:\n" + strings.Join(lines, "\n")
 }
 
 func formatSetupParamsForLLM(params map[string]string) map[string]string {
@@ -1282,4 +1317,155 @@ func harmonizeSymmetricPair(left, right *domain.SetupChange, setup *domain.Setup
 	left.Reason += symmetryNote
 	right.NewValue = chosenStr
 	right.Reason += symmetryNote
+}
+
+func normalizeSectionReasonsWithFinalValues(reports []domain.SectionReport, setup *domain.Setup) {
+	if setup == nil {
+		return
+	}
+	for secIdx := range reports {
+		sec := &reports[secIdx]
+		origSec := setup.Sections[sec.Section]
+		if origSec == nil {
+			continue
+		}
+		for itemIdx := range sec.Items {
+			item := &sec.Items[itemIdx]
+			item.NewValue = ensureUnitValue(item.NewValue, origSec.Params[item.Parameter])
+			item.Reason = buildCoherentReason(item.Reason, origSec.Params[item.Parameter], item.NewValue)
+		}
+	}
+}
+
+func normalizeChiefReasonsWithFinalValues(chief *chiefOutput, setup *domain.Setup) {
+	if chief == nil || setup == nil {
+		return
+	}
+
+	for secIdx := range chief.Sections {
+		sec := &chief.Sections[secIdx]
+		origSec := setup.Sections[sec.Section]
+		if origSec == nil {
+			continue
+		}
+		for itemIdx := range sec.Items {
+			item := &sec.Items[itemIdx]
+			item.NewValue = ensureUnitValue(item.NewValue, origSec.Params[item.Parameter])
+			item.Reason = buildCoherentReason(item.Reason, origSec.Params[item.Parameter], item.NewValue)
+		}
+	}
+
+	chief.Reasoning = buildChiefReasoningFromFinalSetup(chief.Sections, setup)
+}
+
+func buildChiefReasoningFromFinalSetup(sections []domain.SectionReport, setup *domain.Setup) string {
+	lines := make([]string, 0)
+	for _, sec := range sections {
+		origSec := setup.Sections[sec.Section]
+		if origSec == nil {
+			continue
+		}
+		for _, item := range sec.Items {
+			oldRaw := origSec.Params[item.Parameter]
+			if strings.TrimSpace(oldRaw) == "" {
+				continue
+			}
+			line := fmt.Sprintf("- %s / %s: %s", sec.Section, item.Parameter, buildCoherentReason("", oldRaw, item.NewValue))
+			lines = append(lines, line)
+		}
+	}
+
+	if len(lines) == 0 {
+		return "No se aplican cambios de setup tras consolidar guardarraíles y coherencia física."
+	}
+
+	return "Estrategia final validada por telemetría y guardarraíles:\n" + strings.Join(lines, "\n")
+}
+
+func buildCoherentReason(existingReason, oldRaw, newRaw string) string {
+	oldVal := displaySetupValue(oldRaw)
+	newVal := ensureUnitValue(newRaw, oldRaw)
+	direction := inferDirection(oldVal, newVal)
+
+	base := fmt.Sprintf("%s de %s a %s", direction, oldVal, newVal)
+	detail := sanitizeReasonDetail(existingReason)
+	if detail == "" {
+		return base + ": ajuste respaldado por telemetría y lógica de ingeniería de pista."
+	}
+
+	return base + ": " + detail
+}
+
+func inferDirection(oldVal, newVal string) string {
+	oldNum, okOld := ExtractNumeric(oldVal)
+	newNum, okNew := ExtractNumeric(newVal)
+	if okOld && okNew {
+		if newNum > oldNum {
+			return "Aumentar"
+		}
+		if newNum < oldNum {
+			return "Reducir"
+		}
+		return "Mantener"
+	}
+	if strings.TrimSpace(newVal) == strings.TrimSpace(oldVal) {
+		return "Mantener"
+	}
+	return "Ajustar"
+}
+
+func sanitizeReasonDetail(reason string) string {
+	clean := normalizeMojibake(strings.TrimSpace(reason))
+	if clean == "" {
+		return ""
+	}
+
+	patterns := []string{
+		`(?i)\b(aumentar|subir|incrementar|reducir|bajar|disminuir|mantener|ajustar)\b\s+de\s+[^:;,.]+\s+a\s+[^:;,.]+`,
+		`(?i)\b(objetivo|target)\s*[:=]?\s*[^:;,.]+`,
+	}
+	for _, pattern := range patterns {
+		re := regexp.MustCompile(pattern)
+		clean = strings.TrimSpace(re.ReplaceAllString(clean, ""))
+	}
+
+	tracePrefix := regexp.MustCompile(`(?i)^\s*de\s+.+?\s+a\s+.+?\s*:\s*`)
+	for {
+		trimmed := strings.TrimSpace(tracePrefix.ReplaceAllString(clean, ""))
+		if trimmed == clean {
+			break
+		}
+		clean = trimmed
+	}
+
+	clean = regexp.MustCompile(`\s+:\s+:`).ReplaceAllString(clean, ":")
+	clean = regexp.MustCompile(`\s{2,}`).ReplaceAllString(clean, " ")
+	clean = strings.TrimLeft(clean, ":;,. ")
+	clean = strings.TrimSpace(clean)
+	return clean
+}
+
+func normalizeMojibake(s string) string {
+	replacer := strings.NewReplacer(
+		"telemetrÃa", "telemetría",
+		"guardarraÃles", "guardarraíles",
+		"vehÃculo", "vehículo",
+		"frenada intensa", "frenada intensa",
+		"distribuciÃ³n", "distribución",
+		"aceleraciÃ³n", "aceleración",
+		"mÃnima", "mínima",
+		"cÃ¡mara", "cámara",
+		"desvÃo", "desvío",
+		"suspensiÃ³n", "suspensión",
+		"tracciÃ³n", "tracción",
+		"Ã³", "ó",
+		"Ã¡", "á",
+		"Ã©", "é",
+		"Ã­", "í",
+		"Ãº", "ú",
+		"Ã±", "ñ",
+		"Â°", "°",
+		"â", "'",
+	)
+	return replacer.Replace(s)
 }
