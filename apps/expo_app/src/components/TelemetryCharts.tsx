@@ -3,7 +3,7 @@
  * Shows Speed / Throttle+Brake / RPM / Gear as large full-width SVG line charts.
  * A draggable vertical cursor moves across all four charts simultaneously.
  */
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { View, Text, StyleSheet, Dimensions, Platform } from 'react-native';
 import Svg, { Line, Polyline, Rect, Text as SvgText, Circle } from 'react-native-svg';
 import type { TelemetrySample } from '../api';
@@ -15,12 +15,12 @@ interface Props {
   charts?: ChartConfig[];
 }
 
-const CHART_HEIGHT = 160;
+const CHART_HEIGHT = 200;
 const PAD_LEFT = 46;
 const PAD_RIGHT = 16;
 const PAD_TOP = 10;
 const PAD_BOTTOM = 26;
-const GRID_LINES = 4; // number of horizontal grid divisions
+const GRID_LINES = 6; // number of horizontal grid divisions
 
 export interface ChartConfig {
   label: string;
@@ -145,8 +145,8 @@ const BRAKE_ACTIVE_THRESHOLD = 5;    // % above which brake is considered "on"
 const THROTTLE_ACTIVE_THRESHOLD = 5; // % above which throttle is considered "on"
 const MIN_PEDAL_SAMPLES = 60;         // shorter zones are sensor artifacts (~600 ms at 100 Hz)
 
-function removePedalArtifacts(values: number[], activeThreshold: number): number[] {
-  if (values.length < MIN_PEDAL_SAMPLES) return values;
+function removePedalArtifacts(values: number[], activeThreshold: number, minSamples: number): number[] {
+  if (values.length < minSamples) return values;
   const out = [...values];
   let i = 0;
   while (i < out.length) {
@@ -161,7 +161,7 @@ function removePedalArtifacts(values: number[], activeThreshold: number): number
     }
     const end = i - 1;
     // Short zone → artifact: zero it out.
-    if (end - start + 1 < MIN_PEDAL_SAMPLES) {
+    if (end - start + 1 < minSamples) {
       for (let j = start; j <= end; j++) {
         out[j] = 0;
       }
@@ -249,6 +249,7 @@ function buildPolylinePoints(norm: number[], innerW: number, innerH: number, n: 
 
 export default function TelemetryCharts({ samples, onIndexChange, showCursorBar = true, charts: chartsProp }: Props) {
   const [cursorIdx, setCursorIdx] = useState<number>(0);
+  const [isDragging, setIsDragging] = useState<boolean>(false);
   const { width: screenW } = Dimensions.get('window');
   const safeSamples = Array.isArray(samples) ? samples : [];
   const chartWidth = screenW - 32; // full width with small margin
@@ -261,6 +262,30 @@ export default function TelemetryCharts({ samples, onIndexChange, showCursorBar 
     return safeSamples.reduce((min, sample) => (sample.t < min ? sample.t : min), safeSamples[0].t);
   }, [safeSamples]);
 
+  // Reset cursor when the sample set changes (e.g. lap selection changes),
+  // otherwise cursorIdx may be out of bounds and sd.raw[cursorIdx] returns undefined.
+  useEffect(() => {
+    setCursorIdx(0);
+  }, [safeSamples]);
+
+  // On web, disable text selection while dragging the chart cursor.
+  useEffect(() => {
+    if (Platform.OS !== 'web') return;
+    const body = document.body;
+    const previousUserSelect = body.style.userSelect;
+    const previousWebkitUserSelect = (body.style as CSSStyleDeclaration & { webkitUserSelect?: string }).webkitUserSelect;
+
+    if (isDragging) {
+      body.style.userSelect = 'none';
+      (body.style as CSSStyleDeclaration & { webkitUserSelect?: string }).webkitUserSelect = 'none';
+    }
+
+    return () => {
+      body.style.userSelect = previousUserSelect;
+      (body.style as CSSStyleDeclaration & { webkitUserSelect?: string }).webkitUserSelect = previousWebkitUserSelect;
+    };
+  }, [isDragging]);
+
   // Precompute per-chart normalised data once
   const chartData = useMemo(
     () =>
@@ -269,13 +294,18 @@ export default function TelemetryCharts({ samples, onIndexChange, showCursorBar 
 
         const isGearChart = cfg.label === 'Marcha';
 
+        // Adaptive threshold: MIN_PEDAL_SAMPLES=60 was designed for 100 Hz raw data.
+        // After backend downsampling to ≤12 000 samples/session, each lap may have
+        // only ~200 samples; 60 samples would represent >25 s — far too aggressive.
+        // Scale proportionally: 0.5 % of current sample count, minimum 2.
+        const minPedalSamples = Math.max(2, Math.floor(safeSamples.length * 0.005));
         const series = cfg.keys.map((k) => {
           const raw = safeSamples.map((s) => finiteOrZero(s[k]));
           let transformed = isPedalsChart ? raw.map((v) => normalizePedalPercent(v)) : raw;
           if (isPedalsChart && k === 'brk') {
-            transformed = removePedalArtifacts(transformed, BRAKE_ACTIVE_THRESHOLD);
+            transformed = removePedalArtifacts(transformed, BRAKE_ACTIVE_THRESHOLD, minPedalSamples);
           } else if (isPedalsChart && k === 'thr') {
-            transformed = removePedalArtifacts(transformed, THROTTLE_ACTIVE_THRESHOLD);
+            transformed = removePedalArtifacts(transformed, THROTTLE_ACTIVE_THRESHOLD, minPedalSamples);
           } else if (isGearChart) {
             transformed = removeGearZeros(transformed);
           }
@@ -362,20 +392,16 @@ export default function TelemetryCharts({ samples, onIndexChange, showCursorBar 
       {/* Cursor info bar */}
       {showCursorBar && curSample && (
         <View style={styles.cursorBar}>
-          <Text style={styles.cursorBarText}>
-            t = {formatCursorTimestamp(Math.max(0, curSample.t - lapTimeOffset))} &nbsp;|&nbsp; Vuelta{' '}
-            <Text style={styles.cursorBarHighlight}>{curSample.lap}</Text>
-            &nbsp;|&nbsp;
-            <Text style={{ color: '#4fc3f7' }}>{curSample.spd.toFixed(0)} km/h</Text>
-            &nbsp;&nbsp;
-            <Text style={{ color: '#66bb6a' }}>{formatPedalPercent(curSample.thr)}</Text>
-            &nbsp;
-            <Text style={{ color: '#ef5350' }}>{formatPedalPercent(curSample.brk)}</Text>
-            &nbsp;&nbsp;
-            <Text style={{ color: '#ffa726' }}>{curSample.rpm.toFixed(0)} rpm</Text>
-            &nbsp;&nbsp;
-            <Text style={{ color: '#ce93d8' }}>{Math.round(curSample.gear)}ª</Text>
-          </Text>
+          <View style={styles.cursorBarRow}>
+            <Text style={styles.cursorBarText}>{`t = ${formatCursorTimestamp(Math.max(0, curSample.t - lapTimeOffset))} | Vuelta `}</Text>
+            <Text style={[styles.cursorBarText, styles.cursorBarHighlight]}>{curSample.lap}</Text>
+            <Text style={styles.cursorBarText}>{' | '}</Text>
+            <Text style={[styles.cursorBarText, styles.cursorSpeed]}>{curSample.spd.toFixed(0)} km/h</Text>
+            <Text style={[styles.cursorBarText, styles.cursorThrottle]}>{formatPedalPercent(curSample.thr)}</Text>
+            <Text style={[styles.cursorBarText, styles.cursorBrake]}>{formatPedalPercent(curSample.brk)}</Text>
+            <Text style={[styles.cursorBarText, styles.cursorRpm]}>{curSample.rpm.toFixed(0)} rpm</Text>
+            <Text style={[styles.cursorBarText, styles.cursorGear]}>{Math.round(curSample.gear)}ª</Text>
+          </View>
         </View>
       )}
 
@@ -393,13 +419,22 @@ export default function TelemetryCharts({ samples, onIndexChange, showCursorBar 
                 {seriesData.map((sd, si) => {
                   const stats = computeStats(sd.raw);
                   const fmt = (v: number) => formatStatValue(v, cfg.label);
+                  const seriesLabel = cfg.seriesLabels?.[si] ?? (cfg.keys.length > 1 ? (si === 0 ? 'Acelerador' : 'Freno') : null);
+                  const cursorVal = sd.raw[cursorIdx] ?? 0;
+                  const statText = [
+                    seriesLabel,
+                    `▶${fmt(cursorVal)}`,
+                    `min ${fmt(stats.min)}`,
+                    `avg ${fmt(stats.avg)}`,
+                    `max ${fmt(stats.max)}`,
+                  ].filter(Boolean).join('  ');
                   return (
                     <View key={si} style={styles.chartStatGroup}>
                       {cfg.keys.length > 1 && (
                         <View style={[styles.statDot, { backgroundColor: cfg.colors[si] ?? '#aaa' }]} />
                       )}
                       <Text style={[styles.chartStatText, { color: cfg.colors[si] ?? '#888' }]}>
-                        min {fmt(stats.min)}{'  '}avg {fmt(stats.avg)}{'  '}max {fmt(stats.max)}
+                        {statText}
                       </Text>
                     </View>
                   );
@@ -409,18 +444,25 @@ export default function TelemetryCharts({ samples, onIndexChange, showCursorBar 
 
             {/* SVG chart — use a div wrapper on Web for mouse events */}
             <View
-              style={[styles.chartContainer, { width: chartWidth }]}
+              style={[styles.chartContainer, { width: chartWidth }, { cursor: isDragging ? 'grabbing' : 'grab' } as object]}
               {...(Platform.OS === 'web'
                 ? {
                     // @ts-ignore
-                    onMouseMove: (e: MouseEvent) => {
-                      const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-                      handlePointerMove(e.clientX - rect.left);
-                    },
                     onMouseDown: (e: MouseEvent) => {
+                      e.preventDefault();
+                      setIsDragging(true);
                       const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
                       handlePointerMove(e.clientX - rect.left);
                     },
+                    onMouseMove: (e: MouseEvent) => {
+                      if (!isDragging) return;
+                      e.preventDefault();
+                      const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                      handlePointerMove(e.clientX - rect.left);
+                    },
+                    onMouseUp: () => setIsDragging(false),
+                    onMouseLeave: () => setIsDragging(false),
+                    onDragStart: (e: DragEvent) => e.preventDefault(),
                   }
                 : {
                     onStartShouldSetResponder: () => true,
@@ -517,24 +559,6 @@ export default function TelemetryCharts({ samples, onIndexChange, showCursorBar 
         );
       })}
 
-      {/* Legend row */}
-      <View style={styles.legend}>
-        {activeCharts.flatMap((cfg, ci) =>
-          cfg.keys.map((k, si) => (
-            <View key={`${ci}-${si}`} style={styles.legendItem}>
-              <View style={[styles.legendDot, { backgroundColor: cfg.colors[si] }]} />
-              <Text style={styles.legendText}>
-                {cfg.seriesLabels?.[si] ??
-                  (cfg.keys.length > 1
-                    ? si === 0
-                      ? 'Acelerador'
-                      : 'Freno'
-                    : cfg.label)}
-              </Text>
-            </View>
-          )),
-        )}
-      </View>
     </View>
   );
 }
@@ -558,9 +582,31 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontFamily: 'monospace',
   },
+  cursorBarRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+    columnGap: 8,
+    rowGap: 2,
+  },
   cursorBarHighlight: {
     color: '#fff',
     fontWeight: 'bold',
+  },
+  cursorSpeed: {
+    color: '#4fc3f7',
+  },
+  cursorThrottle: {
+    color: '#66bb6a',
+  },
+  cursorBrake: {
+    color: '#ef5350',
+  },
+  cursorRpm: {
+    color: '#ffa726',
+  },
+  cursorGear: {
+    color: '#ce93d8',
   },
   chartWrap: {
     marginTop: 4,
@@ -600,7 +646,7 @@ const styles = StyleSheet.create({
     fontFamily: 'monospace',
   },
   chartContainer: {
-    cursor: 'crosshair',
+    // cursor applied inline (grab / grabbing)
   } as object,
   legend: {
     flexDirection: 'row',

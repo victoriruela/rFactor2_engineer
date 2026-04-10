@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { persist } from 'zustand/middleware';
 import type { AnalysisResponse, SessionInfo, ModelInfo, TrackInfo, SetupChange } from '../api';
 
 interface AppState {
@@ -53,7 +54,7 @@ interface AppState {
   clearLockedParameters: () => void;
 }
 
-export const useAppStore = create<AppState>((set) => ({
+export const useAppStore = create<AppState>()(persist((set) => ({
   serverStatus: 'unknown',
   setServerStatus: (serverStatus) => set({ serverStatus }),
 
@@ -103,4 +104,11 @@ export const useAppStore = create<AppState>((set) => ({
   }),
   setLockedParameters: (lockedParameters) => set({ lockedParameters }),
   clearLockedParameters: () => set({ lockedParameters: new Set() }),
+}), {
+  name: 'rf2-app-store',
+  partialize: (state) => ({
+    activeSessionId: state.activeSessionId,
+    selectedModel: state.selectedModel,
+    selectedProvider: state.selectedProvider,
+  }),
 }));

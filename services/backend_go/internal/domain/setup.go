@@ -4,6 +4,10 @@ package domain
 type SetupSection struct {
 	Name   string            `json:"name"`
 	Params map[string]string `json:"params"`
+	// ReadOnlyParams lists parameter keys that came from commented-out lines in the SVM
+	// (not adjustable in-game). They are included in Params for display/AI context but
+	// must never be proposed as changes.
+	ReadOnlyParams []string `json:"read_only_params,omitempty"`
 }
 
 // Setup represents the full vehicle setup from an .svm file.

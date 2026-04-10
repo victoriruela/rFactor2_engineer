@@ -2,6 +2,8 @@ package domain
 
 import "math"
 
+const maxTelemetrySeriesSamples = 12000
+
 // TelemetryData holds parsed telemetry channels keyed by name.
 type TelemetryData struct {
 	Channels map[string][]float64
@@ -116,7 +118,10 @@ func (td *TelemetryData) ExtractTimeSeries() []TelemetrySample {
 		return nil
 	}
 
-	step := 1
+	sampleCount := n
+	if sampleCount > maxTelemetrySeriesSamples {
+		sampleCount = maxTelemetrySeriesSamples
+	}
 	timeData := td.Channels[td.TimeCol]
 	lapData := td.Channels[td.LapCol]
 	speed := firstChannel(td.Channels, "Speed", "Ground_Speed")
@@ -209,8 +214,13 @@ func (td *TelemetryData) ExtractTimeSeries() []TelemetrySample {
 		return 0
 	}
 
-	out := make([]TelemetrySample, 0, n/step+1)
-	for i := 0; i < n; i += step {
+	out := make([]TelemetrySample, 0, sampleCount)
+	for j := 0; j < sampleCount; j++ {
+		i := j
+		if sampleCount > 1 && n > sampleCount {
+			i = int(float64(j) * float64(n-1) / float64(sampleCount-1))
+		}
+
 		s := TelemetrySample{
 			T:    safeGet(timeData, i),
 			Spd:  safeGet(speed, i),
@@ -298,7 +308,9 @@ type LapStats struct {
 	AvgSpeed    float64 `json:"avg_speed"`
 	MaxSpeed    float64 `json:"max_speed"`
 	AvgThrottle float64 `json:"avg_throttle"`
+	MaxThrottle float64 `json:"max_throttle"`
 	AvgBrake    float64 `json:"avg_brake"`
+	MaxBrake    float64 `json:"max_brake"`
 	AvgRPM      float64 `json:"avg_rpm"`
 }
 
@@ -390,7 +402,9 @@ func (td *TelemetryData) SessionStats() SessionStats {
 			ls.AvgSpeed = avgSlice(td.Channels["Speed"], startIdx, endIdx)
 			ls.MaxSpeed = maxSlice(td.Channels["Speed"], startIdx, endIdx)
 			ls.AvgThrottle = avgSlice(td.Channels["Throttle"], startIdx, endIdx)
+			ls.MaxThrottle = maxSlice(td.Channels["Throttle"], startIdx, endIdx)
 			ls.AvgBrake = avgSlice(td.Channels["Brake"], startIdx, endIdx)
+			ls.MaxBrake = maxSlice(td.Channels["Brake"], startIdx, endIdx)
 			ls.AvgRPM = avgSlice(td.Channels["RPM"], startIdx, endIdx)
 		}
 

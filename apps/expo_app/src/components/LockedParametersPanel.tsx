@@ -1,12 +1,14 @@
 /**
  * LockedParametersPanel — UI to mark/unmark setup parameters as "locked" (fixed).
  * Locked parameters won't get change recommendations from AI.
- * Shows which parameters are currently locked and allows toggling.
+ * Shows only currently locked parameters and allows unlocking.
  */
 import React, { useState } from 'react';
-import { View, Text, StyleSheet, Pressable, ScrollView } from 'react-native';
+import { View, Text, StyleSheet, Pressable } from 'react-native';
 import { useAppStore } from '../store/useAppStore';
 import type { SetupChange } from '../api';
+import { getClicksDisplay, getValueDisplay } from '../utils/setupValueParser';
+import { toSpanishParameterName, toSpanishSectionName } from '../utils/labelTranslator';
 
 interface Props {
   fullSetup: Record<string, SetupChange[]>;
@@ -14,26 +16,18 @@ interface Props {
 }
 
 export default function LockedParametersPanel({ fullSetup, onLocked }: Props) {
-  const [expanded, setExpanded] = useState(true);
+  const [expanded, setExpanded] = useState(false);
   const { lockedParameters, toggleLockedParameter } = useAppStore();
 
-  // Flatten all parameters from all sections
-  const allParams = Object.values(fullSetup)
-    .flat()
-    .map((p) => p.parameter)
-    .sort();
-
-  const uniqueParams = Array.from(new Set(allParams));
-  const lockedCount = uniqueParams.filter((p) => lockedParameters.has(p)).length;
+  const sections = Object.entries(fullSetup)
+    .map(([section, items]) => [section, items.filter((item) => lockedParameters.has(item.parameter))] as const)
+    .filter(([, items]) => items.length > 0);
+  const lockedCount = sections.reduce((acc, [, items]) => acc + items.length, 0);
 
   const handleToggle = (param: string) => {
     toggleLockedParameter(param);
     onLocked?.(lockedParameters);
   };
-
-  if (uniqueParams.length === 0) {
-    return null;
-  }
 
   return (
     <View style={styles.container}>
@@ -42,48 +36,53 @@ export default function LockedParametersPanel({ fullSetup, onLocked }: Props) {
         onPress={() => setExpanded(!expanded)}
       >
         <Text style={styles.headerText}>
-          {expanded ? '▼' : '▶'} Parámetros Fijados ({lockedCount}/{uniqueParams.length})
+          {expanded ? '▼' : '▶'} Parámetros Fijados ({lockedCount})
         </Text>
       </Pressable>
-
-      {expanded && (
+      {expanded ? (
         <View style={styles.content}>
-          {lockedCount > 0 && (
-            <View style={styles.lockedSummary}>
-              <Text style={styles.summaryLabel}>Parámetros fijados:</Text>
-              <Text style={styles.lockedList}>
-                {uniqueParams.filter((p) => lockedParameters.has(p)).join(', ')}
-              </Text>
+          {sections.length === 0 ? (
+            <View style={styles.emptyBox}>
+              <Text style={styles.emptyText}>No hay parámetros fijados todavía.</Text>
             </View>
+          ) : (
+            <>
+              {sections.map(([section, items]) => (
+                <View key={section} style={styles.section}>
+                  <Text style={styles.sectionName}>{toSpanishSectionName(section)}</Text>
+                  <View style={styles.paramsList}>
+                    {items.map((param, idx) => {
+                      const clicks = getClicksDisplay(param.old_value);
+                      const valueDisplay = getValueDisplay(param.old_value);
+                      return (
+                        <Pressable
+                          key={`${section}-${param.parameter}-${idx}`}
+                          style={styles.paramRow}
+                          onPress={() => handleToggle(param.parameter)}
+                        >
+                          <View style={styles.paramInfo}>
+                            <Text style={styles.paramName}>{toSpanishParameterName(param.parameter)}</Text>
+                            <View style={styles.paramDetailsRow}>
+                              <Text style={[styles.paramDetail, styles.clicksDetail]}>{clicks}</Text>
+                              <Text style={styles.paramValue}>{valueDisplay}</Text>
+                            </View>
+                          </View>
+                          <Text style={styles.lockIcon}>🔒</Text>
+                        </Pressable>
+                      );
+                    })}
+                  </View>
+                </View>
+              ))}
+              <View style={styles.hint}>
+                <Text style={styles.hintText}>
+                  Haz clic en un parámetro fijado para devolverlo a Setup Actual Completo.
+                </Text>
+              </View>
+            </>
           )}
-
-          <Text style={styles.instruction}>
-            Haz clic en los parámetros que no deseas que el IA cambie:
-          </Text>
-
-          <ScrollView
-            horizontal
-            contentContainerStyle={styles.paramGrid}
-            showsHorizontalScrollIndicator={false}
-          >
-            {uniqueParams.map((param) => {
-              const isLocked = lockedParameters.has(param);
-              return (
-                <Pressable
-                  key={param}
-                  style={[styles.paramChip, isLocked && styles.paramChipLocked]}
-                  onPress={() => handleToggle(param)}
-                >
-                  <Text style={[styles.paramText, isLocked && styles.paramTextLocked]}>
-                    {isLocked ? '🔒 ' : ''}
-                    {param}
-                  </Text>
-                </Pressable>
-              );
-            })}
-          </ScrollView>
         </View>
-      )}
+      ) : null}
     </View>
   );
 }
@@ -107,59 +106,97 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   content: {
-    paddingVertical: 12,
-    paddingHorizontal: 8,
+    paddingVertical: 8,
   },
-  lockedSummary: {
+  emptyBox: {
     backgroundColor: '#0d0d1f',
     borderRadius: 6,
-    padding: 8,
-    marginBottom: 12,
+    padding: 10,
     borderLeftWidth: 2,
     borderLeftColor: '#ff9800',
   },
-  summaryLabel: {
+  emptyText: {
+    color: '#ccc',
+    fontSize: 12,
+    fontStyle: 'italic',
+  },
+  section: {
+    marginBottom: 12,
+  },
+  sectionName: {
     color: '#ff9800',
     fontWeight: 'bold',
     fontSize: 12,
-    marginBottom: 4,
-  },
-  lockedList: {
-    color: '#ccc',
-    fontSize: 12,
-    lineHeight: 18,
-  },
-  instruction: {
-    color: '#888',
-    fontSize: 12,
     marginBottom: 8,
-    fontStyle: 'italic',
+    textTransform: 'uppercase',
+    paddingHorizontal: 4,
   },
-  paramGrid: {
+  paramsList: {
+    paddingLeft: 4,
+    borderLeftWidth: 2,
+    borderLeftColor: '#444',
+    gap: 4,
+  },
+  paramRow: {
     flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 6,
-  },
-  paramChip: {
-    paddingVertical: 6,
-    paddingHorizontal: 10,
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 8,
+    paddingHorizontal: 8,
+    marginHorizontal: 4,
     borderRadius: 4,
-    backgroundColor: '#222',
-    borderWidth: 1,
-    borderColor: '#444',
-    marginBottom: 6,
+    borderBottomWidth: 1,
+    borderBottomColor: '#222',
+    backgroundColor: '#0d0d1f',
   },
-  paramChipLocked: {
-    backgroundColor: '#ff9800',
-    borderColor: '#ff9800',
+  paramInfo: {
+    flex: 1,
+    gap: 4,
   },
-  paramText: {
-    color: '#aaa',
-    fontSize: 12,
+  paramName: {
+    color: '#ccc',
+    fontSize: 13,
     fontWeight: '500',
   },
-  paramTextLocked: {
-    color: '#000',
+  paramDetailsRow: {
+    flexDirection: 'row',
+    gap: 12,
+    alignItems: 'center',
+  },
+  paramDetail: {
+    fontSize: 11,
+    fontStyle: 'italic',
+  },
+  clicksDetail: {
+    color: '#66bb6a',
     fontWeight: '600',
+    minWidth: 40,
+  },
+  paramValue: {
+    color: '#888',
+    fontSize: 11,
+    fontStyle: 'italic',
+    flex: 1,
+  },
+  lockIcon: {
+    fontSize: 14,
+    marginLeft: 8,
+    minWidth: 24,
+    textAlign: 'center',
+  },
+  hint: {
+    marginTop: 12,
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+    backgroundColor: '#0a0a15',
+    borderRadius: 4,
+    borderLeftWidth: 2,
+    borderLeftColor: '#ff9800',
+  },
+  hintText: {
+    color: '#ff9800',
+    fontSize: 11,
+    fontStyle: 'italic',
+    lineHeight: 16,
   },
 });

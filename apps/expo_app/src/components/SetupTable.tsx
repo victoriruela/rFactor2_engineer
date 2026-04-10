@@ -1,6 +1,8 @@
 import React from 'react';
 import { View, Text, StyleSheet, Dimensions } from 'react-native';
 import type { SetupChange } from '../api';
+import { getClicksDisplay, getValueDisplay } from '../utils/setupValueParser';
+import { toSpanishParameterName, toSpanishSectionName } from '../utils/labelTranslator';
 
 interface Props {
   changes: Record<string, SetupChange[]>;
@@ -17,62 +19,71 @@ export default function SetupTable({ changes }: Props) {
   return (
     <View>
       {sections.map(([section, items]) => (
-        <View key={section} style={styles.section}>
-          <Text style={styles.sectionName}>{section}</Text>
-          
-          {!isSmallScreen ? (
-            // Desktop: table layout with horizontal scroll capability
-            <View style={styles.tableContainer}>
+        <View key={section} style={styles.section}><Text style={styles.sectionName}>{toSpanishSectionName(section)}</Text>{!isSmallScreen ? (
+          // Desktop: table layout with horizontal scroll capability
+          <View style={styles.tableContainer}>
               <View style={styles.headerRow}>
                 <Text style={[styles.cell, styles.headerCell, { flex: 2 }]}>Parámetro</Text>
-                <Text style={[styles.cell, styles.headerCell]}>Actual</Text>
-                <Text style={[styles.cell, styles.headerCell]}>Nuevo</Text>
-                <Text style={[styles.cell, styles.headerCell]}>%</Text>
+                <Text style={[styles.cell, styles.headerCell, { flex: 1.2 }]}>#Click</Text>
+                <Text style={[styles.cell, styles.headerCell, { flex: 1 }]}>Actual</Text>
+                <Text style={[styles.cell, styles.headerCell, { flex: 1 }]}>Nuevo</Text>
+                <Text style={[styles.cell, styles.headerCell, { flex: 0.8 }]}>%</Text>
                 <Text style={[styles.cell, styles.headerCell, { flex: 3 }]}>Razón</Text>
               </View>
-              {items.map((change, i) => (
-                <View key={i} style={styles.row}>
-                  <Text style={[styles.cell, { flex: 2 }]}>{change.parameter}</Text>
-                  <Text style={styles.cell}>{change.old_value}</Text>
-                  <Text style={[styles.cell, styles.newValue]}>{change.new_value}</Text>
-                  <Text style={[styles.cell, change.change_pct?.startsWith('+') ? styles.positive : styles.negative]}>
-                    {change.change_pct || '—'}
-                  </Text>
-                  <Text style={[styles.cell, { flex: 3 }]}>{change.reason}</Text>
-                </View>
-              ))}
+              {items.map((change, i) => {
+                const clicks = getClicksDisplay(change.old_value);
+                return (
+                  <View key={i} style={styles.row}>
+                    <Text style={[styles.cell, { flex: 2 }]}>{toSpanishParameterName(change.parameter)}</Text>
+                    <Text style={[styles.cell, styles.clickCell, { flex: 1.2 }]}>{clicks}</Text>
+                    <Text style={styles.cell}>{getValueDisplay(change.old_value)}</Text>
+                    <Text style={[styles.cell, styles.newValue]}>{getValueDisplay(change.new_value)}</Text>
+                    <Text style={[styles.cell, change.change_pct?.startsWith('+') ? styles.positive : styles.negative]}>
+                      {change.change_pct || '—'}
+                    </Text>
+                    <Text style={[styles.cell, { flex: 3 }]}>{change.reason}</Text>
+                  </View>
+                );
+              })}
             </View>
           ) : (
             // Mobile: card-style layout
             <View style={styles.cardContainer}>
-              {items.map((change, i) => (
-                <View key={i} style={styles.card}>
-                  <View style={styles.cardRow}>
-                    <Text style={styles.cardLabel}>Parámetro:</Text>
-                    <Text style={styles.cardValue}>{change.parameter}</Text>
-                  </View>
-                  <View style={styles.cardRow}>
-                    <Text style={styles.cardLabel}>Actual:</Text>
-                    <Text style={styles.cardValue}>{change.old_value}</Text>
-                  </View>
-                  <View style={styles.cardRow}>
-                    <Text style={styles.cardLabel}>Nuevo:</Text>
-                    <Text style={[styles.cardValue, styles.newValue]}>{change.new_value}</Text>
-                  </View>
-                  {change.change_pct && (
+              {items.map((change, i) => {
+                const clicks = getClicksDisplay(change.old_value);
+                return (
+                  <View key={i} style={styles.card}>
                     <View style={styles.cardRow}>
-                      <Text style={styles.cardLabel}>Cambio:</Text>
-                      <Text style={[styles.cardValue, change.change_pct?.startsWith('+') ? styles.positive : styles.negative]}>
-                        {change.change_pct}
-                      </Text>
+                      <Text style={styles.cardLabel}>Parámetro:</Text>
+                      <Text style={styles.cardValue}>{toSpanishParameterName(change.parameter)}</Text>
                     </View>
-                  )}
-                  <View style={styles.cardRowReason}>
-                    <Text style={styles.cardLabel}>Razón:</Text>
-                    <Text style={styles.cardValueReason}>{change.reason}</Text>
+                    <View style={styles.cardRow}>
+                      <Text style={styles.cardLabel}>#Click:</Text>
+                      <Text style={[styles.cardValue, styles.clickCell]}>{clicks}</Text>
+                    </View>
+                    <View style={styles.cardRow}>
+                      <Text style={styles.cardLabel}>Actual:</Text>
+                      <Text style={styles.cardValue}>{getValueDisplay(change.old_value)}</Text>
+                    </View>
+                    <View style={styles.cardRow}>
+                      <Text style={styles.cardLabel}>Nuevo:</Text>
+                      <Text style={[styles.cardValue, styles.newValue]}>{getValueDisplay(change.new_value)}</Text>
+                    </View>
+                    {change.change_pct && (
+                      <View style={styles.cardRow}>
+                        <Text style={styles.cardLabel}>Cambio:</Text>
+                        <Text style={[styles.cardValue, change.change_pct?.startsWith('+') ? styles.positive : styles.negative]}>
+                          {change.change_pct}
+                        </Text>
+                      </View>
+                    )}
+                    <View style={styles.cardRowReason}>
+                      <Text style={styles.cardLabel}>Razón:</Text>
+                      <Text style={styles.cardValueReason}>{change.reason}</Text>
+                    </View>
                   </View>
-                </View>
-              ))}
+                );
+              })}
             </View>
           )}
         </View>
@@ -130,6 +141,10 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
     fontSize: 11,
     paddingVertical: 8,
+  },
+  clickCell: {
+    color: '#66bb6a',
+    fontWeight: '600',
   },
   // Mobile card styles
   cardContainer: {

@@ -47,7 +47,7 @@ rFactor2 Engineer analyzes sim-racing telemetry (MoTeC `.mat`/`.csv`) and vehicl
 Browser  ├── GET /          → Expo web (embedded from apps/expo_app/dist/ via go:embed)
          └── /api/*         → Gin handlers
                                 ├── Parsers       (.mat / .csv / .svm)
-                                ├── AI Pipeline   (Translation → Driving → Specialists → Chief)
+                                ├── AI Pipeline   (Translation → Driving → Telemetry Specialists → Setup Specialists → Chief)
                                 └── Ollama client (HTTP, :11434)
 ```
 
@@ -62,7 +62,7 @@ services/backend_go/
   cmd/server/main.go              # Entry: Gin, routes, go:embed, graceful shutdown
   internal/handlers/              # upload.go  session.go  analysis.go  setup_handler.go  models.go  tracks.go
   internal/parsers/               # mat.go  csv.go  svm.go  gps.go  laps.go
-  internal/agents/                # pipeline.go  prompts.go
+  internal/agents/                # pipeline.go  prompts.go  zones.go
   internal/ollama/client.go       # Direct Ollama HTTP client
   internal/domain/                # telemetry.go  setup.go  analysis.go
   internal/config/config.go       # Env var bindings (RF2_PORT, OLLAMA_*, etc.)
@@ -75,6 +75,7 @@ apps/expo_app/
   src/api/                        # client.ts  index.ts  (axios, all /api/* calls)
   src/components/                 # CircuitMap.tsx  SetupTable.tsx
   src/store/useAppStore.ts        # Zustand global state
+  src/utils/                      # setupValueParser.ts  labelTranslator.ts
 
 docs/
   openapi.yaml                    # Full API spec (all endpoints + request/response schemas)
@@ -119,8 +120,15 @@ Extended provider config and numeric defaults: `LLM_CONSTANTS.md`
 **Chief-item normalization**: same pattern; also accepts `newValue`, `nuevoValor`, `parametro`, `motivo`.
 **Reason sanitization**: strips prompt-template artifacts; fallback chain: chief reason → specialist reason → generic Spanish string.
 **Merge strategy**: build from specialist proposals first; chief overrides only for params it explicitly returns.
+**Change-% normalization**: `computeChangePct()` returns `0.0%` when `new_value` is empty or semantically unchanged vs `old_value`.
+**Setup value units policy**: setup specialists and chief receive/display physical values from `CleanValue()` (never click indices); post-processing normalizes `new_value` to unit-bearing strings and defaults to `deg` when units are missing.
+**Driving analysis scope**: driving agent analyzes all laps jointly to detect repeatable driving patterns; recommendations can be global or curve-specific, always grounded in telemetry numbers.
 **Circuit map rendering**: telemetría prioriza la vuelta seleccionada para el mapa; backend extrae una sola vuelta por defecto para `circuit_data` y frontend corta solo discontinuidades abruptas (paridad con Python `lap_xy`) para evitar saltos entre vueltas.
+**Telemetry payload cap**: `telemetry_series` is evenly downsampled server-side to at most 12000 samples to keep `/api/session_telemetry` web responses within practical size.
 **Axle symmetry**: post-processing pass enforces FL≈FR and RL≈RR unless telemetry data justifies asymmetry.
+**Session snapshots (frontend)**: `saveSessionSnapshot()` persists one saved UI state per backend `session_id` in localStorage (overwrite on each save) including locked params, setup and analysis payload, but compacts heavy analysis fields (map/telemetry series) and applies quota fallbacks to avoid `QuotaExceededError` in browsers.
+**Locked params carry-over**: each session save also overwrites a separate global copy of the latest locked-parameter selection; when uploading a new session, frontend restores that selection filtered to parameters that exist in the new setup.
+**Locked params exclusion**: parámetros fijados se excluyen del `setup` antes de enviar contexto a especialistas y jefe; además se filtra cualquier propuesta residual sobre esos parámetros como defensa extra.
 **Session scope**: all `/api/` routes scoped to `X-Client-Session-Id` header / `rf2_session_id` cookie. Frontend calls `POST /api/cleanup_all` at startup.
 
 ## Language

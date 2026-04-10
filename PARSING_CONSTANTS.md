@@ -40,3 +40,9 @@
 | Points per lap for AI | ~50 |
 | Max telemetry columns | 100 |
 | Map subsampling cap | 5000 points |
+
+## Telemetry API Payload
+
+| Constant | Value |
+|----------|-------|
+| `telemetry_series` max samples (web payload cap) | 12000 |
