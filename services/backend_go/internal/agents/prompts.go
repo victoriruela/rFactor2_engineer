@@ -208,6 +208,12 @@ REGLAS ABSOLUTAS:
 8. Responde en español.
 9. NUNCA uses ni propongas valores en clicks/steps/posiciones de selector. Usa SIEMPRE el valor físico con unidades tal y como aparece en los parámetros actuales.
 10. Si un parámetro no muestra unidades explícitas, interpreta y expresa el valor en deg.
+11. Coherencia obligatoria: si en ` + "`new_value`" + ` bajas el valor respecto al actual, en ` + "`reason`" + ` debe quedar explícito que lo reduces; si lo subes, debe quedar explícito que lo aumentas. NUNCA inviertas dirección.
+12. Trazabilidad obligatoria: en ` + "`reason`" + ` incluye SIEMPRE "de <valor actual> a <new_value>" usando exactamente el valor final propuesto.
+13. Prohibido mencionar en ` + "`reason`" + ` un valor objetivo distinto de ` + "`new_value`" + `.
+14. Si no puedes justificar físicamente un cambio con datos de telemetría, NO lo propongas.
+15. Aplica lógica de dinámica vehicular: más rigidez al balanceo delante suele aumentar tendencia al subviraje; más rigidez detrás suele reducir subviraje (o aumentar sobreviraje). Evita recomendaciones que contradigan esta relación sin evidencia explícita.
+16. Diferencia comportamiento en apoyo/freno/aceleración: no mezcles causas de entrada de curva con soluciones de salida de curva sin justificar la fase concreta.
 
 Hallazgos de los expertos de telemetría que AFECTAN a esta sección (prioriza estos):
 {telemetry_insights}
@@ -221,7 +227,7 @@ Parámetros actuales de la sección "{section_name}" (usa EXACTAMENTE estos nomb
 Responde SOLO con JSON válido:
 {{
   "items": [
-    {{"parameter": "NombreExactoDelParametro", "new_value": "nuevo_valor", "reason": "hallazgo de telemetría que justifica este cambio"}}
+    {{"parameter": "NombreExactoDelParametro", "new_value": "nuevo_valor", "reason": "de <valor actual> a <new_value>: justificación técnica de ingeniero de pista basada en telemetría"}}
   ],
   "summary": "Explicación de los cambios propuestos o por qué no se proponen cambios en esta sección"
 }}
@@ -285,6 +291,14 @@ REGLAS CRÍTICAS:
 8. Responde en español.
 9. Los valores propuestos SIEMPRE deben estar en unidades físicas; NUNCA en clicks/steps.
 10. Si falta unidad explícita para un parámetro, usa deg.
+11. Coherencia de dirección obligatoria: si el valor final en sections baja, el texto debe decir que baja; si sube, debe decir que sube.
+12. Trazabilidad obligatoria por cambio: cada ` + "`reason`" + ` en sections debe contener explícitamente "de <old_value> a <new_value>" y NO puede mencionar otro valor objetivo.
+13. Si descartas o corriges una propuesta de especialista por guardarraíles/simetría/coherencia física, describe la corrección en chief_reasoning de forma consistente con el valor final aplicado.
+14. Checklist físico mínimo antes de aprobar un cambio:
+  - No recomendar menos carga aerodinámica trasera para corregir sobreviraje en apoyo (salvo evidencia muy específica).
+  - No recomendar más rigidez delantera como solución genérica de tracción en salida.
+  - Mantener coherencia entre síntoma y fase de curva (entrada, medio, salida).
+15. Si la telemetría no respalda causalidad, descarta el cambio aunque venga de un especialista.
 
 Resumen de telemetría:
 {telemetry_summary}
@@ -305,7 +319,7 @@ Responde SOLO con JSON válido:
       {{
         "section": "NOMBRE_SECCION",
         "items": [
-          {{"parameter": "nombre_exacto_del_parametro", "new_value": "valor_nuevo", "reason": "motivo técnico con referencia a la telemetría"}}
+          {{"parameter": "nombre_exacto_del_parametro", "new_value": "valor_nuevo", "reason": "de <old_value> a <new_value>: motivo técnico con referencia a la telemetría"}}
         ]
       }}
     ]

@@ -21,6 +21,12 @@ jest.mock('../../src/api', () => ({
   getSessionStates: jest.fn().mockReturnValue({}),
   removeSessionState: jest.fn(),
   clearAllSessionStates: jest.fn(),
+  getSessionSnapshot: jest.fn().mockReturnValue(null),
+  saveSessionSnapshot: jest.fn(),
+  removeSessionSnapshot: jest.fn(),
+  clearAllSessionSnapshots: jest.fn(),
+  saveLastLockedParameters: jest.fn(),
+  getLastLockedParameters: jest.fn().mockReturnValue([]),
 }));
 
 jest.mock('../../src/store/useAppStore', () => ({
@@ -49,8 +55,6 @@ jest.mock('../../src/store/useAppStore', () => ({
       selectedModel: 'llama3.2:latest',
       setSelectedModel: jest.fn(),
       selectedProvider: 'ollama',
-      sessions: [],
-      setSessions: jest.fn(),
       tracks: [],
       setTracks: jest.fn(),
       fullSetup: null,
@@ -123,10 +127,6 @@ describe('Text node in View detection', () => {
 
   test('TelemetryScreen (no data) has no text nodes in View', () => {
     renderModuleAndCheckTextNodes('TelemetryScreen', '../../app/(tabs)/telemetry');
-  });
-
-  test('SessionsScreen has no text nodes in View', () => {
-    renderModuleAndCheckTextNodes('SessionsScreen', '../../app/(tabs)/sessions');
   });
 
   test('TracksScreen has no text nodes in View', () => {

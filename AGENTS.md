@@ -62,7 +62,7 @@ services/backend_go/
   cmd/server/main.go              # Entry: Gin, routes, go:embed, graceful shutdown
   internal/handlers/              # upload.go  session.go  analysis.go  setup_handler.go  models.go  tracks.go
   internal/parsers/               # mat.go  csv.go  svm.go  gps.go  laps.go
-  internal/agents/                # pipeline.go  prompts.go  zones.go
+  internal/agents/                # pipeline.go  prompts.go  zones.go  pipeline_reasoning_test.go
   internal/ollama/client.go       # Direct Ollama HTTP client
   internal/domain/                # telemetry.go  setup.go  analysis.go
   internal/config/config.go       # Env var bindings (RF2_PORT, OLLAMA_*, etc.)
@@ -71,7 +71,7 @@ services/backend_go/
   data/fixed_params.json          # Locked params list (AI agents must not change these)
 
 apps/expo_app/
-  app/(tabs)/                     # index.tsx  upload.tsx  analysis.tsx  sessions.tsx  tracks.tsx
+  app/(tabs)/                     # index.tsx  upload.tsx (Datos)  analysis.tsx  tracks.tsx  telemetry.tsx
   src/api/                        # client.ts  index.ts  (axios, all /api/* calls)
   src/components/                 # CircuitMap.tsx  SetupTable.tsx
   src/store/useAppStore.ts        # Zustand global state
@@ -126,10 +126,12 @@ Extended provider config and numeric defaults: `LLM_CONSTANTS.md`
 **Circuit map rendering**: telemetría prioriza la vuelta seleccionada para el mapa; backend extrae una sola vuelta por defecto para `circuit_data` y frontend corta solo discontinuidades abruptas (paridad con Python `lap_xy`) para evitar saltos entre vueltas.
 **Telemetry payload cap**: `telemetry_series` is evenly downsampled server-side to at most 12000 samples to keep `/api/session_telemetry` web responses within practical size.
 **Axle symmetry**: post-processing pass enforces FL≈FR and RL≈RR unless telemetry data justifies asymmetry.
-**Session snapshots (frontend)**: `saveSessionSnapshot()` persists one saved UI state per backend `session_id` in localStorage (overwrite on each save) including locked params, setup and analysis payload, but compacts heavy analysis fields (map/telemetry series) and applies quota fallbacks to avoid `QuotaExceededError` in browsers.
-**Locked params carry-over**: each session save also overwrites a separate global copy of the latest locked-parameter selection; when uploading a new session, frontend restores that selection filtered to parameters that exist in the new setup.
+**Reason-value coherence**: final post-processing rebuilds each setup reason from the applied old→new values (after guardrails/symmetry) and regenerates chief reasoning from the final change list to prevent contradictory narratives.
+**Reason text hygiene**: reason post-processing strips duplicated trace prefixes (`de <old> a <new>`) and normalizes common mojibake accent artifacts before presenting final Spanish output.
+**File-based session save/load (frontend)**: Sessions and locked parameters are saved/loaded as JSON files on the user's local system via the "Datos" tab. No server-side persistence of session state or locked params. Session files use format `{version:1, session_id, saved_at, analysis_result, full_setup, locked_parameters}`. Locked params files use format `{version:1, saved_at, locked_parameters}`.
 **Locked params exclusion**: parámetros fijados se excluyen del `setup` antes de enviar contexto a especialistas y jefe; además se filtra cualquier propuesta residual sobre esos parámetros como defensa extra.
-**Session scope**: all `/api/` routes scoped to `X-Client-Session-Id` header / `rf2_session_id` cookie. Frontend calls `POST /api/cleanup_all` at startup.
+**Session scope**: all `/api/` routes scoped to `X-Client-Session-Id` header / `rf2_session_id` cookie.
+**Datos tab layout**: Upload section + session management (save/load JSON) + locked params management (save/load JSON) + session info display + two-column layout: setup completo (left) + parámetros fijados (right).
 
 ## Language
 

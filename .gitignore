@@ -3,6 +3,9 @@ __pycache__/
 *.py[codz]
 *$py.class
 
+# Go build artifacts
+services/backend_go/server.exe
+
 # C extensions
 *.so
 

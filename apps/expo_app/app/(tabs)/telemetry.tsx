@@ -93,7 +93,7 @@ function formatPedalPercent(value: number): string {
 }
 
 export default function TelemetryScreen() {
-  const { analysisResult, activeSessionId, setActiveSessionId, setAnalysisResult, sessions, setSessions } = useAppStore();
+  const { analysisResult, activeSessionId, setActiveSessionId, setAnalysisResult } = useAppStore();
   const [cursorPosition, setCursorPosition] = useState<GPSPoint | null>(null);
   const [cursorSample, setCursorSample] = useState<TelemetrySample | null>(null);
   const [selectedLap, setSelectedLap] = useState<number | null>(null);
@@ -101,6 +101,7 @@ export default function TelemetryScreen() {
   const [restoringTelemetry, setRestoringTelemetry] = useState(false);
   const [restoredSessionId, setRestoredSessionId] = useState<string | null>(null);
   const [restoreError, setRestoreError] = useState<string | null>(null);
+  const [sessions, setSessions] = useState<{ id: string; telemetry: string; svm: string }[]>([]);
   const { width: windowWidth, height: windowHeight } = useWindowDimensions();
   const isWide = windowWidth >= 900;
   const topPanelAsColumns = windowWidth >= 1100;
