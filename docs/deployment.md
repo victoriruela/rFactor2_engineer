@@ -50,7 +50,7 @@ git tag vX.Y.Z && git push --tags
 scp rfactor2-engineer bitor@34.175.126.128:~/
 
 # 5. On host: swap binary
-ssh bitor@34.175.126.128 'pkill rfactor2-engineer; mv rfactor2-engineer /opt/rfactor2-engineer && /opt/rfactor2-engineer &'
+ssh bitor@34.175.126.128 'sudo pkill -f rfactor2-engineer; sleep 1; sudo mv ~/rfactor2-engineer /opt/rfactor2_engineer/rfactor2-engineer; sudo chmod +x /opt/rfactor2_engineer/rfactor2-engineer; sudo -u bitor bash -c "nohup /opt/rfactor2_engineer/rfactor2-engineer > /tmp/rfactor2.log 2>&1 &"'
 
 # 6. Verify
 curl -u racef1:100fuchupabien https://car-setup.com/api/models
