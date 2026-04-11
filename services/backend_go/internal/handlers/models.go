@@ -31,6 +31,10 @@ func (h *ModelsHandler) ListModels(c *gin.Context) {
 	baseURL := strings.TrimSpace(c.Query("ollama_base_url"))
 	apiKey := strings.TrimSpace(c.Query("ollama_api_key"))
 	model := strings.TrimSpace(c.Query("model"))
+	if provider == "ollama_cloud" && baseURL == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "ollama_base_url is required for provider ollama_cloud"})
+		return
+	}
 
 	client := h.Client
 	if baseURL != "" || apiKey != "" || model != "" {
