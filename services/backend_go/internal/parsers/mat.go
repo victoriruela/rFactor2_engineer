@@ -44,78 +44,93 @@ const (
 
 // ParseMATFile parses a MATLAB Level 5 .mat file exported from MoTeC i2.
 // Extracts numeric channels and aligns them to the base length.
+//
+// Memory strategy: the file is read element-by-element (streaming) so that
+// the raw bytes of each element are eligible for GC as soon as parsing
+// finishes. Peak RAM ≈ largest_compressed_element × 3 + accumulated_channels,
+// instead of whole_file + decompressed_data simultaneously.
 func ParseMATFile(path string) (*domain.TelemetryData, error) {
-	data, err := os.ReadFile(path)
+	f, err := os.Open(path)
 	if err != nil {
 		return nil, fmt.Errorf("reading mat file: %w", err)
 	}
+	defer f.Close()
 
-	if len(data) < 128 {
+	// Read 128-byte header.
+	// Bytes 124-125: version (0x0100)
+	// Bytes 126-127: endian indicator ("IM" = little-endian)
+	header := make([]byte, 128)
+	if _, err := io.ReadFull(f, header); err != nil {
 		return nil, ErrNoData
 	}
 
-	// Skip 128-byte header
-	// Bytes 124-125: version (0x0100)
-	// Bytes 126-127: endian indicator ("IM" = little-endian)
-	endianIndicator := string(data[126:128])
+	endianIndicator := string(header[126:128])
 	var order binary.ByteOrder
 	if endianIndicator == "IM" {
 		order = binary.LittleEndian
 	} else {
 		order = binary.BigEndian
 	}
+	header = nil // no longer needed
 
 	channels := make(map[string][]float64)
-	offset := 128
+	tagBuf := make([]byte, 8) // reused across iterations
 
-	for offset < len(data) {
-		if offset+8 > len(data) {
-			break
+	for {
+		// Read 8-byte tag.
+		if _, err := io.ReadFull(f, tagBuf); err != nil {
+			break // EOF or truncated file
 		}
 
-		tag := readTag(data[offset:], order)
-		offset += 8
-
+		tag := readTag(tagBuf, order)
 		if tag.dataType == 0 || tag.numBytes == 0 {
 			break
 		}
 
-		elementEnd := offset + int(tag.numBytes)
-		// Pad to 8-byte boundary
-		paddedEnd := elementEnd
-		if paddedEnd%8 != 0 {
-			paddedEnd += 8 - paddedEnd%8
+		numBytes := int(tag.numBytes)
+		// MATLAB Level 5 pads each element to an 8-byte boundary in the file.
+		paddedSize := numBytes
+		if paddedSize%8 != 0 {
+			paddedSize += 8 - paddedSize%8
 		}
 
-		if elementEnd > len(data) {
+		// Read the element (including padding) in one allocation.
+		// Using a single allocation avoids a second Read call for padding bytes.
+		buf := make([]byte, paddedSize)
+		if _, err := io.ReadFull(f, buf); err != nil {
 			break
 		}
+		elem := buf[:numBytes] // logical extent, padding is ignored
 
-		elementData := data[offset:elementEnd]
-
-		if tag.dataType == miCOMPRESSED {
-			decompressed, err := decompressZlib(elementData)
+		switch tag.dataType {
+		case miCOMPRESSED:
+			decompressed, err := decompressZlib(elem)
+			buf = nil  // raw compressed bytes no longer needed
+			elem = nil // same backing array
 			if err == nil {
 				name, values := parseMatrixElement(decompressed, order)
+				decompressed = nil // release decompressed bytes
 				if name != "" && len(values) > 0 {
 					channels[name] = values
 				}
 			}
-		} else if tag.dataType == miMATRIX {
-			name, values := parseMatrixElement(elementData, order)
+		case miMATRIX:
+			name, values := parseMatrixElement(elem, order)
+			buf = nil
+			elem = nil
 			if name != "" && len(values) > 0 {
 				channels[name] = values
 			}
+		default:
+			buf = nil // skip and discard unknown top-level element types
 		}
-
-		offset = paddedEnd
 	}
 
 	if len(channels) == 0 {
 		return nil, ErrNoChannels
 	}
 
-	// Determine base length (use Session_Elapsed_Time if available)
+	// Determine base length (use Session_Elapsed_Time if available).
 	baseLen := 0
 	if v, ok := channels["Session_Elapsed_Time"]; ok {
 		baseLen = len(v)
@@ -127,7 +142,7 @@ func ParseMATFile(path string) (*domain.TelemetryData, error) {
 		}
 	}
 
-	// Align channels
+	// Align channels to the base length.
 	aligned := make(map[string][]float64)
 	for name, vals := range channels {
 		if len(vals) == baseLen {
@@ -143,8 +158,9 @@ func ParseMATFile(path string) (*domain.TelemetryData, error) {
 			aligned[name] = padded
 		}
 	}
+	channels = nil // raw channel map no longer needed
 
-	// Apply column renames for consistency
+	// Apply column renames for consistency.
 	renameMap := map[string]string{
 		"GPS_Latitude":            "GPS Latitude",
 		"GPS_Longitude":           "GPS Longitude",
@@ -168,12 +184,12 @@ func ParseMATFile(path string) (*domain.TelemetryData, error) {
 	// rFactor2 GPS is synthetic (simulation), so there are no real GPS spikes to remove.
 	// Outlier removal with 1.5*std would incorrectly clip legitimate track corners.
 	for _, col := range []string{"GPS Latitude", "GPS Longitude"} {
-		if data, ok := td.Channels[col]; ok {
-			td.Channels[col] = rollingMean(data, 11)
+		if gpsData, ok := td.Channels[col]; ok {
+			td.Channels[col] = rollingMean(gpsData, 11)
 		}
 	}
 
-	// Filter incomplete laps
+	// Filter incomplete laps.
 	FilterIncompleteLaps(td)
 
 	return td, nil
