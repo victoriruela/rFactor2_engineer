@@ -30,7 +30,6 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 
 import type { ChannelInfo, ParseHeaderResponse, ParseChannelsResponse } from '../worker/worker-protocol';
-import type { JsSessionInfo } from '../worker/worker-protocol';
 import { LdParserWorkerClient } from '../worker/wasm-typed-array-adapter';
 import { validateLdFileFast, readHeaderSlice, readMetaSlice } from '../worker/file-slice-pipeline';
 import { nextRequestId } from '../worker/worker-protocol';
@@ -64,13 +63,13 @@ export interface LdFileStateParsingHeader {
 export interface LdFileStateParsingChannels {
   kind: 'parsing_channels';
   file: File;
-  session: JsSessionInfo;
+  session: ParseHeaderResponse;
 }
 
 export interface LdFileStateReady {
   kind: 'ready';
   file: File;
-  session: JsSessionInfo;
+  session: ParseHeaderResponse;
   channels: readonly ChannelInfo[];
 }
 
@@ -156,12 +155,12 @@ export function useLdFile(): UseLdFileResult {
       setState({ kind: 'parsing_header', file });
 
       // ── Phase 2: Parse header ───────────────────────────────────────────
-      let session: JsSessionInfo;
+      let session: ParseHeaderResponse;
       try {
         const headerBuf = await readHeaderSlice(file);
         if (isStale()) return;
 
-        const req = { id: nextRequestId('ph'), kind: 'PARSE_HEADER' as const, buf: headerBuf };
+        const req = { id: nextRequestId('ph'), kind: 'PARSE_HEADER' as const, headerBytes: headerBuf };
         const res = await client.send(req);
         if (isStale()) return;
 
@@ -169,7 +168,7 @@ export function useLdFile(): UseLdFileResult {
           setState({ kind: 'error', message: res.message, file });
           return;
         }
-        session = (res as ParseHeaderResponse).session;
+        session = res as ParseHeaderResponse;
       } catch (err) {
         if (isStale()) return;
         setState({ kind: 'error', message: String(err), file });
@@ -179,7 +178,7 @@ export function useLdFile(): UseLdFileResult {
       setState({ kind: 'parsing_channels', file, session });
 
       // ── Phase 3: Parse channels ─────────────────────────────────────────
-      let channels: ChannelInfo[];
+      let channels: readonly ChannelInfo[];
       try {
         const metaBuf = await readMetaSlice(file, session);
         if (isStale()) return;
@@ -187,8 +186,8 @@ export function useLdFile(): UseLdFileResult {
         const req = {
           id: nextRequestId('pc'),
           kind: 'PARSE_CHANNELS' as const,
-          buf: metaBuf,
-          firstMetaOffset: session.meta_offset,
+          metaBytes: metaBuf,
+          firstMetaOffset: session.channelMetaOffset,
         };
         const res = await client.send(req);
         if (isStale()) return;

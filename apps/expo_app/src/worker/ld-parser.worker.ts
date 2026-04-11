@@ -12,12 +12,11 @@
  * All subsequent calls operate on the already-loaded module.
  */
 
-// Type-only import — wasm-pack generates the actual JS glue at build time.
-// The `ld_parser_bg.wasm` and `ld_parser.js` files are emitted to pkg/
-// and bundled by the app build pipeline (Metro or webpack).
-//
-// Adjust this import path to match your wasm-pack output directory.
+// wasm-pack --target web output: JS glue + binary asset.
 import init, * as LdParser from '../../wasm/ld_parser/pkg/ld_parser';
+// Inline base64-encoded WASM binary — avoids fetch() and asset-URL resolution.
+// This allows Metro to bundle everything in one pass without a separate Worker URL.
+import { LD_PARSER_WASM_B64 } from '../../wasm/ld_parser/pkg/ld_parser_bg_inline';
 
 import type {
   WorkerRequest,
@@ -33,7 +32,9 @@ import type {
 let wasmReady = false;
 
 async function initWasm(): Promise<void> {
-  await init();
+  // Decode inline base64 WASM → ArrayBuffer → pass to init() — no network fetch needed.
+  const binary = Uint8Array.from(atob(LD_PARSER_WASM_B64), (c) => c.charCodeAt(0));
+  await init({ module_or_path: binary.buffer });
   wasmReady = true;
 }
 
