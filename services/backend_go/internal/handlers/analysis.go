@@ -63,6 +63,9 @@ func (h *AnalysisHandler) resolveAnalyzer(model, provider string, opts ollamaReq
 	if provider != "" && provider != "ollama" && provider != "ollama_cloud" {
 		return nil, fmt.Errorf("unsupported provider: %s", provider)
 	}
+	if provider == "ollama_cloud" && opts.BaseURL == "" {
+		return nil, fmt.Errorf("ollama_base_url is required for provider ollama_cloud")
+	}
 
 	if opts.BaseURL == "" && opts.APIKey == "" && (model == "" || h.Client == nil) {
 		return h.Pipeline, nil
