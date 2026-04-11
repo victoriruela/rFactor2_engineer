@@ -19,6 +19,7 @@ pub mod error;
 pub mod header;
 pub mod types;
 pub mod utils;
+pub mod wasm;
 
 pub use domain::{ChannelMeta, LdFile, LdFileHeader};
 pub use error::{ParseError, ParseWarning};
