@@ -1,6 +1,7 @@
 package parsers
 
 import (
+	"bufio"
 	"bytes"
 	"compress/zlib"
 	"encoding/binary"
@@ -45,10 +46,9 @@ const (
 // ParseMATFile parses a MATLAB Level 5 .mat file exported from MoTeC i2.
 // Extracts numeric channels and aligns them to the base length.
 //
-// Memory strategy: the file is read element-by-element (streaming) so that
-// the raw bytes of each element are eligible for GC as soon as parsing
-// finishes. Peak RAM ≈ largest_compressed_element × 3 + accumulated_channels,
-// instead of whole_file + decompressed_data simultaneously.
+// Memory strategy: uses bufio.Reader (1 MB buffer) for efficient disk I/O,
+// and streams element-by-element so raw bytes are freed to GC after parsing.
+// Peak RAM ≈ largest_element × 3 + accumulated_channels.
 func ParseMATFile(path string) (*domain.TelemetryData, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -56,11 +56,14 @@ func ParseMATFile(path string) (*domain.TelemetryData, error) {
 	}
 	defer f.Close()
 
+	// Use 1 MB buffer to reduce system calls from thousands to mere dozens for 900 MB files.
+	br := bufio.NewReaderSize(f, 1024*1024)
+
 	// Read 128-byte header.
 	// Bytes 124-125: version (0x0100)
 	// Bytes 126-127: endian indicator ("IM" = little-endian)
 	header := make([]byte, 128)
-	if _, err := io.ReadFull(f, header); err != nil {
+	if _, err := io.ReadFull(br, header); err != nil {
 		return nil, ErrNoData
 	}
 
@@ -77,8 +80,8 @@ func ParseMATFile(path string) (*domain.TelemetryData, error) {
 	tagBuf := make([]byte, 8) // reused across iterations
 
 	for {
-		// Read 8-byte tag.
-		if _, err := io.ReadFull(f, tagBuf); err != nil {
+		// Read 8-byte tag (from 1 MB buffer, not from disk every time).
+		if _, err := io.ReadFull(br, tagBuf); err != nil {
 			break // EOF or truncated file
 		}
 
@@ -95,9 +98,9 @@ func ParseMATFile(path string) (*domain.TelemetryData, error) {
 		}
 
 		// Read the element (including padding) in one allocation.
-		// Using a single allocation avoids a second Read call for padding bytes.
+		// bufio.Reader manages efficient reading from the 1 MB buffer.
 		buf := make([]byte, paddedSize)
-		if _, err := io.ReadFull(f, buf); err != nil {
+		if _, err := io.ReadFull(br, buf); err != nil {
 			break
 		}
 		elem := buf[:numBytes] // logical extent, padding is ignored
