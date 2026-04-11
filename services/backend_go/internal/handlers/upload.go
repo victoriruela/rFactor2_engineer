@@ -18,13 +18,19 @@ import (
 	"github.com/viciruela/rfactor2-engineer/internal/middleware"
 )
 
-const defaultChunkSize = 16 * 1024 * 1024 // 16 MiB
+const defaultChunkSize = 32 * 1024 * 1024 // 32 MiB
 
 type uploadState struct {
-	Filename  string
-	ChunkSize int
-	NextChunk int
-	Dir       string
+	Filename      string
+	ChunkSize     int
+	TotalSize     int64
+	TotalChunks   int
+	SessionName   string
+	DestDir       string
+	TempPath      string
+	FinalPath     string
+	Received      map[int]int64
+	BytesReceived int64
 }
 
 // UploadHandler manages chunked file uploads.
@@ -45,10 +51,15 @@ func NewUploadHandler(dataDir string) *UploadHandler {
 // InitUpload handles POST /api/uploads/init
 func (h *UploadHandler) InitUpload(c *gin.Context) {
 	var req struct {
-		Filename string `json:"filename" binding:"required"`
+		Filename  string `json:"filename" binding:"required"`
+		TotalSize int64  `json:"total_size" binding:"required"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "filename required"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "filename and total_size required"})
+		return
+	}
+	if req.TotalSize <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid total_size"})
 		return
 	}
 
@@ -61,20 +72,49 @@ func (h *UploadHandler) InitUpload(c *gin.Context) {
 
 	sessionID := middleware.GetSessionID(c)
 	uploadID := uuid.New().String()
+	sessionName := strings.TrimSuffix(filename, filepath.Ext(filename))
+	if sessionName == "" {
+		sessionName = "session"
+	}
 
-	dir := filepath.Join(h.DataDir, sessionID, "_chunks_"+uploadID)
-	if err := os.MkdirAll(dir, 0750); err != nil {
-		log.Error().Err(err).Msg("Failed to create chunk directory")
+	destDir := filepath.Join(h.DataDir, sessionID, sessionName)
+	if err := os.MkdirAll(destDir, 0750); err != nil {
+		log.Error().Err(err).Msg("Failed to create upload destination")
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "storage error"})
 		return
 	}
 
+	tempPath := filepath.Join(destDir, fmt.Sprintf(".%s.%s.part", filename, uploadID[:8]))
+	finalPath := filepath.Join(destDir, filename)
+
+	tempFile, err := os.OpenFile(tempPath, os.O_CREATE|os.O_RDWR|os.O_TRUNC, 0640)
+	if err != nil {
+		log.Error().Err(err).Msg("Failed to create temp upload file")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "storage error"})
+		return
+	}
+	if err := tempFile.Truncate(req.TotalSize); err != nil {
+		tempFile.Close()
+		_ = os.Remove(tempPath)
+		log.Error().Err(err).Msg("Failed to preallocate temp upload file")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "storage error"})
+		return
+	}
+	_ = tempFile.Close()
+
+	totalChunks := int((req.TotalSize + int64(defaultChunkSize) - 1) / int64(defaultChunkSize))
+
 	h.mu.Lock()
 	h.uploads[uploadID] = &uploadState{
-		Filename:  filename,
-		ChunkSize: defaultChunkSize,
-		NextChunk: 0,
-		Dir:       dir,
+		Filename:    filename,
+		ChunkSize:   defaultChunkSize,
+		TotalSize:   req.TotalSize,
+		TotalChunks: totalChunks,
+		SessionName: sessionName,
+		DestDir:     destDir,
+		TempPath:    tempPath,
+		FinalPath:   finalPath,
+		Received:    make(map[int]int64, totalChunks),
 	}
 	h.mu.Unlock()
 
@@ -104,18 +144,35 @@ func (h *UploadHandler) UploadChunk(c *gin.Context) {
 		return
 	}
 
-	if chunkIndex != state.NextChunk {
-		c.JSON(http.StatusConflict, gin.H{"error": fmt.Sprintf("expected chunk %d, got %d", state.NextChunk, chunkIndex)})
+	if chunkIndex < 0 || chunkIndex >= state.TotalChunks {
+		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("chunk_index out of range: %d", chunkIndex)})
 		return
 	}
 
-	chunkPath := filepath.Join(state.Dir, fmt.Sprintf("chunk_%06d", chunkIndex))
-	f, err := os.Create(chunkPath)
+	h.mu.Lock()
+	if existingBytes, exists := state.Received[chunkIndex]; exists {
+		h.mu.Unlock()
+		c.JSON(http.StatusOK, domain.ChunkResponse{
+			UploadID:      uploadID,
+			ChunkIndex:    chunkIndex,
+			BytesReceived: existingBytes,
+		})
+		return
+	}
+	h.mu.Unlock()
+
+	f, err := os.OpenFile(state.TempPath, os.O_WRONLY, 0640)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "storage error"})
 		return
 	}
 	defer f.Close()
+
+	offset := int64(chunkIndex) * int64(state.ChunkSize)
+	if _, err := f.Seek(offset, io.SeekStart); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "write error"})
+		return
+	}
 
 	n, err := io.Copy(f, c.Request.Body)
 	if err != nil {
@@ -123,8 +180,21 @@ func (h *UploadHandler) UploadChunk(c *gin.Context) {
 		return
 	}
 
+	expectedBytes := int64(state.ChunkSize)
+	remaining := state.TotalSize - offset
+	if remaining < expectedBytes {
+		expectedBytes = remaining
+	}
+	if n != expectedBytes {
+		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("invalid chunk size for index %d: got %d expected %d", chunkIndex, n, expectedBytes)})
+		return
+	}
+
 	h.mu.Lock()
-	state.NextChunk++
+	if _, exists := state.Received[chunkIndex]; !exists {
+		state.Received[chunkIndex] = n
+		state.BytesReceived += n
+	}
 	h.mu.Unlock()
 
 	c.JSON(http.StatusOK, domain.ChunkResponse{
@@ -140,9 +210,6 @@ func (h *UploadHandler) CompleteUpload(c *gin.Context) {
 
 	h.mu.Lock()
 	state, ok := h.uploads[uploadID]
-	if ok {
-		delete(h.uploads, uploadID)
-	}
 	h.mu.Unlock()
 
 	if !ok {
@@ -150,45 +217,30 @@ func (h *UploadHandler) CompleteUpload(c *gin.Context) {
 		return
 	}
 
-	sessionID := middleware.GetSessionID(c)
-	sessionName := strings.TrimSuffix(state.Filename, filepath.Ext(state.Filename))
-	if sessionName == "" {
-		sessionName = "session"
-	}
-
-	destDir := filepath.Join(h.DataDir, sessionID, sessionName)
-	if err := os.MkdirAll(destDir, 0750); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "storage error"})
+	if len(state.Received) != state.TotalChunks {
+		c.JSON(http.StatusConflict, gin.H{
+			"error": fmt.Sprintf("upload incomplete: received %d/%d chunks", len(state.Received), state.TotalChunks),
+		})
 		return
 	}
 
-	destPath := filepath.Join(destDir, state.Filename)
-	dest, err := os.Create(destPath)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "assembly error"})
+	if err := os.Remove(state.FinalPath); err != nil && !os.IsNotExist(err) {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "finalize error"})
 		return
 	}
-	defer dest.Close()
 
-	var totalBytes int64
-	for i := 0; i < state.NextChunk; i++ {
-		chunkPath := filepath.Join(state.Dir, fmt.Sprintf("chunk_%06d", i))
-		chunk, err := os.Open(chunkPath)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "assembly error"})
-			return
-		}
-		n, _ := io.Copy(dest, chunk)
-		totalBytes += n
-		chunk.Close()
+	if err := os.Rename(state.TempPath, state.FinalPath); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "finalize error"})
+		return
 	}
 
-	// Cleanup chunk directory
-	os.RemoveAll(state.Dir)
+	h.mu.Lock()
+	delete(h.uploads, uploadID)
+	h.mu.Unlock()
 
 	c.JSON(http.StatusOK, domain.CompleteResponse{
 		Filename:      state.Filename,
-		SessionID:     sessionName,
-		BytesReceived: totalBytes,
+		SessionID:     state.SessionName,
+		BytesReceived: state.BytesReceived,
 	})
 }
