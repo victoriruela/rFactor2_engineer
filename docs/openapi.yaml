@@ -234,7 +234,7 @@ paths:
                   type: string
                 provider:
                   type: string
-                  enum: [ollama, ollama_cloud]
+                  enum: [ollama_cloud]
                 fixed_params:
                   type: string
                   description: JSON array of parameter names to lock
@@ -271,7 +271,7 @@ paths:
                   type: string
                 provider:
                   type: string
-                  enum: [ollama, ollama_cloud]
+                  enum: [ollama_cloud]
                 ollama_base_url:
                   type: string
                 ollama_api_key:
@@ -330,7 +330,7 @@ paths:
           in: query
           schema:
             type: string
-            enum: [ollama, ollama_cloud]
+            enum: [ollama_cloud]
       responses:
         '200':
           description: Available models

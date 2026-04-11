@@ -60,14 +60,15 @@ func NewAnalysisHandlerWithPipeline(dataDir string, ollamaClient *ollama.Client,
 }
 
 func (h *AnalysisHandler) resolveAnalyzer(model, provider string, opts ollamaRequestOptions) (analyzer, error) {
-	if provider != "" && provider != "ollama" && provider != "ollama_cloud" {
+	provider = normalizeProvider(provider)
+	if provider != "ollama_cloud" {
 		return nil, fmt.Errorf("unsupported provider: %s", provider)
 	}
-	if provider == "ollama_cloud" && opts.BaseURL == "" {
-		return nil, fmt.Errorf("ollama_base_url is required for provider ollama_cloud")
-	}
 
-	if opts.BaseURL == "" && opts.APIKey == "" && (model == "" || h.Client == nil) {
+	if model == "" && opts.BaseURL == "" && opts.APIKey == "" {
+		if h.Client != nil && isLocalOllamaBaseURL(h.Client.BaseURL) {
+			return nil, fmt.Errorf("local ollama endpoints are disabled; configure a cloud ollama_base_url")
+		}
 		return h.Pipeline, nil
 	}
 
@@ -89,6 +90,9 @@ func (h *AnalysisHandler) resolveAnalyzer(model, provider string, opts ollamaReq
 
 	if baseURL == "" {
 		return nil, fmt.Errorf("ollama_base_url is required")
+	}
+	if isLocalOllamaBaseURL(baseURL) {
+		return nil, fmt.Errorf("local ollama endpoints are disabled; configure a cloud ollama_base_url")
 	}
 	if resolvedModel == "" {
 		return nil, fmt.Errorf("model is required")

@@ -39,7 +39,7 @@ func TestE2E_ChunkedUploadThenAnalyzeSession(t *testing.T) {
 	r := gin.New()
 	r.Use(middleware.SessionResolver())
 
-	client := ollama.NewClient("http://localhost:11434", "llama3.2:latest", "")
+	client := ollama.NewClient("https://ollama.example.com", "llama3.2:latest", "")
 	uploadH := handlers.NewUploadHandler(dir)
 	sessionH := handlers.NewSessionHandler(dir)
 	fake := &fakeAnalyzer{}
