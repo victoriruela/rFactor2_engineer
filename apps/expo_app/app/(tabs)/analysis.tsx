@@ -259,14 +259,6 @@ export default function AnalysisScreen() {
               Ollama Cloud
             </Text>
           </Pressable>
-          <Pressable
-            style={[styles.modelChip, selectedProvider === 'ollama' && styles.modelChipActive]}
-            onPress={() => setSelectedProvider('ollama')}
-          >
-            <Text style={[styles.modelChipText, selectedProvider === 'ollama' && styles.modelChipTextActive]}>
-              Ollama Compatible
-            </Text>
-          </Pressable>
         </View>
       </View>
 

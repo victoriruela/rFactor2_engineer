@@ -22,8 +22,8 @@ func NewModelsHandler(client *ollama.Client) *ModelsHandler {
 
 // ListModels handles GET /api/models
 func (h *ModelsHandler) ListModels(c *gin.Context) {
-	provider := strings.TrimSpace(c.Query("provider"))
-	if provider != "" && provider != "ollama" && provider != "ollama_cloud" {
+	provider := normalizeProvider(c.Query("provider"))
+	if provider != "ollama_cloud" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "unsupported provider"})
 		return
 	}
@@ -31,8 +31,12 @@ func (h *ModelsHandler) ListModels(c *gin.Context) {
 	baseURL := strings.TrimSpace(c.Query("ollama_base_url"))
 	apiKey := strings.TrimSpace(c.Query("ollama_api_key"))
 	model := strings.TrimSpace(c.Query("model"))
-	if provider == "ollama_cloud" && baseURL == "" {
+	if baseURL == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "ollama_base_url is required for provider ollama_cloud"})
+		return
+	}
+	if isLocalOllamaBaseURL(baseURL) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "local ollama endpoints are disabled; configure a cloud ollama_base_url"})
 		return
 	}
 
@@ -46,10 +50,6 @@ func (h *ModelsHandler) ListModels(c *gin.Context) {
 		}
 		if model == "" && h.Client != nil {
 			model = h.Client.Model
-		}
-		if baseURL == "" {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "ollama_base_url is required"})
-			return
 		}
 		client = ollama.NewClient(baseURL, model, apiKey)
 	}
