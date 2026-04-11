@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -56,7 +57,7 @@ func TestE2E_ChunkedUploadThenAnalyzeSession(t *testing.T) {
 	uploadOneFile := func(filename string, content []byte) {
 		t.Helper()
 
-		initReq := httptest.NewRequest(http.MethodPost, "/api/uploads/init", strings.NewReader(`{"filename":"`+filename+`"}`))
+		initReq := httptest.NewRequest(http.MethodPost, "/api/uploads/init", strings.NewReader(`{"filename":"`+filename+`","total_size":`+strconv.Itoa(len(content))+`}`))
 		initReq.Header.Set("Content-Type", "application/json")
 		initReq.Header.Set("X-Client-Session-Id", headerSessionID)
 		initW := httptest.NewRecorder()

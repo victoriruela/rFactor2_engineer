@@ -31,7 +31,9 @@ export default function AnalysisScreen() {
     analysisError, setAnalysisError,
     models, setModels,
     selectedModel, setSelectedModel,
-    selectedProvider,
+    selectedProvider, setSelectedProvider,
+    ollamaBaseUrl, setOllamaBaseUrl,
+    ollamaApiKey, setOllamaApiKey,
     lockedParameters,
     activeSessionId,
     setActiveSessionId,
@@ -45,10 +47,22 @@ export default function AnalysisScreen() {
   const [progressExpanded, setProgressExpanded] = useState(true);
 
   const refreshModels = useCallback(async () => {
+    if (selectedProvider === 'ollama_cloud' && !ollamaBaseUrl.trim()) {
+      setModels([]);
+      setModelsLoaded(true);
+      setModelsError('Configura la URL de Ollama Cloud para listar modelos.');
+      return;
+    }
+
     setModelsRefreshing(true);
     setModelsError(null);
     try {
-      const m = await listModels();
+      const m = await listModels({
+        provider: selectedProvider,
+        model: selectedModel,
+        ollamaBaseUrl,
+        ollamaApiKey,
+      });
       setModels(m);
       setModelsLoaded(true);
       if (m.length === 0) {
@@ -60,7 +74,7 @@ export default function AnalysisScreen() {
     } finally {
       setModelsRefreshing(false);
     }
-  }, [setModels]);
+  }, [ollamaApiKey, ollamaBaseUrl, selectedModel, selectedProvider, setModels]);
 
   useEffect(() => {
     void refreshModels();
@@ -106,7 +120,12 @@ export default function AnalysisScreen() {
 
     if (!hasLocalFiles && !targetSessionId) {
       // No local files and no existing session → require upload
-      setAnalysisError('Sube ambos archivos primero en la pestaña "Subida"');
+      setAnalysisError('Sube ambos archivos primero en la pestaña "Datos"');
+      return;
+    }
+
+    if (selectedProvider === 'ollama_cloud' && !ollamaBaseUrl.trim()) {
+      setAnalysisError('Debes configurar la URL de Ollama Cloud antes de analizar.');
       return;
     }
 
@@ -138,6 +157,12 @@ export default function AnalysisScreen() {
           selectedModel,
           selectedProvider,
           Array.from(lockedParameters),
+          {
+            provider: selectedProvider,
+            model: selectedModel,
+            ollamaBaseUrl,
+            ollamaApiKey,
+          },
           (ev) => setProgressMessages((prev) => [...prev, ev]),
         );
         setAnalysisResult(result);
@@ -147,7 +172,19 @@ export default function AnalysisScreen() {
       } else if (hasLocalFiles) {
         // Fallback: direct multipart with uploaded files
         setProgressMessages([{ type: 'progress', agent: 'driving', message: 'Enviando archivos y analizando...' }]);
-        const result = await analyzeFiles(telemetryFile, svmFile, selectedModel, selectedProvider, Array.from(lockedParameters));
+        const result = await analyzeFiles(
+          telemetryFile,
+          svmFile,
+          selectedModel,
+          selectedProvider,
+          Array.from(lockedParameters),
+          {
+            provider: selectedProvider,
+            model: selectedModel,
+            ollamaBaseUrl,
+            ollamaApiKey,
+          },
+        );
         setAnalysisResult(result);
         setProgressExpanded(false);
       } else {
@@ -165,6 +202,8 @@ export default function AnalysisScreen() {
     svmFile,
     selectedModel,
     selectedProvider,
+    ollamaBaseUrl,
+    ollamaApiKey,
     lockedParameters,
     activeSessionId,
     setActiveSessionId,
@@ -208,6 +247,55 @@ export default function AnalysisScreen() {
       ) : null}
 
       {modelsError ? <Text style={styles.modelError}>{modelsError}</Text> : null}
+
+      <View style={styles.modelConfigRow}>
+        <Text style={styles.label}>Proveedor:</Text>
+        <View style={styles.modelList}>
+          <Pressable
+            style={[styles.modelChip, selectedProvider === 'ollama_cloud' && styles.modelChipActive]}
+            onPress={() => setSelectedProvider('ollama_cloud')}
+          >
+            <Text style={[styles.modelChipText, selectedProvider === 'ollama_cloud' && styles.modelChipTextActive]}>
+              Ollama Cloud
+            </Text>
+          </Pressable>
+          <Pressable
+            style={[styles.modelChip, selectedProvider === 'ollama' && styles.modelChipActive]}
+            onPress={() => setSelectedProvider('ollama')}
+          >
+            <Text style={[styles.modelChipText, selectedProvider === 'ollama' && styles.modelChipTextActive]}>
+              Ollama Compatible
+            </Text>
+          </Pressable>
+        </View>
+      </View>
+
+      <View style={styles.modelConfigRow}>
+        <Text style={styles.label}>URL Ollama (usuario):</Text>
+        <TextInput
+          style={styles.modelInput}
+          value={ollamaBaseUrl}
+          onChangeText={setOllamaBaseUrl}
+          placeholder="https://tu-endpoint-ollama"
+          placeholderTextColor="#777"
+          autoCapitalize="none"
+          autoCorrect={false}
+        />
+      </View>
+
+      <View style={styles.modelConfigRow}>
+        <Text style={styles.label}>API Key Ollama (opcional):</Text>
+        <TextInput
+          style={styles.modelInput}
+          value={ollamaApiKey}
+          onChangeText={setOllamaApiKey}
+          placeholder="sk-..."
+          placeholderTextColor="#777"
+          autoCapitalize="none"
+          autoCorrect={false}
+          secureTextEntry
+        />
+      </View>
 
       <View style={styles.modelConfigRow}>
         <Text style={styles.label}>Modelo (manual):</Text>

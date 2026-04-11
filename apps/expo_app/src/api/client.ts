@@ -126,8 +126,22 @@ export interface ModelInfo {
   modified_at: string;
 }
 
-export async function listModels(): Promise<ModelInfo[]> {
-  const { data } = await api.get('/models');
+export interface OllamaRuntimeOptions {
+  ollamaBaseUrl?: string;
+  ollamaApiKey?: string;
+  model?: string;
+  provider?: string;
+}
+
+export async function listModels(options?: OllamaRuntimeOptions): Promise<ModelInfo[]> {
+  const { data } = await api.get('/models', {
+    params: {
+      provider: options?.provider,
+      model: options?.model,
+      ollama_base_url: options?.ollamaBaseUrl,
+      ollama_api_key: options?.ollamaApiKey,
+    },
+  });
   return data.models ?? [];
 }
 
@@ -274,19 +288,37 @@ export async function uploadFile(
 
   const chunkSize = init.chunk_size;
   const totalChunks = Math.ceil(file.size / chunkSize);
+  const maxParallelChunks = 4;
+  let uploadedBytes = 0;
+  let nextChunkIndex = 0;
 
-  // Chunks
-  for (let i = 0; i < totalChunks; i++) {
-    const start = i * chunkSize;
-    const end = Math.min(start + chunkSize, file.size);
-    const chunk = file.slice(start, end);
+  const uploadWorker = async (): Promise<void> => {
+    while (true) {
+      const i = nextChunkIndex;
+      nextChunkIndex += 1;
 
-    await api.put(`/uploads/${init.upload_id}/chunk?chunk_index=${i}`, chunk, {
-      headers: { 'Content-Type': 'application/octet-stream' },
-    });
+      if (i >= totalChunks) {
+        return;
+      }
 
-    onProgress?.(((i + 1) / totalChunks) * 100);
-  }
+      const start = i * chunkSize;
+      const end = Math.min(start + chunkSize, file.size);
+      const chunk = file.slice(start, end);
+
+      await api.put(`/uploads/${init.upload_id}/chunk?chunk_index=${i}`, chunk, {
+        headers: { 'Content-Type': 'application/octet-stream' },
+      });
+
+      uploadedBytes += (end - start);
+      onProgress?.(Math.min(100, (uploadedBytes / file.size) * 100));
+    }
+  };
+
+  const workers = Array.from(
+    { length: Math.min(maxParallelChunks, totalChunks) },
+    () => uploadWorker(),
+  );
+  await Promise.all(workers);
 
   // Complete
   const { data: complete } = await api.post<UploadComplete>(`/uploads/${init.upload_id}/complete`);
@@ -442,12 +474,15 @@ export async function analyzeFiles(
   model?: string,
   provider?: string,
   fixedParams?: string[],
+  options?: OllamaRuntimeOptions,
 ): Promise<AnalysisResponse> {
   const form = new FormData();
   form.append('telemetry', telemetryFile);
   form.append('svm', svmFile);
   if (model) form.append('model', model);
   if (provider) form.append('provider', provider);
+  if (options?.ollamaBaseUrl) form.append('ollama_base_url', options.ollamaBaseUrl);
+  if (options?.ollamaApiKey) form.append('ollama_api_key', options.ollamaApiKey);
   for (const param of fixedParams ?? []) {
     form.append('fixed_params', param);
   }
@@ -463,11 +498,14 @@ export async function analyzeSession(
   model?: string,
   provider?: string,
   fixedParams?: string[],
+  options?: OllamaRuntimeOptions,
 ): Promise<AnalysisResponse> {
   const form = new FormData();
   form.append('session_id', sessionId);
   if (model) form.append('model', model);
   if (provider) form.append('provider', provider);
+  if (options?.ollamaBaseUrl) form.append('ollama_base_url', options.ollamaBaseUrl);
+  if (options?.ollamaApiKey) form.append('ollama_api_key', options.ollamaApiKey);
   for (const param of fixedParams ?? []) {
     form.append('fixed_params', param);
   }
@@ -510,12 +548,15 @@ export async function analyzeSessionStream(
   model: string | undefined,
   provider: string | undefined,
   fixedParams: string[] | undefined,
+  options: OllamaRuntimeOptions | undefined,
   onProgress: (ev: ProgressEvent) => void,
 ): Promise<AnalysisResponse> {
   const form = new FormData();
   form.append('session_id', sessionId);
   if (model) form.append('model', model);
   if (provider) form.append('provider', provider);
+  if (options?.ollamaBaseUrl) form.append('ollama_base_url', options.ollamaBaseUrl);
+  if (options?.ollamaApiKey) form.append('ollama_api_key', options.ollamaApiKey);
   for (const param of fixedParams ?? []) {
     form.append('fixed_params', param);
   }

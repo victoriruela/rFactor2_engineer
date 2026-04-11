@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"net/http"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/rs/zerolog/log"
@@ -21,7 +22,35 @@ func NewModelsHandler(client *ollama.Client) *ModelsHandler {
 
 // ListModels handles GET /api/models
 func (h *ModelsHandler) ListModels(c *gin.Context) {
-	models, err := h.Client.ListModels(c.Request.Context())
+	provider := strings.TrimSpace(c.Query("provider"))
+	if provider != "" && provider != "ollama" && provider != "ollama_cloud" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "unsupported provider"})
+		return
+	}
+
+	baseURL := strings.TrimSpace(c.Query("ollama_base_url"))
+	apiKey := strings.TrimSpace(c.Query("ollama_api_key"))
+	model := strings.TrimSpace(c.Query("model"))
+
+	client := h.Client
+	if baseURL != "" || apiKey != "" || model != "" {
+		if baseURL == "" && h.Client != nil {
+			baseURL = h.Client.BaseURL
+		}
+		if apiKey == "" && h.Client != nil {
+			apiKey = h.Client.APIKey
+		}
+		if model == "" && h.Client != nil {
+			model = h.Client.Model
+		}
+		if baseURL == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "ollama_base_url is required"})
+			return
+		}
+		client = ollama.NewClient(baseURL, model, apiKey)
+	}
+
+	models, err := client.ListModels(c.Request.Context())
 	if err != nil {
 		log.Warn().Err(err).Msg("failed to list Ollama models")
 		c.JSON(http.StatusOK, gin.H{"models": []any{}})

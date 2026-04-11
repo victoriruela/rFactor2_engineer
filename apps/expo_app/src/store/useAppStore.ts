@@ -31,9 +31,13 @@ interface AppState {
   models: ModelInfo[];
   selectedModel: string;
   selectedProvider: string;
+  ollamaBaseUrl: string;
+  ollamaApiKey: string;
   setModels: (m: ModelInfo[]) => void;
   setSelectedModel: (m: string) => void;
   setSelectedProvider: (p: string) => void;
+  setOllamaBaseUrl: (url: string) => void;
+  setOllamaApiKey: (key: string) => void;
 
   // Tracks
   tracks: TrackInfo[];
@@ -75,10 +79,14 @@ export const useAppStore = create<AppState>()(persist((set) => ({
 
   models: [],
   selectedModel: 'llama3.2:latest',
-  selectedProvider: 'ollama',
+  selectedProvider: 'ollama_cloud',
+  ollamaBaseUrl: '',
+  ollamaApiKey: '',
   setModels: (models) => set({ models }),
   setSelectedModel: (selectedModel) => set({ selectedModel }),
   setSelectedProvider: (selectedProvider) => set({ selectedProvider }),
+  setOllamaBaseUrl: (ollamaBaseUrl) => set({ ollamaBaseUrl }),
+  setOllamaApiKey: (ollamaApiKey) => set({ ollamaApiKey }),
 
   tracks: [],
   setTracks: (tracks) => set({ tracks }),
@@ -106,5 +114,6 @@ export const useAppStore = create<AppState>()(persist((set) => ({
     activeSessionId: state.activeSessionId,
     selectedModel: state.selectedModel,
     selectedProvider: state.selectedProvider,
+    ollamaBaseUrl: state.ollamaBaseUrl,
   }),
 }));

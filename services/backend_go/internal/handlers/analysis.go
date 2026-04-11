@@ -26,9 +26,14 @@ type analyzer interface {
 
 // AnalysisHandler orchestrates file parsing and agent pipeline.
 type AnalysisHandler struct {
-	DataDir   string
-	Client    *ollama.Client
-	Pipeline  analyzer
+	DataDir  string
+	Client   *ollama.Client
+	Pipeline analyzer
+}
+
+type ollamaRequestOptions struct {
+	BaseURL string
+	APIKey  string
 }
 
 // NewAnalysisHandler creates an analysis handler.
@@ -54,19 +59,44 @@ func NewAnalysisHandlerWithPipeline(dataDir string, ollamaClient *ollama.Client,
 	}
 }
 
-func (h *AnalysisHandler) resolveAnalyzer(model, provider string) (analyzer, error) {
-	if provider != "" && provider != "ollama" {
+func (h *AnalysisHandler) resolveAnalyzer(model, provider string, opts ollamaRequestOptions) (analyzer, error) {
+	if provider != "" && provider != "ollama" && provider != "ollama_cloud" {
 		return nil, fmt.Errorf("unsupported provider: %s", provider)
 	}
 
-	if model == "" || h.Client == nil {
+	if opts.BaseURL == "" && opts.APIKey == "" && (model == "" || h.Client == nil) {
 		return h.Pipeline, nil
 	}
 
-	overrideClient := ollama.NewClient(h.Client.BaseURL, model, h.Client.APIKey)
-	overrideClient.NumPredict = h.Client.NumPredict
-	overrideClient.Temp = h.Client.Temp
-	overrideClient.HTTPClient = h.Client.HTTPClient
+	baseURL := opts.BaseURL
+	apiKey := opts.APIKey
+	resolvedModel := model
+
+	if h.Client != nil {
+		if baseURL == "" {
+			baseURL = h.Client.BaseURL
+		}
+		if apiKey == "" {
+			apiKey = h.Client.APIKey
+		}
+		if resolvedModel == "" {
+			resolvedModel = h.Client.Model
+		}
+	}
+
+	if baseURL == "" {
+		return nil, fmt.Errorf("ollama_base_url is required")
+	}
+	if resolvedModel == "" {
+		return nil, fmt.Errorf("model is required")
+	}
+
+	overrideClient := ollama.NewClient(baseURL, resolvedModel, apiKey)
+	if h.Client != nil {
+		overrideClient.NumPredict = h.Client.NumPredict
+		overrideClient.Temp = h.Client.Temp
+		overrideClient.HTTPClient = h.Client.HTTPClient
+	}
 
 	return agents.NewPipeline(overrideClient, ""), nil
 }
@@ -86,6 +116,8 @@ func (h *AnalysisHandler) Analyze(c *gin.Context) {
 	svmFiles := form.File["svm"]
 	model := strings.TrimSpace(c.PostForm("model"))
 	provider := strings.TrimSpace(c.PostForm("provider"))
+	ollamaBaseURL := strings.TrimSpace(c.PostForm("ollama_base_url"))
+	ollamaAPIKey := strings.TrimSpace(c.PostForm("ollama_api_key"))
 	fixedParams := extractFixedParams(c)
 
 	if len(telemetryFiles) == 0 || len(svmFiles) == 0 {
@@ -116,7 +148,7 @@ func (h *AnalysisHandler) Analyze(c *gin.Context) {
 	}
 
 	// Parse
-	runner, err := h.resolveAnalyzer(model, provider)
+	runner, err := h.resolveAnalyzer(model, provider, ollamaRequestOptions{BaseURL: ollamaBaseURL, APIKey: ollamaAPIKey})
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
@@ -143,6 +175,8 @@ func (h *AnalysisHandler) AnalyzeSession(c *gin.Context) {
 	}
 	model := strings.TrimSpace(c.PostForm("model"))
 	provider := strings.TrimSpace(c.PostForm("provider"))
+	ollamaBaseURL := strings.TrimSpace(c.PostForm("ollama_base_url"))
+	ollamaAPIKey := strings.TrimSpace(c.PostForm("ollama_api_key"))
 	fixedParams := extractFixedParams(c)
 
 	telPath, svmPath, err := h.resolveSessionFilePaths(sessionID, uploadSessionID)
@@ -151,7 +185,7 @@ func (h *AnalysisHandler) AnalyzeSession(c *gin.Context) {
 		return
 	}
 
-	runner, err := h.resolveAnalyzer(model, provider)
+	runner, err := h.resolveAnalyzer(model, provider, ollamaRequestOptions{BaseURL: ollamaBaseURL, APIKey: ollamaAPIKey})
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
@@ -301,6 +335,8 @@ func (h *AnalysisHandler) AnalyzeStream(c *gin.Context) {
 	}
 	model := strings.TrimSpace(c.PostForm("model"))
 	provider := strings.TrimSpace(c.PostForm("provider"))
+	ollamaBaseURL := strings.TrimSpace(c.PostForm("ollama_base_url"))
+	ollamaAPIKey := strings.TrimSpace(c.PostForm("ollama_api_key"))
 
 	telPath, svmPath, err := h.resolveSessionFilePaths(sessionID, uploadSessionID)
 	if err != nil {
@@ -308,7 +344,7 @@ func (h *AnalysisHandler) AnalyzeStream(c *gin.Context) {
 		return
 	}
 
-	runner, err := h.resolveAnalyzer(model, provider)
+	runner, err := h.resolveAnalyzer(model, provider, ollamaRequestOptions{BaseURL: ollamaBaseURL, APIKey: ollamaAPIKey})
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
