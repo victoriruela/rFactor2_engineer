@@ -1,4 +1,4 @@
-﻿import { useCallback, useEffect, useMemo, useState } from 'react';
+﻿import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { View, Text, StyleSheet, Pressable, ScrollView, ActivityIndicator, TextInput } from 'react-native';
 import { useAppStore } from '../../src/store/useAppStore';
 import { analyzeFiles, analyzeSessionStream, getSetup, listModels, listSessions, setSessionState } from '../../src/api';
@@ -46,8 +46,16 @@ export default function AnalysisScreen() {
   const [progressMessages, setProgressMessages] = useState<ProgressEvent[]>([]);
   const [progressExpanded, setProgressExpanded] = useState(true);
 
+  // Refs so refreshModels identity stays stable while user types
+  const ollamaBaseUrlRef = useRef(ollamaBaseUrl);
+  const ollamaApiKeyRef = useRef(ollamaApiKey);
+  useEffect(() => { ollamaBaseUrlRef.current = ollamaBaseUrl; }, [ollamaBaseUrl]);
+  useEffect(() => { ollamaApiKeyRef.current = ollamaApiKey; }, [ollamaApiKey]);
+
   const refreshModels = useCallback(async () => {
-    if (selectedProvider === 'ollama_cloud' && !ollamaBaseUrl.trim()) {
+    const url = ollamaBaseUrlRef.current;
+    const key = ollamaApiKeyRef.current;
+    if (selectedProvider === 'ollama_cloud' && !url.trim()) {
       setModels([]);
       setModelsLoaded(true);
       setModelsError('Configura la URL de Ollama Cloud para listar modelos.');
@@ -59,22 +67,22 @@ export default function AnalysisScreen() {
     try {
       const m = await listModels({
         provider: selectedProvider,
-        model: selectedModel,
-        ollamaBaseUrl,
-        ollamaApiKey,
+        ollamaBaseUrl: url,
+        ollamaApiKey: key,
       });
       setModels(m);
       setModelsLoaded(true);
       if (m.length === 0) {
         setModelsError('No se encontraron modelos en Ollama.');
       }
-    } catch {
+    } catch (e: unknown) {
       setModelsLoaded(true);
-      setModelsError('No se pudieron cargar los modelos de Ollama.');
+      const msg = e instanceof Error ? e.message : 'Error desconocido';
+      setModelsError(`No se pudieron cargar los modelos: ${msg}`);
     } finally {
       setModelsRefreshing(false);
     }
-  }, [ollamaApiKey, ollamaBaseUrl, selectedModel, selectedProvider, setModels]);
+  }, [selectedProvider, setModels]);
 
   useEffect(() => {
     void refreshModels();
@@ -243,6 +251,9 @@ export default function AnalysisScreen() {
               </Pressable>
             ))}
           </View>
+          {selectedModel ? (
+            <Text style={styles.modelSelected}>Modelo activo: {selectedModel}</Text>
+          ) : null}
         </View>
       ) : null}
 
@@ -286,19 +297,6 @@ export default function AnalysisScreen() {
           autoCapitalize="none"
           autoCorrect={false}
           secureTextEntry
-        />
-      </View>
-
-      <View style={styles.modelConfigRow}>
-        <Text style={styles.label}>Modelo (manual):</Text>
-        <TextInput
-          style={styles.modelInput}
-          value={selectedModel}
-          onChangeText={setSelectedModel}
-          placeholder="llama3.2:latest"
-          placeholderTextColor="#777"
-          autoCapitalize="none"
-          autoCorrect={false}
         />
       </View>
 
@@ -468,6 +466,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: 8,
+    width: '100%',
   },
   refreshBtn: {
     backgroundColor: '#1a1a3e',
@@ -486,6 +485,12 @@ const styles = StyleSheet.create({
     color: '#ff9800',
     fontSize: 12,
     marginBottom: 12,
+  },
+  modelSelected: {
+    color: '#aaa',
+    fontSize: 12,
+    marginTop: 8,
+    width: '100%',
   },
   modelChip: {
     paddingVertical: 6,

@@ -80,7 +80,7 @@ export const useAppStore = create<AppState>()(persist((set) => ({
   models: [],
   selectedModel: 'llama3.2:latest',
   selectedProvider: 'ollama_cloud',
-  ollamaBaseUrl: '',
+  ollamaBaseUrl: 'https://ollama.com',
   ollamaApiKey: '',
   setModels: (models) => set({ models }),
   setSelectedModel: (selectedModel) => set({ selectedModel }),

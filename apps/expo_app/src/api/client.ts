@@ -134,15 +134,18 @@ export interface OllamaRuntimeOptions {
 }
 
 export async function listModels(options?: OllamaRuntimeOptions): Promise<ModelInfo[]> {
-  const { data } = await api.get('/models', {
-    params: {
-      provider: options?.provider,
-      model: options?.model,
-      ollama_base_url: options?.ollamaBaseUrl,
-      ollama_api_key: options?.ollamaApiKey,
-    },
-  });
-  return data.models ?? [];
+  try {
+    const { data } = await api.get('/models', {
+      params: {
+        provider: options?.provider,
+        ollama_base_url: options?.ollamaBaseUrl,
+        ollama_api_key: options?.ollamaApiKey,
+      },
+    });
+    return data.models ?? [];
+  } catch (error: unknown) {
+    throw new Error(extractApiErrorMessage(error, 'No se pudieron cargar los modelos.'));
+  }
 }
 
 // ── Sessions ──

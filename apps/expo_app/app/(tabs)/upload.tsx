@@ -18,14 +18,16 @@ function downloadJSON(data: unknown, filename: string): void {
   URL.revokeObjectURL(url);
 }
 
-function pickJSONFile(): Promise<unknown> {
+function pickJSONFile(): Promise<unknown | null> {
   return new Promise((resolve, reject) => {
     const input = document.createElement('input');
     input.type = 'file';
     input.accept = '.json';
+    // Fired in modern browsers when the dialog is closed without selecting a file
+    input.addEventListener('cancel', () => resolve(null));
     input.onchange = () => {
       const file = input.files?.[0];
-      if (!file) { reject(new Error('No se seleccionó archivo')); return; }
+      if (!file) { resolve(null); return; }
       const reader = new FileReader();
       reader.onload = () => {
         try { resolve(JSON.parse(reader.result as string)); }
@@ -153,7 +155,8 @@ export default function DatosScreen() {
     setSuccess(null);
     setLoadingSession(true);
     try {
-      const data = await pickJSONFile() as SessionFile;
+      const data = await pickJSONFile() as SessionFile | null;
+      if (data === null) return;
       if (!data || data.version !== 1) {
         throw new Error('Formato de archivo de sesión no reconocido');
       }
@@ -189,7 +192,8 @@ export default function DatosScreen() {
     setError(null);
     setSuccess(null);
     try {
-      const data = await pickJSONFile() as LockedParamsFile;
+      const data = await pickJSONFile() as LockedParamsFile | null;
+      if (data === null) return;
       if (!data || data.version !== 1 || !Array.isArray(data.locked_parameters)) {
         throw new Error('Formato de archivo de parámetros no reconocido');
       }

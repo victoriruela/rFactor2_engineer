@@ -57,7 +57,7 @@ func (h *ModelsHandler) ListModels(c *gin.Context) {
 	models, err := client.ListModels(c.Request.Context())
 	if err != nil {
 		log.Warn().Err(err).Msg("failed to list Ollama models")
-		c.JSON(http.StatusOK, gin.H{"models": []any{}})
+		c.JSON(http.StatusBadGateway, gin.H{"error": "No se pudieron obtener los modelos: " + err.Error()})
 		return
 	}
 
