@@ -25,7 +25,11 @@ func (h *AnalysisHandler) GetSetup(c *gin.Context) {
 	}
 	clientSessionID := middleware.GetSessionID(c)
 
-	sessDir := filepath.Join(h.DataDir, clientSessionID, reqSessionID)
+	sessDir, err := h.findSessionDir(clientSessionID, reqSessionID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "session not found"})
+		return
+	}
 	entries, err := os.ReadDir(sessDir)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "session not found"})

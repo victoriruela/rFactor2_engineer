@@ -259,7 +259,10 @@ func (h *AnalysisHandler) LoadSessionTelemetry(c *gin.Context) {
 }
 
 func (h *AnalysisHandler) resolveTelemetryFilePath(clientSessionID, uploadSessionID string) (string, error) {
-	sessDir := filepath.Join(h.DataDir, clientSessionID, uploadSessionID)
+	sessDir, err := h.findSessionDir(clientSessionID, uploadSessionID)
+	if err != nil {
+		return "", err
+	}
 
 	entries, err := os.ReadDir(sessDir)
 	if err != nil {
@@ -420,7 +423,10 @@ func extractFixedParams(c *gin.Context) []string {
 }
 
 func (h *AnalysisHandler) resolveSessionFilePaths(clientSessionID, uploadSessionID string) (string, string, error) {
-	sessDir := filepath.Join(h.DataDir, clientSessionID, uploadSessionID)
+	sessDir, err := h.findSessionDir(clientSessionID, uploadSessionID)
+	if err != nil {
+		return "", "", err
+	}
 
 	entries, err := os.ReadDir(sessDir)
 	if err != nil {
@@ -451,4 +457,39 @@ func (h *AnalysisHandler) resolveSessionFilePaths(clientSessionID, uploadSession
 	}
 
 	return telPath, svmPath, nil
+}
+
+// findSessionDir returns the on-disk directory for a given uploadSessionID.
+// It first tries data/{clientSessionID}/{uploadSessionID}/ (fast path).
+// If that does not exist it falls back to scanning all client subdirectories —
+// this allows sessions to be restored even when the browser client-session-id
+// has changed (e.g. incognito, new device, or old saved JSON without client_session_id).
+func (h *AnalysisHandler) findSessionDir(clientSessionID, uploadSessionID string) (string, error) {
+	// Fast path: exact match
+	direct := filepath.Join(h.DataDir, clientSessionID, uploadSessionID)
+	if info, err := os.Stat(direct); err == nil && info.IsDir() {
+		return direct, nil
+	}
+
+	// Fallback: scan all client directories
+	clientDirs, err := os.ReadDir(h.DataDir)
+	if err != nil {
+		return "", fmt.Errorf("session not found")
+	}
+	for _, cd := range clientDirs {
+		if !cd.IsDir() {
+			continue
+		}
+		candidate := filepath.Join(h.DataDir, cd.Name(), uploadSessionID)
+		if info, err := os.Stat(candidate); err == nil && info.IsDir() {
+			log.Debug().
+				Str("wanted_client", clientSessionID).
+				Str("found_client", cd.Name()).
+				Str("session", uploadSessionID).
+				Msg("session found via fallback scan")
+			return candidate, nil
+		}
+	}
+
+	return "", fmt.Errorf("session not found")
 }
