@@ -1,6 +1,8 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { Stack } from 'expo-router';
 import { View, Text, ScrollView, StyleSheet, Pressable } from 'react-native';
+import { useAppStore } from '../src/store/useAppStore';
+import { deleteSessionOnUnload } from '../src/api/client';
 
 const TEXT_NODE_DEBUG_ENABLED =
   __DEV__ &&
@@ -123,6 +125,25 @@ const dbg = StyleSheet.create({
 });
 
 export default function RootLayout() {
+  const activeSessionId = useAppStore((state) => state.activeSessionId);
+
+  // Auto-cleanup session files when window closes (beforeunload with keepalive)
+  useEffect(() => {
+    const handleBeforeUnload = () => {
+      if (activeSessionId && typeof window !== 'undefined') {
+        // Use keepalive: true so fetch continues even after page unload
+        deleteSessionOnUnload(activeSessionId);
+      }
+    };
+
+    if (typeof window !== 'undefined') {
+      window.addEventListener('beforeunload', handleBeforeUnload);
+      return () => {
+        window.removeEventListener('beforeunload', handleBeforeUnload);
+      };
+    }
+  }, [activeSessionId]);
+
   return (
     <ErrorBoundary>
       <Stack screenOptions={{ headerShown: false }}>

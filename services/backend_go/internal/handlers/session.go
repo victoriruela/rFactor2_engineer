@@ -5,8 +5,10 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/rs/zerolog/log"
 
 	"github.com/viciruela/rfactor2-engineer/internal/domain"
 	"github.com/viciruela/rfactor2-engineer/internal/middleware"
@@ -169,4 +171,85 @@ func (h *SessionHandler) DeleteSession(c *gin.Context) {
 	}
 
 	c.Status(http.StatusNoContent)
+}
+
+// CleanupOldSessions removes sessions older than maxAge.
+// Callable by background workers or explicitly for maintenance.
+func (h *SessionHandler) CleanupOldSessions(maxAge time.Duration) {
+	clientDirs, err := os.ReadDir(h.DataDir)
+	if err != nil {
+		log.Warn().Err(err).Msg("cleanup: cannot read data directory")
+		return
+	}
+
+	now := time.Now()
+	cleanedCount := 0
+	totalSize := int64(0)
+
+	for _, clientDir := range clientDirs {
+		if !clientDir.IsDir() || strings.HasPrefix(clientDir.Name(), ".") {
+			continue
+		}
+
+		clientPath := filepath.Join(h.DataDir, clientDir.Name())
+		sessionDirs, err := os.ReadDir(clientPath)
+		if err != nil {
+			continue
+		}
+
+		for _, sessionDir := range sessionDirs {
+			if !sessionDir.IsDir() || strings.HasPrefix(sessionDir.Name(), "_chunks_") {
+				continue
+			}
+
+			sessionPath := filepath.Join(clientPath, sessionDir.Name())
+			info, err := os.Stat(sessionPath)
+			if err != nil {
+				continue
+			}
+
+			// Check if session is older than maxAge
+			if now.Sub(info.ModTime()) > maxAge {
+				// Calculate size before deletion
+				size := dirSize(sessionPath)
+				totalSize += size
+
+				// Try to delete
+				if err := os.RemoveAll(sessionPath); err != nil {
+					log.Warn().
+						Str("session_id", sessionDir.Name()).
+						Err(err).
+						Msg("cleanup: failed to delete old session")
+				} else {
+					cleanedCount++
+					log.Debug().
+						Str("session_id", sessionDir.Name()).
+						Int64("size_bytes", size).
+						Msg("cleanup: deleted old session")
+				}
+			}
+		}
+	}
+
+	if cleanedCount > 0 {
+		log.Info().
+			Int("sessions", cleanedCount).
+			Int64("total_mb", totalSize / (1024 * 1024)).
+			Msg("cleanup: old sessions removed")
+	}
+}
+
+// dirSize returns the total size of a directory in bytes.
+func dirSize(path string) int64 {
+	var size int64
+	filepath.Walk(path, func(_ string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if !info.IsDir() {
+			size += info.Size()
+		}
+		return nil
+	})
+	return size
 }

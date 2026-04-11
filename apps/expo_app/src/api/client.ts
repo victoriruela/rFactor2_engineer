@@ -180,6 +180,23 @@ export async function deleteSession(sessionId: string): Promise<void> {
   await api.delete(`/sessions/${sessionId}`);
 }
 
+// Delete session with keepalive for unload scenarios
+export async function deleteSessionOnUnload(sessionId: string): Promise<void> {
+  try {
+    const clientSessionId = getClientSessionId();
+    const headers = clientSessionId ? { 'X-Client-Session-Id': clientSessionId } : {};
+    
+    await fetch(`${API_URL}/sessions/${sessionId}`, {
+      method: 'DELETE',
+      headers,
+      keepalive: true,
+    });
+  } catch (err) {
+    // Silently fail — unload cleanup best-effort
+    console.debug('[cleanup] unload delete failed:', err);
+  }
+}
+
 // ── Session state helpers (localStorage) ──
 
 export type SessionState = 'uploaded' | 'telemetry_loaded' | 'analysis_complete';

@@ -57,6 +57,9 @@ func main() {
 	modelsH := handlers.NewModelsHandler(ollamaClient)
 	tracksH := handlers.NewTracksHandler()
 
+	// ── Start background cleanup worker ──
+	go startCleanupWorker(sessionH)
+
 	// ── Router ──
 	r := gin.New()
 	r.Use(gin.Recovery())
@@ -166,5 +169,20 @@ func ginZerolog() gin.HandlerFunc {
 			Int("status", c.Writer.Status()).
 			Dur("latency", time.Since(start)).
 			Msg("")
+	}
+}
+
+// startCleanupWorker runs a periodic cleanup task to remove old sessions.
+// Sessions older than 24 hours are cleaned up every hour.
+func startCleanupWorker(sessionH *handlers.SessionHandler) {
+	ticker := time.NewTicker(1 * time.Hour)
+	defer ticker.Stop()
+
+	// Run cleanup immediately on startup
+	sessionH.CleanupOldSessions(24 * time.Hour)
+
+	// Then run periodically
+	for range ticker.C {
+		sessionH.CleanupOldSessions(24 * time.Hour)
 	}
 }
