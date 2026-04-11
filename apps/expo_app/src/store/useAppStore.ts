@@ -110,6 +110,17 @@ export const useAppStore = create<AppState>()(persist((set) => ({
   clearLockedParameters: () => set({ lockedParameters: new Set() }),
 }), {
   name: 'rf2-app-store',
+  version: 1,
+  migrate: (persistedState: unknown, fromVersion: number) => {
+    const state = (persistedState ?? {}) as Record<string, unknown>;
+    if (fromVersion < 1) {
+      // Set default Ollama URL for users who had an empty string stored
+      if (!state.ollamaBaseUrl) {
+        state.ollamaBaseUrl = 'https://ollama.com';
+      }
+    }
+    return state;
+  },
   partialize: (state) => ({
     activeSessionId: state.activeSessionId,
     selectedModel: state.selectedModel,

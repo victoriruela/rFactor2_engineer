@@ -31,7 +31,7 @@ export default function AnalysisScreen() {
     analysisError, setAnalysisError,
     models, setModels,
     selectedModel, setSelectedModel,
-    selectedProvider, setSelectedProvider,
+    selectedProvider,
     ollamaBaseUrl, setOllamaBaseUrl,
     ollamaApiKey, setOllamaApiKey,
     lockedParameters,
@@ -258,20 +258,6 @@ export default function AnalysisScreen() {
       ) : null}
 
       {modelsError ? <Text style={styles.modelError}>{modelsError}</Text> : null}
-
-      <View style={styles.modelConfigRow}>
-        <Text style={styles.label}>Proveedor:</Text>
-        <View style={styles.modelList}>
-          <Pressable
-            style={[styles.modelChip, selectedProvider === 'ollama_cloud' && styles.modelChipActive]}
-            onPress={() => setSelectedProvider('ollama_cloud')}
-          >
-            <Text style={[styles.modelChipText, selectedProvider === 'ollama_cloud' && styles.modelChipTextActive]}>
-              Ollama Cloud
-            </Text>
-          </Pressable>
-        </View>
-      </View>
 
       <View style={styles.modelConfigRow}>
         <Text style={styles.label}>URL Ollama (usuario):</Text>

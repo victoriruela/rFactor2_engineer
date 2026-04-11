@@ -1,7 +1,7 @@
 import { useState, useCallback } from 'react';
 import { View, Text, StyleSheet, Pressable, Platform, ScrollView, ActivityIndicator } from 'react-native';
 import { useAppStore } from '../../src/store/useAppStore';
-import { uploadFile, getSetup, loadSessionTelemetry, setSessionState } from '../../src/api';
+import { uploadFile, getSetup, loadSessionTelemetry, setSessionState, getClientSessionId, overrideClientSessionId } from '../../src/api';
 import type { SetupChange, AnalysisResponse } from '../../src/api';
 import SetupCompleteSection from '../../src/components/SetupCompleteSection';
 import LockedParametersPanel from '../../src/components/LockedParametersPanel';
@@ -45,6 +45,7 @@ function pickJSONFile(): Promise<unknown | null> {
 interface SessionFile {
   version: 1;
   session_id: string;
+  client_session_id?: string;
   saved_at: string;
   analysis_result: AnalysisResponse | null;
   full_setup: Record<string, SetupChange[]> | null;
@@ -138,6 +139,7 @@ export default function DatosScreen() {
     const sessionFile: SessionFile = {
       version: 1,
       session_id: activeSessionId!,
+      client_session_id: getClientSessionId(),
       saved_at: new Date().toISOString(),
       analysis_result: analysisResult,
       full_setup: fullSetup,
@@ -162,6 +164,7 @@ export default function DatosScreen() {
       }
       if (data.analysis_result) setAnalysisResult(data.analysis_result);
       if (data.full_setup) setFullSetup(data.full_setup);
+      if (data.client_session_id) overrideClientSessionId(data.client_session_id);
       if (data.session_id) setActiveSessionId(data.session_id);
       if (Array.isArray(data.locked_parameters)) {
         setLockedParameters(new Set(data.locked_parameters));

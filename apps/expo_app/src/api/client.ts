@@ -92,6 +92,21 @@ function getSessionId(): string {
   return sessionId;
 }
 
+/** Returns the current client session ID (the value sent as X-Client-Session-Id). */
+export function getClientSessionId(): string {
+  return getSessionId();
+}
+
+/**
+ * Restores a previously saved client session ID.
+ * Call this when loading a saved session so that subsequent API calls use
+ * the same session namespace as the original upload.
+ */
+export function overrideClientSessionId(id: string): void {
+  sessionId = id;
+  persistSessionId(id);
+}
+
 const api: AxiosInstance = axios.create({
   baseURL: API_URL,
   timeout: 300_000, // 5min for analysis
