@@ -1,3 +1,10 @@
+use nom::{
+    bytes::complete::take,
+    number::complete::{le_i16, le_u16, le_u32},
+    sequence::tuple,
+    IResult,
+};
+
 use crate::domain::ChannelMeta;
 use crate::error::{ParseError, ParseWarning};
 use crate::types::LdDataType;
@@ -6,9 +13,9 @@ use crate::utils::parse_cstring;
 /// Byte size of a single channel descriptor record in the linked list.
 pub const CHANNEL_RECORD_SIZE: usize = 0x01A8;
 
-/// Parse all channel descriptors by traversing the linked list.
+/// Parse all channel descriptors by traversing the linked list using nom.
 ///
-/// `buf`: the **entire** file byte slice (or at least the region covering all meta nodes).
+/// `buf`: the **entire** file byte slice (must cover all meta nodes).
 /// `first_offset`: absolute file offset of the first channel record (from header).
 /// `file_len`: total file byte length (for bounds checking).
 ///
@@ -34,47 +41,21 @@ pub fn parse_channels(
         }
 
         let rec = &buf[start..start + CHANNEL_RECORD_SIZE];
-
-        let prev_offset = le_u32(rec, 0x000);
-        let next_offset = le_u32(rec, 0x004);
-        let data_offset = le_u32(rec, 0x008);
-        let count = le_u32(rec, 0x00C);
-        let type_id = le_u16(rec, 0x010);
-        let sample_rate = le_u16(rec, 0x012);
-        let shift = le_i16(rec, 0x014);
-        let multiplier = le_i16(rec, 0x016);
-        let scale = le_i16(rec, 0x018);
-        let decimal_places = le_i16(rec, 0x01A);
-
-        let name = parse_cstring(&rec[0x01C..0x03C]);
-        let short_name = parse_cstring(&rec[0x03C..0x044]);
-        let units = parse_cstring(&rec[0x044..0x050]);
+        let (_, raw) = nom_channel_record(rec)
+            .map_err(|e| ParseError::NomError(format!("{e:?}")))?;
 
         // Validate data type; skip channel with warning if unknown.
-        match LdDataType::from_type_id(type_id) {
+        let next_offset = raw.next_offset;
+        match LdDataType::from_type_id(raw.type_id) {
             None => {
                 warnings.push(ParseWarning::UnsupportedDataType {
-                    channel: name.clone(),
-                    type_id,
+                    channel: raw.name.clone(),
+                    type_id: raw.type_id,
                 });
                 // Do not push to channels; continue to next.
             }
             Some(_) => {
-                channels.push(ChannelMeta {
-                    prev_offset,
-                    next_offset,
-                    data_offset,
-                    count,
-                    type_id,
-                    sample_rate,
-                    shift,
-                    multiplier,
-                    scale,
-                    decimal_places,
-                    name,
-                    short_name,
-                    units,
-                });
+                channels.push(raw);
             }
         }
 
@@ -87,23 +68,44 @@ pub fn parse_channels(
     Ok((channels, warnings))
 }
 
-// ---------------------------------------------------------------------------
-// Internal helpers
-// ---------------------------------------------------------------------------
+// -------------------------------------------------------------------------
+// nom combinator — single channel record
+// -------------------------------------------------------------------------
 
-#[inline]
-fn le_u32(buf: &[u8], off: usize) -> u32 {
-    u32::from_le_bytes(buf[off..off + 4].try_into().expect("le_u32"))
-}
+fn nom_channel_record(input: &[u8]) -> IResult<&[u8], ChannelMeta> {
+    let (rest, (prev_offset, next_offset, data_offset, count)) =
+        tuple((le_u32, le_u32, le_u32, le_u32))(input)?;
+    let (rest, (type_id, sample_rate)) = tuple((le_u16, le_u16))(rest)?;
+    let (rest, (shift, multiplier, scale, decimal_places)) =
+        tuple((le_i16, le_i16, le_i16, le_i16))(rest)?;
 
-#[inline]
-fn le_u16(buf: &[u8], off: usize) -> u16 {
-    u16::from_le_bytes(buf[off..off + 2].try_into().expect("le_u16"))
-}
+    // Fixed-width null-terminated strings
+    let (rest, name_bytes)       = take(32usize)(rest)?; // 0x01C..0x03C
+    let (rest, short_name_bytes) = take(8usize)(rest)?;  // 0x03C..0x044
+    let (rest, units_bytes)      = take(12usize)(rest)?; // 0x044..0x050
 
-#[inline]
-fn le_i16(buf: &[u8], off: usize) -> i16 {
-    i16::from_le_bytes(buf[off..off + 2].try_into().expect("le_i16"))
+    // Skip remaining padding to CHANNEL_RECORD_SIZE (0x1A8)
+    // Consumed so far: 4+4+4+4 + 2+2 + 2+2+2+2 + 32+8+12 = 80 = 0x50
+    // Remaining pad: 0x1A8 - 0x50 = 0x158
+    let (rest, _) = take(0x158usize)(rest)?;
+
+    let meta = ChannelMeta {
+        prev_offset,
+        next_offset,
+        data_offset,
+        count,
+        type_id,
+        sample_rate,
+        shift,
+        multiplier,
+        scale,
+        decimal_places,
+        name:         parse_cstring(name_bytes),
+        short_name:   parse_cstring(short_name_bytes),
+        units:        parse_cstring(units_bytes),
+    };
+
+    Ok((rest, meta))
 }
 
 // ---------------------------------------------------------------------------
