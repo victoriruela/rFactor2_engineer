@@ -7,17 +7,19 @@
     "web": "expo start --web",
     "lint": "expo lint",
     "test": "jest",
-    "export:web": "npx expo export -p web"
+    "export:web": "npx expo export -p web && node scripts/normalize-web-entry-module.js"
   },
   "dependencies": {
     "@react-navigation/bottom-tabs": "^7.0.0",
     "@react-navigation/native": "^7.0.0",
+    "@types/pako": "^2.0.4",
     "axios": "^1.7.0",
     "expo": "~52.0.0",
     "expo-document-picker": "~13.0.0",
     "expo-linking": "^7.0.5",
     "expo-router": "~4.0.0",
     "expo-status-bar": "~2.0.0",
+    "pako": "^2.1.0",
     "react": "18.3.1",
     "react-dom": "18.3.1",
     "react-native": "0.76.7",

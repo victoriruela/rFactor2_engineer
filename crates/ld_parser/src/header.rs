@@ -9,14 +9,43 @@ use crate::domain::LdFileHeader;
 use crate::error::ParseError;
 use crate::utils::parse_cstring;
 
-/// Expected file magic for all supported .ld files.
+/// MoTeC LD3/LD4 file magic.
 pub const LD_MAGIC: u32 = 0x0045_F836;
-/// Minimum supported format version.
+/// ADL / older MoTeC format magic (rFactor2 native .ld export).
+pub const LD_MAGIC_V0: u32 = 0x0000_0040;
+/// Minimum supported format version for LD3/LD4.
 pub const LD_VERSION_MIN: u32 = 1;
 /// Maximum supported format version.
 pub const LD_VERSION_MAX: u32 = 2;
 /// Expected minimum header size in bytes.
 pub const HEADER_SIZE: usize = 0x0200; // conservative; actual usable region up to 0xC00
+
+/// Returns true if the buffer starts with the ADL v0 header signature.
+fn is_v0(buf: &[u8]) -> bool {
+    buf.len() >= 8
+        && u32::from_le_bytes(buf[0..4].try_into().unwrap_or([0; 4])) == LD_MAGIC_V0
+        && u32::from_le_bytes(buf[4..8].try_into().unwrap_or([1; 4])) == 0
+}
+
+fn find_header_start(buf: &[u8]) -> Option<usize> {
+    // ADL v0: magic is always at offset 0, version == 0.
+    if is_v0(buf) {
+        return Some(0);
+    }
+    // LD3/LD4: scan for magic + valid version anywhere in the prefix.
+    let scan_end = buf.len().saturating_sub(8);
+    for i in 0..=scan_end {
+        let magic = u32::from_le_bytes(buf[i..i + 4].try_into().ok()?);
+        if magic != LD_MAGIC {
+            continue;
+        }
+        let version = u32::from_le_bytes(buf[i + 4..i + 8].try_into().ok()?);
+        if (LD_VERSION_MIN..=LD_VERSION_MAX).contains(&version) {
+            return Some(i);
+        }
+    }
+    None
+}
 
 /// Parse the .ld file header from a byte slice using nom combinators.
 ///
@@ -28,11 +57,37 @@ pub fn parse_header(input: &[u8]) -> Result<LdFileHeader, ParseError> {
     if input.len() < HEADER_SIZE {
         return Err(ParseError::HeaderTooShort { got: input.len(), expected: HEADER_SIZE });
     }
-    // Pre-validate magic and version to give callers typed errors before nom runs.
-    validate_magic_and_version(input)?;
-    validate_offsets(input)?;
+	let start = find_header_start(input).ok_or_else(|| {
+		let found = if input.len() >= 4 {
+			u32::from_le_bytes(input[0..4].try_into().unwrap_or([0u8; 4]))
+		} else {
+			0
+		};
+		ParseError::UnknownMagic { found }
+	})?;
+	let buf = &input[start..];
 
-    let (_, hdr) = nom_header(input).map_err(|e| ParseError::NomError(format!("{e:?}")))?;
+    // Pre-validate magic and version to give callers typed errors before nom runs.
+    validate_magic_and_version(buf)?;
+    validate_offsets(buf)?;
+
+    let (_, mut hdr) = nom_header(buf).map_err(|e| ParseError::NomError(format!("{e:?}")))?;
+
+    // ADL v0: data_offset is 0 in the file header.  Patch it with the first
+    // channel record's data_offset so that callers can use it as a upper-bound
+    // for the meta slice (readMetaSlice on the JS side).
+    if hdr.data_offset == 0 {
+        let ch_start = hdr.channel_meta_offset as usize;
+        if ch_start + 12 <= input.len() {
+            let first_data = u32::from_le_bytes(
+                input[ch_start + 8..ch_start + 12].try_into().unwrap_or([0; 4]),
+            );
+            if first_data > 0 {
+                hdr.data_offset = first_data;
+            }
+        }
+    }
+
     Ok(hdr)
 }
 
@@ -73,7 +128,8 @@ fn nom_header(input: &[u8]) -> IResult<&[u8], LdFileHeader> {
 // Typed validation helpers (used before nom, also re-exported for callers)
 // -------------------------------------------------------------------------
 
-/// Validate magic (0x0045F836) and version (1..=2).
+/// Validate magic and version.
+/// Accepts LD3/LD4 (magic=0x0045F836, version 1-2) and ADL v0 (magic=0x40, version=0).
 /// Returns typed `ParseError` variants; use this before `parse_header` when
 /// you need to distinguish magic vs version errors.
 pub fn validate_magic_and_version(buf: &[u8]) -> Result<(), ParseError> {
@@ -81,6 +137,15 @@ pub fn validate_magic_and_version(buf: &[u8]) -> Result<(), ParseError> {
         return Err(ParseError::HeaderTooShort { got: buf.len(), expected: 8 });
     }
     let magic = u32::from_le_bytes(buf[0..4].try_into().expect("4 bytes"));
+    // ADL v0 format: magic=0x40, version=0.
+    if magic == LD_MAGIC_V0 {
+        let version = u32::from_le_bytes(buf[4..8].try_into().expect("4 bytes"));
+        if version == 0 {
+            return Ok(());
+        }
+        return Err(ParseError::UnsupportedVersion { found: version });
+    }
+    // LD3/LD4 format.
     if magic != LD_MAGIC {
         return Err(ParseError::UnknownMagic { found: magic });
     }
@@ -91,7 +156,9 @@ pub fn validate_magic_and_version(buf: &[u8]) -> Result<(), ParseError> {
     Ok(())
 }
 
-/// Validate that `channel_meta_offset` and `data_offset` are non-zero.
+/// Validate that `channel_meta_offset` is non-zero, and `data_offset` is non-zero
+/// for LD3/LD4 format (ADL v0 keeps data_offset=0 in the file header; each channel
+/// record carries its own data_offset).
 pub fn validate_offsets(buf: &[u8]) -> Result<(), ParseError> {
     if buf.len() < 0x18 {
         return Err(ParseError::HeaderTooShort { got: buf.len(), expected: 0x18 });
@@ -100,9 +167,12 @@ pub fn validate_offsets(buf: &[u8]) -> Result<(), ParseError> {
     if meta_off == 0 {
         return Err(ParseError::InvalidOffset { field: "channel_meta_offset", value: 0 });
     }
-    let data_off = u32::from_le_bytes(buf[16..20].try_into().expect("4 bytes"));
-    if data_off == 0 {
-        return Err(ParseError::InvalidOffset { field: "data_offset", value: 0 });
+    // Skip data_offset check for ADL v0 — it is always 0 in the file header.
+    if !is_v0(buf) {
+        let data_off = u32::from_le_bytes(buf[16..20].try_into().expect("4 bytes"));
+        if data_off == 0 {
+            return Err(ParseError::InvalidOffset { field: "data_offset", value: 0 });
+        }
     }
     Ok(())
 }

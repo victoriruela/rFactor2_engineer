@@ -37,7 +37,7 @@ Read this file first. Mandatory entry point for all agents.
 
 ## Project Summary
 
-rFactor2 Engineer analyzes sim-racing telemetry (MoTeC `.mat`/`.csv`) and vehicle setup files (`.svm`) using a multi-agent LLM pipeline (4 agents) to produce driving feedback and setup recommendations. All user-facing output is in **Spanish (Castellano)**.
+rFactor2 Engineer analyzes sim-racing telemetry (MoTeC `.ld` client-side, plus `.mat`/`.csv` legacy server-side) and vehicle setup files (`.svm`) using a multi-agent LLM pipeline (4 agents) to produce driving feedback and setup recommendations. All user-facing output is in **Spanish (Castellano)**.
 
 **Stack**: Go 1.22+ (Gin) + Expo web (React Native Web), deployed as a single Linux amd64 binary via `go:embed`.
 
@@ -46,7 +46,7 @@ rFactor2 Engineer analyzes sim-racing telemetry (MoTeC `.mat`/`.csv`) and vehicl
 ```
 Browser  ├── GET /          → Expo web (embedded from apps/expo_app/dist/ via go:embed)
          └── /api/*         → Gin handlers
-                                ├── Parsers       (.mat / .csv / .svm)
+                                ├── Parsers       (.mat / .csv / .svm + pre-parsed client payload)
                                 ├── AI Pipeline   (Translation → Driving → Telemetry Specialists → Setup Specialists → Chief)
                                 └── Ollama client (HTTP, :11434)
 ```
@@ -65,8 +65,9 @@ services/backend_go/
   internal/agents/                # pipeline.go  prompts.go  zones.go  pipeline_reasoning_test.go
   internal/ollama/client.go       # Direct Ollama HTTP client
   internal/domain/                # telemetry.go  setup.go  analysis.go
-  internal/config/config.go       # Env var bindings (RF2_PORT, OLLAMA_*, etc.)
-  internal/middleware/            # session.go  cors.go
+  internal/config/config.go       # Env var bindings (RF2_PORT, OLLAMA_*, RF2_JWT_SECRET, RF2_SMTP_*, etc.)
+  internal/middleware/            # session.go  cors.go  auth.go (JWT Required)
+  internal/auth/                  # db.go (SQLite)  jwt.go  email.go  handlers.go (register/verify/login/config)
   data/param_mapping.json         # Internal → Spanish friendly name map (auto-extended by Translation Agent)
   data/fixed_params.json          # Locked params list (AI agents must not change these)
 
@@ -75,7 +76,7 @@ apps/expo_app/
   src/api/                        # client.ts  index.ts  (axios, all /api/* calls)
   src/components/                 # CircuitMap.tsx  SetupTable.tsx
   src/store/useAppStore.ts        # Zustand global state
-  src/utils/                      # setupValueParser.ts  labelTranslator.ts
+  src/utils/                      # setupValueParser.ts  labelTranslator.ts  preparsedClientPayload.ts
 
 docs/
   openapi.yaml                    # Full API spec (all endpoints + request/response schemas)
@@ -105,6 +106,12 @@ Root reference files:
 | `RF2_PORT` | `8080` | Gin server listen port |
 | `RF2_DATA_DIR` | `./data` | Session uploads directory |
 | `RF2_LOG_LEVEL` | `info` | zerolog level (debug/info/warn/error) |
+| `RF2_JWT_SECRET` | *(random per run)* | HMAC secret for JWT tokens (set for persistence across restarts) |
+| `RF2_SMTP_HOST` | *(unset)* | SMTP server for verification emails |
+| `RF2_SMTP_PORT` | `587` | SMTP port |
+| `RF2_SMTP_USER` | *(unset)* | SMTP username |
+| `RF2_SMTP_PASS` | *(unset)* | SMTP password |
+| `RF2_SMTP_FROM` | *(unset)* | Sender email address |
 
 Extended provider config and numeric defaults: `LLM_CONSTANTS.md`
 
@@ -122,16 +129,39 @@ Extended provider config and numeric defaults: `LLM_CONSTANTS.md`
 **Merge strategy**: build from specialist proposals first; chief overrides only for params it explicitly returns.
 **Change-% normalization**: `computeChangePct()` returns `0.0%` when `new_value` is empty or semantically unchanged vs `old_value`.
 **Setup value units policy**: setup specialists and chief receive/display physical values from `CleanValue()` (never click indices); post-processing normalizes `new_value` to unit-bearing strings and defaults to `deg` when units are missing.
-**Driving analysis scope**: driving agent analyzes all laps jointly to detect repeatable driving patterns; recommendations can be global or curve-specific, always grounded in telemetry numbers.
+**Driving analysis scope**: driving agent analyzes all laps jointly to detect repeatable driving patterns; generates a variable number of improvement points (whatever the telemetry justifies, not a fixed count); recommendations are clear and concise for the pilot, avoiding unnecessary technical jargon; can be global or curve-specific, always grounded in telemetry numbers.
 **Circuit map rendering**: telemetría prioriza la vuelta seleccionada para el mapa; backend extrae una sola vuelta por defecto para `circuit_data` y frontend corta solo discontinuidades abruptas (paridad con Python `lap_xy`) para evitar saltos entre vueltas.
 **Telemetry payload cap**: `telemetry_series` is evenly downsampled server-side to at most 12000 samples to keep `/api/session_telemetry` web responses within practical size.
 **Axle symmetry**: post-processing pass enforces FL≈FR and RL≈RR unless telemetry data justifies asymmetry.
 **Reason-value coherence**: final post-processing rebuilds each setup reason from the applied old→new values (after guardrails/symmetry) and regenerates chief reasoning from the final change list to prevent contradictory narratives.
 **Reason text hygiene**: reason post-processing strips duplicated trace prefixes (`de <old> a <new>`) and normalizes common mojibake accent artifacts before presenting final Spanish output.
 **File-based session save/load (frontend)**: Sessions and locked parameters are saved/loaded as JSON files on the user's local system via the "Datos" tab. No server-side persistence of session state or locked params. Session files use format `{version:1, session_id, saved_at, analysis_result, full_setup, locked_parameters}`. Locked params files use format `{version:1, saved_at, locked_parameters}`.
+**Reload reset policy (frontend)**: recargar la página debe limpiar la sesión activa en memoria; la UI no debe restaurar automáticamente telemetría previa desde `localStorage` ni desde sesiones backend antiguas.
 **Locked params exclusion**: parámetros fijados se excluyen del `setup` antes de enviar contexto a especialistas y jefe; además se filtra cualquier propuesta residual sobre esos parámetros como defensa extra.
 **Session scope**: all `/api/` routes scoped to `X-Client-Session-Id` header / `rf2_session_id` cookie.
-**Datos tab layout**: Upload section + session management (save/load JSON) + locked params management (save/load JSON) + session info display + two-column layout: setup completo (left) + parámetros fijados (right).
+**File name parity (frontend)**: when the user picks a `.ld` file, if a `.svm` with a different base name is already selected it is cleared and an error is shown; when picking `.svm`, the pick is rejected if the base name doesn't match the existing `.ld`. Both files must share the same base name (without extension).
+**Save session default name (frontend)**: the download filename defaults to `<ld-basename>_<YYYY-MM-DD>.json` using the base name of the loaded `.ld` file.
+**Legacy routes removed**: all file-based endpoints (`/api/uploads/*`, `/api/analyze`, `/api/analyze_session`, `/api/analyze_stream`, `/api/session_telemetry`, `/api/sessions`, `/api/cleanup`, `/api/cleanup_all`, `/api/setup/:sessionId`) were removed. Active routes: `/api/health`, `/api/analyze_preparsed`, `/api/analyze_preparsed_stream`, `/api/models`, `/api/tracks`.
+**Startup data cleanup**: on server start, `cleanDataDir(cfg.DataDir)` removes all contents of the data directory, ensuring no stale session files from previous runs persist on disk.
+**Client-side parsing flow**: la pestaña Datos parsea `.ld` y `.svm` en navegador, guarda un payload pre-parseado en Zustand y el backend ejecuta la misma tubería de agentes mediante `/api/analyze_preparsed`.
+**WASM inline sync rule**: cualquier cambio en `apps/expo_app/wasm/ld_parser/pkg/ld_parser_bg.wasm` o bindings de wasm-bindgen exige regenerar `ld_parser_bg_inline.ts` para mantener export tables idénticas (evita errores tipo `jschannelinfo_shift is not a function`).
+**LD header tolerance (frontend)**: validación rápida y lectura de cabecera escanean hasta los primeros 64 KiB del archivo para admitir `.ld` con prefijos/metadatos antes de la cabecera MoTeC.
+**LD scaling parity (frontend)**: la decodificación cliente aplica fórmula ADL v0 `physical = (raw + shift) * multiplier / (scale * 10^decimalPlaces)` usando `legacy_shift` para reconstruir magnitudes físicas consistentes con MAT.
+**Circuit name fallback (frontend)**: cuando la cabecera LD no trae `venue`, se deriva el nombre de circuito desde el nombre de archivo eliminando timestamp/sufijos de sesión.
+**LD dual sampling policy (frontend)**: el parseo cliente conserva una vista previa densa para gráficos (`telemetry_series`) y genera un payload más compacto para `/api/analyze_preparsed*`, evitando degradar la UI y conteniendo el coste del análisis.
+**Telemetry alignment policy (frontend)**: todos los canales de la vista previa deben resamplearse a una longitud común basada en la serie temporal antes de construir `telemetry_series`; no se permite rellenar con ceros por diferencias de sample rate entre canales.
+**Lap-time precision policy (frontend)**: las duraciones de vuelta se estiman a partir de límites interpolados en el cambio de `Lap_Number` sobre la serie temporal completa, y la UI muestra `m:ss.mmm` (3 decimales) con ese valor preciso.
+**Lap visibility policy (frontend)**: la UI solo muestra vueltas completas: excluye por defecto la primera y la última vuelta visibles como outlap/inlap y oculta además cualquier vuelta cuya distancia recorrida sea menor al 90% de la vuelta completa de referencia.
+**Chart detail policy (frontend)**: `TelemetryCharts` prioriza más detalle visual (más puntos por píxel y suavizado conservador) para conservar steps/transiciones en lugar de sobre-suavizar curvas.
+**Selected-lap rendering policy (frontend)**: el mapa y los gráficos de telemetría nunca deben hacer fallback a geometría de sesión completa cuando hay una vuelta seleccionada; si faltan muestras válidas, se prefiere mostrar la ausencia de datos antes que mezclar varias vueltas.
+**Preparsed analysis streaming**: los análisis sobre payload ya parseado deben usar la variante SSE para exponer progreso y evitar timeouts intermedios del proxy en ejecuciones largas.
+**Ollama runtime config policy (frontend)**: los campos de URL/API key/modelo se editan como borrador local y solo se aplican al runtime al refrescar modelos o lanzar análisis; el listado de modelos no debe dispararse en cada pulsación ni contra URLs locales/incompletas.
+**SPA fallback discipline**: backend solo hace fallback a `index.html` para rutas SPA (sin extensión); assets faltantes (`.js`, `.css`, etc.) responden `404` para evitar errores por bundles obsoletos cacheados.
+**Expo web entry module rule**: el `index.html` exportado debe cargar el bundle con `<script type="module" ...>`; `scripts/deploy.ps1` normaliza y valida este requisito para evitar `Cannot use 'import.meta' outside a module`.
+**JWT auth flow**: register → verify email → login → JWT in `Authorization: Bearer` header. Admin seeded on startup (`Mulder_admin`). SQLite at `<DataDir>/rf2_users.db` excluded from `cleanDataDir`.
+**Tab visibility guard (frontend)**: unauthenticated users see only the Home (Inicio) tab; other tabs hidden via `href: null` in Expo Router Tabs layout.
+**Compressed session files (frontend)**: sessions saved as gzip-compressed `.rf2session` files via pako; load supports both compressed (gzip magic bytes `0x1f 0x8b`) and legacy uncompressed JSON.
+**User config auto-save (frontend)**: after successful analysis, `PUT /api/auth/config` silently persists the user's Ollama API key and model to the user profile; on next login these are restored.
 
 ## Language
 

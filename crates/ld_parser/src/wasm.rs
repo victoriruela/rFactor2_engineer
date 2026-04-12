@@ -1,9 +1,7 @@
 use wasm_bindgen::prelude::*;
 
 use crate::channel::parse_channels;
-use crate::domain::ChannelMeta;
-use crate::error::ParseError;
-use crate::header::{parse_header, validate_magic_and_version, validate_offsets};
+use crate::header::parse_header;
 
 // -------------------------------------------------------------------------
 // JS-facing types
@@ -19,6 +17,15 @@ pub struct JsChannelInfo {
     count: u32,
     type_id: u16,
     data_offset: u32,
+    /// Baseline raw offset for ADL v0 physical conversion.
+    /// Formula: physical = (raw - shift) * multiplier / (scale * 10^decimal_places)
+    shift: i16,
+    /// Raw value multiplier.
+    multiplier: i16,
+    /// Raw value divisor (almost always 1).
+    scale: i16,
+    /// Decimal exponent: result is divided by 10^decimal_places.
+    decimal_places: i16,
 }
 
 #[wasm_bindgen]
@@ -58,6 +65,26 @@ impl JsChannelInfo {
         self.data_offset
     }
 
+    #[wasm_bindgen(getter)]
+    pub fn shift(&self) -> i16 {
+        self.shift
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn multiplier(&self) -> i16 {
+        self.multiplier
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn scale(&self) -> i16 {
+        self.scale
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn decimal_places(&self) -> i16 {
+        self.decimal_places
+    }
+
     /// Byte length of this channel's data block: count × sample_size(type_id).
     #[wasm_bindgen]
     pub fn data_byte_len(&self) -> u32 {
@@ -65,6 +92,7 @@ impl JsChannelInfo {
             0x0000 | 0x0003 | 0x0004 => 4,
             0x0001 | 0x0002 => 2,
             0x0007 => 8,
+            0x0008 => 1,
             _ => 0,
         };
         self.count * sample_size
@@ -106,9 +134,6 @@ impl JsSessionInfo {
 /// Returns a `JsSessionInfo` on success, or throws a JS Error string.
 #[wasm_bindgen]
 pub fn parse_ld_header(buf: &[u8]) -> Result<JsSessionInfo, JsValue> {
-    validate_magic_and_version(buf).map_err(|e| JsValue::from_str(&e.to_string()))?;
-    validate_offsets(buf).map_err(|e| JsValue::from_str(&e.to_string()))?;
-
     let header = parse_header(buf).map_err(|e| JsValue::from_str(&e.to_string()))?;
     Ok(JsSessionInfo {
         version: header.version,
@@ -146,6 +171,10 @@ pub fn parse_ld_channels(buf: &[u8], first_meta_offset: u32) -> Result<js_sys::A
             count: ch.count,
             type_id: ch.type_id,
             data_offset: ch.data_offset,
+            shift: ch.shift,
+            multiplier: ch.multiplier,
+            scale: ch.scale,
+            decimal_places: ch.decimal_places,
         };
         arr.push(&JsValue::from(info));
     }

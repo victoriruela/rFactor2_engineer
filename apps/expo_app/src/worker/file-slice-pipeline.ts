@@ -20,8 +20,13 @@ import type { ChannelInfo, ParseHeaderResponse } from './worker-protocol';
 // Constants
 // ---------------------------------------------------------------------------
 
-/** Bytes to read for the file header (covers all string fields, see ld_format_research.md §1). */
-export const HEADER_SLICE_SIZE = 0x0200; // 512 B — conservative; actual used region < 0x200
+/**
+ * Bytes to scan for the LD header.
+ *
+ * Some telemetry loggers prepend metadata before the MoTeC header, so we scan a wider prefix
+ * to avoid rejecting valid files with a non-zero header start offset.
+ */
+export const HEADER_SLICE_SIZE = 0x10000; // 64 KiB
 
 // ---------------------------------------------------------------------------
 // Slice helpers (browser File API)
@@ -109,17 +114,45 @@ export async function validateLdFileFast(file: File): Promise<void> {
     throw new Error(`File "${file.name}" is too small to be a valid .ld file (${file.size} bytes)`);
   }
 
-  // Read just the 4-byte magic synchronously via a tiny slice.
-  const magicBytes = await sliceFile(file, 0, 4);
-  const magic =
-    magicBytes[0] |
-    (magicBytes[1] << 8) |
-    (magicBytes[2] << 16) |
-    (magicBytes[3] << 24);
+  const header = await sliceFile(file, 0, HEADER_SLICE_SIZE);
 
-  if (magic !== 0x0045_f836) {
+  // ADL v0 format (rFactor2 native .ld): magic=0x00000040 at offset 0, version=0 at offset 4.
+  // Check this first since it is an exact-offset match, not a scan.
+  const v0Magic =
+    (header[0] | (header[1] << 8) | (header[2] << 16) | (header[3] << 24)) >>> 0;
+  const v0Version =
+    (header[4] | (header[5] << 8) | (header[6] << 16) | (header[7] << 24)) >>> 0;
+  if (v0Magic === 0x00000040 && v0Version === 0) {
+    // Additional sanity check: channel_meta_offset at bytes[8..12] must be non-zero.
+    const metaOff =
+      (header[8] | (header[9] << 8) | (header[10] << 16) | (header[11] << 24)) >>> 0;
+    if (metaOff > 0) {
+      return; // Valid ADL v0 format.
+    }
+  }
+
+  // LD3/LD4 format: scan for magic 0x0045F836 anywhere in the first HEADER_SLICE_SIZE bytes.
+  let found = false;
+  for (let i = 0; i + 3 < header.length; i += 1) {
+    const magic =
+      header[i] |
+      (header[i + 1] << 8) |
+      (header[i + 2] << 16) |
+      (header[i + 3] << 24);
+    if ((magic >>> 0) === 0x0045_f836) {
+      found = true;
+      break;
+    }
+  }
+
+  if (!found) {
+    const first4 =
+      header[0] |
+      (header[1] << 8) |
+      (header[2] << 16) |
+      (header[3] << 24);
     throw new Error(
-      `File "${file.name}" is not a valid MoTeC .ld file (magic=0x${(magic >>> 0).toString(16).toUpperCase()})`,
+      `File "${file.name}" no contiene cabecera LD válida (first_u32=0x${(first4 >>> 0).toString(16).toUpperCase()})`,
     );
   }
 }

@@ -1,5 +1,6 @@
 import axios, { AxiosInstance } from 'axios';
 import { resolveApiBaseUrl } from './baseUrl';
+import { useAppStore } from '../store/useAppStore';
 
 const API_URL = resolveApiBaseUrl({
   envApiUrl: process.env.EXPO_PUBLIC_API_URL,
@@ -99,6 +100,10 @@ const api: AxiosInstance = axios.create({
 
 api.interceptors.request.use((config) => {
   config.headers['X-Client-Session-Id'] = getSessionId();
+  const jwt = useAppStore.getState().jwt;
+  if (jwt) {
+    config.headers['Authorization'] = `Bearer ${jwt}`;
+  }
   return config;
 });
 
@@ -350,6 +355,7 @@ export interface SetupChange {
 export interface LapStats {
   lap: number;
   duration: number;
+  lap_distance?: number;
   avg_speed: number;
   max_speed: number;
   avg_throttle?: number;
@@ -357,6 +363,13 @@ export interface LapStats {
   avg_brake?: number;
   max_brake?: number;
   avg_rpm?: number;
+  /** Per-tyre wear delta in the lap (percentage points, 0-100 scale) */
+  wear_fl?: number;
+  wear_fr?: number;
+  wear_rl?: number;
+  wear_rr?: number;
+  /** Fuel consumed during the lap (litres) */
+  fuel_used?: number;
 }
 
 export interface TelemetrySample {
@@ -453,6 +466,24 @@ export interface SessionStats {
   laps: LapStats[];
 }
 
+export interface PreparsedSetupSection {
+  name: string;
+  params: Record<string, string>;
+  read_only_params?: string[];
+}
+
+export interface PreparsedSetup {
+  sections: Record<string, PreparsedSetupSection>;
+}
+
+export interface PreparsedAnalyzePayload {
+  channels: Record<string, number[]>;
+  time_col: string;
+  lap_col: string;
+  setup: PreparsedSetup;
+  session_stats?: SessionStats | null;
+}
+
 export interface AnalysisResponse {
   circuit_data: GPSPoint[];
   issues_on_map: IssueMarker[];
@@ -512,6 +543,92 @@ export async function analyzeSession(
 
   const { data } = await api.post<AnalysisResponse>('/analyze_session', form);
   return data;
+}
+
+export async function analyzePreparsed(
+  payload: PreparsedAnalyzePayload,
+  model?: string,
+  provider?: string,
+  fixedParams?: string[],
+  options?: OllamaRuntimeOptions,
+): Promise<AnalysisResponse> {
+  const body = {
+    ...payload,
+    model,
+    provider,
+    ollama_base_url: options?.ollamaBaseUrl,
+    ollama_api_key: options?.ollamaApiKey,
+    fixed_params: fixedParams ?? [],
+  };
+
+  const { data } = await api.post<AnalysisResponse>('/analyze_preparsed', body);
+  return data;
+}
+
+export async function analyzePreparsedStream(
+  payload: PreparsedAnalyzePayload,
+  model: string | undefined,
+  provider: string | undefined,
+  fixedParams: string[] | undefined,
+  options: OllamaRuntimeOptions | undefined,
+  onProgress: (ev: ProgressEvent) => void,
+): Promise<AnalysisResponse> {
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    'X-Client-Session-Id': getSessionId(),
+  };
+  const jwt = useAppStore.getState().jwt;
+  if (jwt) {
+    headers['Authorization'] = `Bearer ${jwt}`;
+  }
+
+  const response = await fetch(`${API_URL}/analyze_preparsed_stream`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      ...payload,
+      model,
+      provider,
+      ollama_base_url: options?.ollamaBaseUrl,
+      ollama_api_key: options?.ollamaApiKey,
+      fixed_params: fixedParams ?? [],
+    }),
+  });
+
+  if (!response.ok || !response.body) {
+    const text = await response.text().catch(() => '');
+    throw new Error(`HTTP ${response.status}: ${text}`);
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+
+    const parts = buffer.split('\n\n');
+    buffer = parts.pop() ?? '';
+
+    for (const part of parts) {
+      const eventMatch = part.match(/^event:\s*(\S+)/m);
+      const dataMatch = part.match(/^data:\s*(.+)/ms);
+      if (!dataMatch) continue;
+
+      const eventType = eventMatch?.[1] ?? 'message';
+      const parsed = JSON.parse(dataMatch[1].trim());
+
+      if (eventType === 'progress' || eventType === 'error') {
+        onProgress(parsed as ProgressEvent);
+      } else if (eventType === 'result') {
+        return normalizeAnalysisResponse(parsed as AnalysisResponse);
+      }
+    }
+  }
+
+  throw new Error('Stream ended without a result event');
 }
 
 export async function loadSessionTelemetry(sessionId: string): Promise<AnalysisResponse> {
@@ -622,4 +739,38 @@ export interface TrackInfo {
 export async function listTracks(): Promise<TrackInfo[]> {
   const { data } = await api.get('/tracks');
   return data.tracks ?? [];
+}
+
+// ── Auth ──
+
+export interface AuthRegisterResponse {
+  message: string;
+  code?: string; // only in dev mode (no SMTP)
+}
+
+export async function authRegister(username: string, email: string, password: string): Promise<AuthRegisterResponse> {
+  const { data } = await api.post('/auth/register', { username, email, password });
+  return data;
+}
+
+export async function authVerify(email: string, code: string): Promise<{ message: string }> {
+  const { data } = await api.post('/auth/verify', { email, code });
+  return data;
+}
+
+export interface AuthLoginResponse {
+  token: string;
+  username: string;
+  is_admin: boolean;
+  ollama_api_key?: string;
+  ollama_model?: string;
+}
+
+export async function authLogin(username: string, password: string): Promise<AuthLoginResponse> {
+  const { data } = await api.post('/auth/login', { username, password });
+  return data;
+}
+
+export async function authUpdateConfig(ollamaApiKey: string, ollamaModel: string): Promise<void> {
+  await api.put('/auth/config', { ollama_api_key: ollamaApiKey, ollama_model: ollamaModel });
 }

@@ -1,6 +1,10 @@
 import { Tabs } from 'expo-router';
+import { useAppStore } from '../../src/store/useAppStore';
 
 export default function TabLayout() {
+  const jwt = useAppStore((s) => s.jwt);
+  const isLoggedIn = Boolean(jwt);
+
   return (
     <Tabs
       screenOptions={{
@@ -10,6 +14,12 @@ export default function TabLayout() {
         headerStyle: { backgroundColor: '#16213e' },
         headerTintColor: '#fff',
       }}
-    ><Tabs.Screen name="index" options={{ title: 'Inicio', tabBarLabel: 'Inicio' }} /><Tabs.Screen name="upload" options={{ title: 'Datos', tabBarLabel: 'Datos' }} /><Tabs.Screen name="analysis" options={{ title: 'Análisis', tabBarLabel: 'Análisis' }} /><Tabs.Screen name="telemetry" options={{ title: 'Telemetría', tabBarLabel: 'Telemetría' }} /><Tabs.Screen name="ld-telemetry" options={{ title: 'LD Parser', tabBarLabel: 'LD' }} /><Tabs.Screen name="tracks" options={{ title: 'Circuitos', tabBarLabel: 'Circuitos' }} /></Tabs>
+    >
+      <Tabs.Screen name="index" options={{ title: 'Inicio', tabBarLabel: 'Inicio' }} />
+      <Tabs.Screen name="upload" options={{ title: 'Datos', tabBarLabel: 'Datos', href: isLoggedIn ? undefined : null }} />
+      <Tabs.Screen name="analysis" options={{ title: 'Análisis', tabBarLabel: 'Análisis', href: isLoggedIn ? undefined : null }} />
+      <Tabs.Screen name="telemetry" options={{ title: 'Telemetría', tabBarLabel: 'Telemetría', href: isLoggedIn ? undefined : null }} />
+      <Tabs.Screen name="tracks" options={{ title: 'Circuitos', tabBarLabel: 'Circuitos', href: isLoggedIn ? undefined : null }} />
+    </Tabs>
   );
 }

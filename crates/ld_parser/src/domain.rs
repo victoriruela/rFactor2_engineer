@@ -41,13 +41,14 @@ pub struct ChannelMeta {
     pub type_id: u16,
     /// Sample rate in Hz.
     pub sample_rate: u16,
-    /// Scaling: base-2 shift exponent (may be negative).
+    /// Scaling baseline offset (ADL v0 zero point).
+    /// Formula used by frontend: physical = (raw - shift) * multiplier / (scale * 10^decimal_places)
     pub shift: i16,
-    /// Scaling: multiplier.
+    /// Scaling: raw value multiplier.
     pub multiplier: i16,
-    /// Scaling: base-10 decimal exponent (may be negative).
+    /// Scaling: raw value divisor (almost always 1).
     pub scale: i16,
-    /// Display decimal precision hint (not used for parsing).
+    /// Scaling: decimal exponent — divides the result by 10^decimal_places.
     pub decimal_places: i16,
     /// Long channel name (up to 32 bytes, null-terminated).
     pub name: String,

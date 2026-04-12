@@ -21,7 +21,7 @@ func CORSMiddleware() gin.HandlerFunc {
 			"https://telemetria.bot.nu",
 		},
 		AllowMethods:     []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
-		AllowHeaders:     []string{"Origin", "Content-Type", "Accept", SessionHeader},
+		AllowHeaders:     []string{"Origin", "Content-Type", "Accept", "Authorization", SessionHeader},
 		ExposeHeaders:    []string{SessionHeader},
 		AllowCredentials: true,
 	})

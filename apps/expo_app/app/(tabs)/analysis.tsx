@@ -1,7 +1,7 @@
 ﻿import { useCallback, useEffect, useMemo, useState } from 'react';
 import { View, Text, StyleSheet, Pressable, ScrollView, ActivityIndicator, TextInput } from 'react-native';
 import { useAppStore } from '../../src/store/useAppStore';
-import { analyzeFiles, analyzeSessionStream, getSetup, listModels, listSessions, setSessionState } from '../../src/api';
+import { analyzePreparsedStream, listModels, authUpdateConfig } from '../../src/api';
 import type { ProgressEvent, SetupChange } from '../../src/api';
 import SetupTable from '../../src/components/SetupTable';
 import MarkdownText from '../../src/components/MarkdownText';
@@ -16,6 +16,8 @@ const AGENT_LABELS: Record<string, string> = {
   chief: 'Ingeniero jefe',
 };
 
+const DEFAULT_OLLAMA_BASE_URL = process.env.EXPO_PUBLIC_OLLAMA_BASE_URL ?? 'https://www.ollama.com';
+
 function formatLapTime(seconds: number): string {
   if (seconds <= 0) return '--';
   const m = Math.floor(seconds / 60);
@@ -23,9 +25,28 @@ function formatLapTime(seconds: number): string {
   return `${m}:${s.toFixed(3).padStart(6, '0')}`;
 }
 
+function normalizeOllamaBaseUrl(baseUrl: string): string {
+  const trimmed = baseUrl.trim();
+  return trimmed.length > 0 ? trimmed : DEFAULT_OLLAMA_BASE_URL;
+}
+
+function canQueryRemoteModels(baseUrl: string): boolean {
+  try {
+    const parsed = new URL(baseUrl.trim());
+    const host = parsed.hostname.trim().toLowerCase();
+    return host.length > 0
+      && host !== 'localhost'
+      && host !== '127.0.0.1'
+      && host !== '::1'
+      && host !== '0.0.0.0'
+      && host !== 'host.docker.internal';
+  } catch {
+    return false;
+  }
+}
+
 export default function AnalysisScreen() {
   const {
-    telemetryFile, svmFile,
     isAnalyzing, setAnalyzing,
     analysisResult, setAnalysisResult,
     analysisError, setAnalysisError,
@@ -35,22 +56,66 @@ export default function AnalysisScreen() {
     ollamaBaseUrl, setOllamaBaseUrl,
     ollamaApiKey, setOllamaApiKey,
     lockedParameters,
-    activeSessionId,
-    setActiveSessionId,
+    preparsedPayload,
     fullSetup,
-    setFullSetup,
+    isUploading,
   } = useAppStore();
   const [modelsLoaded, setModelsLoaded] = useState(false);
   const [modelsRefreshing, setModelsRefreshing] = useState(false);
   const [modelsError, setModelsError] = useState<string | null>(null);
   const [progressMessages, setProgressMessages] = useState<ProgressEvent[]>([]);
   const [progressExpanded, setProgressExpanded] = useState(true);
+  const [draftOllamaBaseUrl, setDraftOllamaBaseUrl] = useState(() => normalizeOllamaBaseUrl(ollamaBaseUrl));
+  const [draftOllamaApiKey, setDraftOllamaApiKey] = useState(ollamaApiKey);
+  const [draftSelectedModel, setDraftSelectedModel] = useState(selectedModel);
+  const [didInitialModelLoad, setDidInitialModelLoad] = useState(false);
 
-  const refreshModels = useCallback(async () => {
-    if (selectedProvider === 'ollama_cloud' && !ollamaBaseUrl.trim()) {
+  useEffect(() => {
+    if (!ollamaBaseUrl.trim()) {
+      setOllamaBaseUrl(DEFAULT_OLLAMA_BASE_URL);
+    }
+  }, [ollamaBaseUrl, setOllamaBaseUrl]);
+
+  useEffect(() => {
+    setDraftOllamaBaseUrl(normalizeOllamaBaseUrl(ollamaBaseUrl));
+  }, [ollamaBaseUrl]);
+
+  useEffect(() => {
+    setDraftOllamaApiKey(ollamaApiKey);
+  }, [ollamaApiKey]);
+
+  useEffect(() => {
+    setDraftSelectedModel(selectedModel);
+  }, [selectedModel]);
+
+  const applyRuntimeConfig = useCallback(() => {
+    const normalizedBaseUrl = normalizeOllamaBaseUrl(draftOllamaBaseUrl);
+    const normalizedApiKey = draftOllamaApiKey.trim();
+    const normalizedModel = draftSelectedModel.trim() || 'llama3.2:latest';
+    const normalizedProvider = 'ollama_cloud';
+
+    setOllamaBaseUrl(normalizedBaseUrl);
+    setOllamaApiKey(normalizedApiKey);
+    setSelectedModel(normalizedModel);
+    if (selectedProvider !== normalizedProvider) {
+      setSelectedProvider(normalizedProvider);
+    }
+
+    return {
+      ollamaBaseUrl: normalizedBaseUrl,
+      ollamaApiKey: normalizedApiKey,
+      model: normalizedModel,
+      provider: normalizedProvider,
+    };
+  }, [draftOllamaApiKey, draftOllamaBaseUrl, draftSelectedModel, selectedProvider, setOllamaApiKey, setOllamaBaseUrl, setSelectedModel, setSelectedProvider]);
+
+  const refreshModels = useCallback(async (runtime?: { ollamaBaseUrl: string; ollamaApiKey: string; model: string; provider: string }) => {
+    const config = runtime ?? applyRuntimeConfig();
+
+    if (!canQueryRemoteModels(config.ollamaBaseUrl)) {
       setModels([]);
       setModelsLoaded(true);
-      setModelsError('Configura la URL de Ollama Cloud para listar modelos.');
+      setModelsError('Configura una URL cloud de Ollama válida para listar modelos.');
       return;
     }
 
@@ -58,10 +123,10 @@ export default function AnalysisScreen() {
     setModelsError(null);
     try {
       const m = await listModels({
-        provider: selectedProvider,
-        model: selectedModel,
-        ollamaBaseUrl,
-        ollamaApiKey,
+        provider: config.provider,
+        model: config.model,
+        ollamaBaseUrl: config.ollamaBaseUrl,
+        ollamaApiKey: config.ollamaApiKey,
       });
       setModels(m);
       setModelsLoaded(true);
@@ -74,23 +139,18 @@ export default function AnalysisScreen() {
     } finally {
       setModelsRefreshing(false);
     }
-  }, [ollamaApiKey, ollamaBaseUrl, selectedModel, selectedProvider, setModels]);
+  }, [applyRuntimeConfig, setModels]);
 
   useEffect(() => {
-    void refreshModels();
-  }, [refreshModels]);
-
-  useEffect(() => {
-    // Ensure setup is available for analysis (needed for locked params filtering)
-    if (!activeSessionId || fullSetup) {
-      return;
-    }
-    getSetup(activeSessionId)
-      .then((setup) => setFullSetup(setup))
-      .catch(() => {
-        // Ignore setup preload errors; user can still run analysis.
-      });
-  }, [activeSessionId, fullSetup, setFullSetup]);
+    if (didInitialModelLoad) return;
+    setDidInitialModelLoad(true);
+    void refreshModels({
+      provider: selectedProvider || 'ollama_cloud',
+      model: selectedModel.trim() || 'llama3.2:latest',
+      ollamaBaseUrl: normalizeOllamaBaseUrl(ollamaBaseUrl),
+      ollamaApiKey: ollamaApiKey.trim(),
+    });
+  }, [didInitialModelLoad, ollamaApiKey, ollamaBaseUrl, refreshModels, selectedModel, selectedProvider]);
 
   const filteredSetupAnalysis = useMemo<Record<string, SetupChange[]>>(() => {
     const source = analysisResult?.setup_analysis ?? {};
@@ -114,33 +174,18 @@ export default function AnalysisScreen() {
   }, [analysisResult?.setup_analysis]);
 
   const handleAnalyze = useCallback(async () => {
-    // Check if we can start analysis with an existing session or fresh upload
-    let targetSessionId = activeSessionId;
-    const hasLocalFiles = telemetryFile && svmFile;
-
-    if (!hasLocalFiles && !targetSessionId) {
-      // No local files and no existing session → require upload
-      setAnalysisError('Sube ambos archivos primero en la pestaña "Datos"');
+    if (!preparsedPayload) {
+      setAnalysisError(isUploading
+        ? 'Los archivos se estan procesando todavia. Espera a que termine el parseo automatico.'
+        : 'Sube los archivos .ld y .svm en la pestaña "Datos" para iniciar el analisis.');
       return;
     }
 
-    if (selectedProvider === 'ollama_cloud' && !ollamaBaseUrl.trim()) {
-      setAnalysisError('Debes configurar la URL de Ollama Cloud antes de analizar.');
-      return;
-    }
+    const runtimeConfig = applyRuntimeConfig();
 
-    // If no local files but session exists, try to use the session ID
-    if (!hasLocalFiles && targetSessionId) {
-      // Session is already loaded; we can proceed with analysis
-    } else if (!targetSessionId) {
-      // We have local files but no session ID yet, try to find one
-      try {
-        const availableSessions = await listSessions();
-        targetSessionId = availableSessions[0]?.id ?? null;
-      } catch (e) {
-        // If no session found, we'll use direct file upload below
-        targetSessionId = null;
-      }
+    if (!runtimeConfig.ollamaBaseUrl.trim()) {
+      setAnalysisError('Debes configurar la URL de Ollama antes de analizar.');
+      return;
     }
 
     setAnalyzing(true);
@@ -149,48 +194,32 @@ export default function AnalysisScreen() {
     setProgressExpanded(true);
 
     try {
-      if (targetSessionId) {
-        setActiveSessionId(targetSessionId);
-        // Use streaming endpoint with existing session
-        const result = await analyzeSessionStream(
-          targetSessionId,
-          selectedModel,
-          selectedProvider,
-          Array.from(lockedParameters),
-          {
-            provider: selectedProvider,
-            model: selectedModel,
-            ollamaBaseUrl,
-            ollamaApiKey,
-          },
-          (ev) => setProgressMessages((prev) => [...prev, ev]),
-        );
-        setAnalysisResult(result);
-        setSessionState(targetSessionId, 'analysis_complete');
-        // Minimize progress when analysis completes
-        setProgressExpanded(false);
-      } else if (hasLocalFiles) {
-        // Fallback: direct multipart with uploaded files
-        setProgressMessages([{ type: 'progress', agent: 'driving', message: 'Enviando archivos y analizando...' }]);
-        const result = await analyzeFiles(
-          telemetryFile,
-          svmFile,
-          selectedModel,
-          selectedProvider,
-          Array.from(lockedParameters),
-          {
-            provider: selectedProvider,
-            model: selectedModel,
-            ollamaBaseUrl,
-            ollamaApiKey,
-          },
-        );
-        setAnalysisResult(result);
-        setProgressExpanded(false);
-      } else {
-        // Should not reach here, but handle edge case
-        throw new Error('No session or files available for analysis');
-      }
+      setProgressMessages([{ type: 'progress', agent: 'driving', message: 'Analizando payload parseado en cliente...' }]);
+      const result = await analyzePreparsedStream(
+        preparsedPayload,
+        runtimeConfig.model,
+        runtimeConfig.provider,
+        Array.from(lockedParameters),
+        {
+          model: runtimeConfig.model,
+          ollamaBaseUrl: runtimeConfig.ollamaBaseUrl,
+          ollamaApiKey: runtimeConfig.ollamaApiKey,
+        },
+        (event) => {
+          setProgressMessages((prev) => [...prev, event]);
+        },
+      );
+      setAnalysisResult({
+        ...result,
+        circuit_data: analysisResult?.circuit_data?.length ? analysisResult.circuit_data : (result.circuit_data ?? []),
+        session_stats: analysisResult?.session_stats ?? result.session_stats ?? null,
+        laps_data: analysisResult?.laps_data?.length ? analysisResult.laps_data : (result.laps_data ?? []),
+        telemetry_series: analysisResult?.telemetry_series?.length ? analysisResult.telemetry_series : (result.telemetry_series ?? []),
+      });
+      setProgressExpanded(false);
+
+      // Auto-save Ollama config to user profile
+      authUpdateConfig(runtimeConfig.ollamaApiKey, runtimeConfig.model).catch(() => { /* silent */ });
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : 'Error en el análisis';
       setAnalysisError(msg);
@@ -198,15 +227,11 @@ export default function AnalysisScreen() {
       setAnalyzing(false);
     }
   }, [
-    telemetryFile,
-    svmFile,
-    selectedModel,
-    selectedProvider,
-    ollamaBaseUrl,
-    ollamaApiKey,
+    preparsedPayload,
     lockedParameters,
-    activeSessionId,
-    setActiveSessionId,
+    analysisResult,
+    isUploading,
+    applyRuntimeConfig,
     setAnalyzing,
     setAnalysisResult,
     setAnalysisError,
@@ -221,7 +246,9 @@ export default function AnalysisScreen() {
         <Text style={styles.label}>Modelos de Ollama:</Text>
         <Pressable
           style={[styles.refreshBtn, modelsRefreshing && styles.disabled]}
-          onPress={refreshModels}
+          onPress={() => {
+            void refreshModels();
+          }}
           disabled={modelsRefreshing}
         >
           <Text style={styles.refreshBtnText}>{modelsRefreshing ? 'Refrescando...' : 'Refrescar modelos'}</Text>
@@ -234,10 +261,10 @@ export default function AnalysisScreen() {
             {models.map((m) => (
               <Pressable
                 key={m.name}
-                style={[styles.modelChip, selectedModel === m.name && styles.modelChipActive]}
-                onPress={() => setSelectedModel(m.name)}
+                style={[styles.modelChip, draftSelectedModel === m.name && styles.modelChipActive]}
+                onPress={() => setDraftSelectedModel(m.name)}
               >
-                <Text style={[styles.modelChipText, selectedModel === m.name && styles.modelChipTextActive]}>
+                <Text style={[styles.modelChipText, draftSelectedModel === m.name && styles.modelChipTextActive]}>
                   {m.name}
                 </Text>
               </Pressable>
@@ -249,25 +276,11 @@ export default function AnalysisScreen() {
       {modelsError ? <Text style={styles.modelError}>{modelsError}</Text> : null}
 
       <View style={styles.modelConfigRow}>
-        <Text style={styles.label}>Proveedor:</Text>
-        <View style={styles.modelList}>
-          <Pressable
-            style={[styles.modelChip, selectedProvider === 'ollama_cloud' && styles.modelChipActive]}
-            onPress={() => setSelectedProvider('ollama_cloud')}
-          >
-            <Text style={[styles.modelChipText, selectedProvider === 'ollama_cloud' && styles.modelChipTextActive]}>
-              Ollama Cloud
-            </Text>
-          </Pressable>
-        </View>
-      </View>
-
-      <View style={styles.modelConfigRow}>
         <Text style={styles.label}>URL Ollama (usuario):</Text>
         <TextInput
           style={styles.modelInput}
-          value={ollamaBaseUrl}
-          onChangeText={setOllamaBaseUrl}
+          value={draftOllamaBaseUrl}
+          onChangeText={setDraftOllamaBaseUrl}
           placeholder="https://tu-endpoint-ollama"
           placeholderTextColor="#777"
           autoCapitalize="none"
@@ -279,8 +292,8 @@ export default function AnalysisScreen() {
         <Text style={styles.label}>API Key Ollama (opcional):</Text>
         <TextInput
           style={styles.modelInput}
-          value={ollamaApiKey}
-          onChangeText={setOllamaApiKey}
+          value={draftOllamaApiKey}
+          onChangeText={setDraftOllamaApiKey}
           placeholder="sk-..."
           placeholderTextColor="#777"
           autoCapitalize="none"
@@ -293,8 +306,8 @@ export default function AnalysisScreen() {
         <Text style={styles.label}>Modelo (manual):</Text>
         <TextInput
           style={styles.modelInput}
-          value={selectedModel}
-          onChangeText={setSelectedModel}
+          value={draftSelectedModel}
+          onChangeText={setDraftSelectedModel}
           placeholder="llama3.2:latest"
           placeholderTextColor="#777"
           autoCapitalize="none"
@@ -304,11 +317,11 @@ export default function AnalysisScreen() {
 
       {/* Analyze button */}
       <Pressable
-        style={[styles.analyzeBtn, isAnalyzing && styles.disabled]}
+        style={[styles.analyzeBtn, (isAnalyzing || isUploading || (!preparsedPayload && !analysisResult)) && styles.disabled]}
         onPress={handleAnalyze}
-        disabled={isAnalyzing}
+        disabled={isAnalyzing || isUploading || (!preparsedPayload && !analysisResult)}
       >
-        {isAnalyzing ? (
+        {isAnalyzing || isUploading ? (
           <ActivityIndicator color="#fff" />
         ) : (
           <Text style={styles.analyzeBtnText}>Iniciar Análisis</Text>
@@ -468,6 +481,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: 8,
+    width: '100%',
   },
   refreshBtn: {
     backgroundColor: '#1a1a3e',

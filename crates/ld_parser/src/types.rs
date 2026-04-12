@@ -17,6 +17,8 @@ pub enum LdDataType {
     Int32,
     /// type_id 0x0007 — f64 → Float64Array (GPS channels; low confidence)
     Float64,
+    /// type_id 0x0008 — i8 → Int8Array (ADL v0 single-byte channels, e.g. Gear)
+    Int8,
 }
 
 impl LdDataType {
@@ -29,6 +31,7 @@ impl LdDataType {
             0x0003 => Some(Self::Uint32),
             0x0004 => Some(Self::Int32),
             0x0007 => Some(Self::Float64),
+            0x0008 => Some(Self::Int8),
             _ => None,
         }
     }
@@ -40,6 +43,7 @@ impl LdDataType {
             Self::Int16 | Self::Uint16 => 2,
             Self::Uint32 | Self::Int32 => 4,
             Self::Float64 => 8,
+            Self::Int8 => 1,
         }
     }
 
@@ -57,6 +61,7 @@ impl LdDataType {
             Self::Uint32 => "Uint32Array",
             Self::Int32 => "Int32Array",
             Self::Float64 => "Float64Array",
+            Self::Int8 => "Int8Array",
         }
     }
 }
