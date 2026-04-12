@@ -171,6 +171,28 @@ func (h *Handlers) Login(c *gin.Context) {
 	})
 }
 
+// GetConfig handles GET /api/auth/config (protected)
+func (h *Handlers) GetConfig(c *gin.Context) {
+	claims, exists := c.Get("auth_claims")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "No autorizado"})
+		return
+	}
+	cl := claims.(*Claims)
+
+	user, err := h.DB.GetUserByUsername(cl.Username)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Error obteniendo configuración"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"ollama_api_key":     user.OllamaAPIKey,
+		"ollama_model":       user.OllamaModel,
+		"locked_parameters": user.LockedParameters,
+	})
+}
+
 // UpdateConfig handles PUT /api/auth/config (protected)
 func (h *Handlers) UpdateConfig(c *gin.Context) {
 	claims, exists := c.Get("auth_claims")

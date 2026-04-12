@@ -124,6 +124,7 @@ func main() {
 			protected.GET("/tracks", tracksH.ListTracks)
 
 			// Auth config
+			protected.GET("/auth/config", authH.GetConfig)
 			protected.PUT("/auth/config", authH.UpdateConfig)
 		}
 	}

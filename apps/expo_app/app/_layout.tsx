@@ -2,7 +2,7 @@ import React, { useEffect } from 'react';
 import { Stack } from 'expo-router';
 import { View, Text, ScrollView, StyleSheet, Pressable } from 'react-native';
 import { useAppStore } from '../src/store/useAppStore';
-import { deleteSessionOnUnload } from '../src/api/client';
+import { deleteSessionOnUnload, authGetConfig } from '../src/api/client';
 
 const TEXT_NODE_DEBUG_ENABLED =
   __DEV__ &&
@@ -126,6 +126,19 @@ const dbg = StyleSheet.create({
 
 export default function RootLayout() {
   const activeSessionId = useAppStore((state) => state.activeSessionId);
+  const jwt = useAppStore((state) => state.jwt);
+  const setLockedParameters = useAppStore((state) => state.setLockedParameters);
+
+  // Restore locked parameters from server on page reload (when already logged in)
+  useEffect(() => {
+    if (!jwt) return;
+    authGetConfig().then((config) => {
+      if (config.locked_parameters?.length) {
+        setLockedParameters(new Set(config.locked_parameters));
+      }
+    }).catch(() => { /* silent — user could be offline or token expired */ });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Auto-cleanup session files when window closes (beforeunload with keepalive)
   useEffect(() => {
