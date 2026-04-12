@@ -142,7 +142,7 @@ func main() {
 		Addr:         addr,
 		Handler:      r,
 		ReadTimeout:  30 * time.Second,
-		WriteTimeout: 300 * time.Second, // long for analysis
+		WriteTimeout: 0, // SSE streams require no write deadline; analysis can exceed 5 min
 		IdleTimeout:  120 * time.Second,
 	}
 

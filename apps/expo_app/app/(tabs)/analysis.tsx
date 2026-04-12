@@ -59,6 +59,7 @@ export default function AnalysisScreen() {
     preparsedPayload,
     fullSetup,
     isUploading,
+    jwt,
   } = useAppStore();
   const [modelsLoaded, setModelsLoaded] = useState(false);
   const [modelsRefreshing, setModelsRefreshing] = useState(false);
@@ -69,6 +70,9 @@ export default function AnalysisScreen() {
   const [draftOllamaApiKey, setDraftOllamaApiKey] = useState(ollamaApiKey);
   const [draftSelectedModel, setDraftSelectedModel] = useState(selectedModel);
   const [didInitialModelLoad, setDidInitialModelLoad] = useState(false);
+  const [analysisElapsed, setAnalysisElapsed] = useState(0);
+  const [savingConfig, setSavingConfig] = useState(false);
+  const [configSavedMsg, setConfigSavedMsg] = useState<string | null>(null);
 
   useEffect(() => {
     if (!ollamaBaseUrl.trim()) {
@@ -87,6 +91,21 @@ export default function AnalysisScreen() {
   useEffect(() => {
     setDraftSelectedModel(selectedModel);
   }, [selectedModel]);
+
+  useEffect(() => {
+    if (!isAnalyzing) {
+      setAnalysisElapsed(0);
+      return;
+    }
+    const iv = setInterval(() => setAnalysisElapsed(prev => prev + 1), 1000);
+    return () => clearInterval(iv);
+  }, [isAnalyzing]);
+
+  const formatElapsed = (s: number) => {
+    const m = Math.floor(s / 60);
+    const sec = s % 60;
+    return m > 0 ? `${m}m ${sec}s` : `${sec}s`;
+  };
 
   const applyRuntimeConfig = useCallback(() => {
     const normalizedBaseUrl = normalizeOllamaBaseUrl(draftOllamaBaseUrl);
@@ -108,6 +127,22 @@ export default function AnalysisScreen() {
       provider: normalizedProvider,
     };
   }, [draftOllamaApiKey, draftOllamaBaseUrl, draftSelectedModel, selectedProvider, setOllamaApiKey, setOllamaBaseUrl, setSelectedModel, setSelectedProvider]);
+
+  const handleSaveOllamaConfig = useCallback(async () => {
+    setSavingConfig(true);
+    setConfigSavedMsg(null);
+    try {
+      const cfg = applyRuntimeConfig();
+      await authUpdateConfig(cfg.ollamaApiKey, cfg.model);
+      setConfigSavedMsg('Guardado ✓');
+      setTimeout(() => setConfigSavedMsg(null), 2500);
+    } catch {
+      setConfigSavedMsg('Error al guardar');
+      setTimeout(() => setConfigSavedMsg(null), 2500);
+    } finally {
+      setSavingConfig(false);
+    }
+  }, [applyRuntimeConfig]);
 
   const refreshModels = useCallback(async (runtime?: { ollamaBaseUrl: string; ollamaApiKey: string; model: string; provider: string }) => {
     const config = runtime ?? applyRuntimeConfig();
@@ -244,15 +279,26 @@ export default function AnalysisScreen() {
       {/* Model selector */}
       <View style={styles.modelHeaderRow}>
         <Text style={styles.label}>Modelos de Ollama:</Text>
-        <Pressable
-          style={[styles.refreshBtn, modelsRefreshing && styles.disabled]}
-          onPress={() => {
-            void refreshModels();
-          }}
-          disabled={modelsRefreshing}
-        >
-          <Text style={styles.refreshBtnText}>{modelsRefreshing ? 'Refrescando...' : 'Refrescar modelos'}</Text>
-        </Pressable>
+        <View style={styles.modelHeaderBtns}>
+          <Pressable
+            style={[styles.refreshBtn, modelsRefreshing && styles.disabled]}
+            onPress={() => {
+              void refreshModels();
+            }}
+            disabled={modelsRefreshing}
+          >
+            <Text style={styles.refreshBtnText}>{modelsRefreshing ? 'Refrescando...' : 'Refrescar modelos'}</Text>
+          </Pressable>
+          <Pressable
+            style={[styles.refreshBtn, (savingConfig || !jwt) && styles.disabled]}
+            onPress={() => { void handleSaveOllamaConfig(); }}
+            disabled={savingConfig || !jwt}
+          >
+            <Text style={styles.refreshBtnText}>
+              {configSavedMsg ?? (savingConfig ? 'Guardando...' : 'Guardar configuración Ollama')}
+            </Text>
+          </Pressable>
+        </View>
       </View>
 
       {modelsLoaded && models.length > 0 ? (
@@ -356,7 +402,7 @@ export default function AnalysisScreen() {
               {isAnalyzing && (
                 <View style={styles.progressRow}>
                   <ActivityIndicator size="small" color="#e53935" />
-                  <Text style={styles.progressMsg}> Procesando...</Text>
+                  <Text style={styles.progressMsg}> Procesando... {formatElapsed(analysisElapsed)}</Text>
                 </View>
               )}
             </View>
@@ -455,7 +501,14 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
+    flexWrap: 'wrap',
+    gap: 8,
     marginBottom: 10,
+  },
+  modelHeaderBtns: {
+    flexDirection: 'row',
+    gap: 8,
+    flexWrap: 'wrap',
   },
   modelConfigRow: {
     width: '100%',
