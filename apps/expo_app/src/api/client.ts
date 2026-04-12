@@ -799,6 +799,7 @@ export interface AuthLoginResponse {
   is_admin: boolean;
   ollama_api_key?: string;
   ollama_model?: string;
+  locked_parameters?: string[];
 }
 
 export async function authLogin(username: string, password: string): Promise<AuthLoginResponse> {
@@ -806,6 +807,10 @@ export async function authLogin(username: string, password: string): Promise<Aut
   return data;
 }
 
-export async function authUpdateConfig(ollamaApiKey: string, ollamaModel: string): Promise<void> {
-  await api.put('/auth/config', { ollama_api_key: ollamaApiKey, ollama_model: ollamaModel });
+export async function authUpdateConfig(ollamaApiKey: string, ollamaModel: string, lockedParameters?: string[]): Promise<void> {
+  const body: Record<string, unknown> = { ollama_api_key: ollamaApiKey, ollama_model: ollamaModel };
+  if (lockedParameters !== undefined) {
+    body.locked_parameters = lockedParameters;
+  }
+  await api.put('/auth/config', body);
 }

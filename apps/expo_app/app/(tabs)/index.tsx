@@ -6,7 +6,7 @@ import { useAppStore } from '../../src/store/useAppStore';
 type AuthView = 'login' | 'register' | 'verify';
 
 export default function HomeScreen() {
-  const { serverStatus, setServerStatus, jwt, authUsername, setAuth, clearAuth, setOllamaApiKey, setSelectedModel } = useAppStore();
+  const { serverStatus, setServerStatus, jwt, authUsername, setAuth, clearAuth, setOllamaApiKey, setSelectedModel, setLockedParameters } = useAppStore();
   const [loading, setLoading] = useState(true);
   const isLoggedIn = Boolean(jwt);
 
@@ -43,6 +43,7 @@ export default function HomeScreen() {
       setAuth(res.token, res.username, res.is_admin);
       if (res.ollama_api_key) setOllamaApiKey(res.ollama_api_key);
       if (res.ollama_model) setSelectedModel(res.ollama_model);
+      if (res.locked_parameters?.length) setLockedParameters(new Set(res.locked_parameters));
       setFormPassword('');
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : 'Error al iniciar sesión';
@@ -56,7 +57,7 @@ export default function HomeScreen() {
     } finally {
       setAuthLoading(false);
     }
-  }, [formUsername, formPassword, setAuth, setOllamaApiKey, setSelectedModel]);
+  }, [formUsername, formPassword, setAuth, setOllamaApiKey, setSelectedModel, setLockedParameters]);
 
   const handleRegister = useCallback(async () => {
     if (!formUsername.trim() || !formEmail.trim() || !formPassword.trim() || !formConfirmEmail.trim() || !formConfirmPassword.trim()) {

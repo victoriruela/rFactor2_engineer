@@ -41,8 +41,9 @@ type loginRequest struct {
 }
 
 type configRequest struct {
-	OllamaAPIKey string `json:"ollama_api_key"`
-	OllamaModel  string `json:"ollama_model"`
+	OllamaAPIKey     string   `json:"ollama_api_key"`
+	OllamaModel      string   `json:"ollama_model"`
+	LockedParameters []string `json:"locked_parameters,omitempty"`
 }
 
 func randomCode() string {
@@ -161,11 +162,12 @@ func (h *Handlers) Login(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"token":          token,
-		"username":       user.Username,
-		"is_admin":       user.IsAdmin,
-		"ollama_api_key": user.OllamaAPIKey,
-		"ollama_model":   user.OllamaModel,
+		"token":              token,
+		"username":           user.Username,
+		"is_admin":           user.IsAdmin,
+		"ollama_api_key":     user.OllamaAPIKey,
+		"ollama_model":       user.OllamaModel,
+		"locked_parameters": user.LockedParameters,
 	})
 }
 
@@ -184,7 +186,7 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 		return
 	}
 
-	if err := h.DB.UpdateConfig(cl.UserID, strings.TrimSpace(req.OllamaAPIKey), strings.TrimSpace(req.OllamaModel)); err != nil {
+	if err := h.DB.UpdateConfig(cl.UserID, strings.TrimSpace(req.OllamaAPIKey), strings.TrimSpace(req.OllamaModel), req.LockedParameters); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Error guardando configuración"})
 		return
 	}

@@ -2,6 +2,7 @@ package auth
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"path/filepath"
 
@@ -41,15 +42,15 @@ func (d *DB) Close() error { return d.conn.Close() }
 func (d *DB) migrate() error {
 	stmts := []string{
 		`CREATE TABLE IF NOT EXISTS users (
-			id             INTEGER PRIMARY KEY AUTOINCREMENT,
-			username       TEXT    NOT NULL UNIQUE COLLATE NOCASE,
-			email          TEXT    NOT NULL UNIQUE COLLATE NOCASE,
-			password_hash  TEXT    NOT NULL,
-			is_verified    INTEGER NOT NULL DEFAULT 0,
-			is_admin       INTEGER NOT NULL DEFAULT 0,
-			ollama_api_key TEXT    NOT NULL DEFAULT '',
-			ollama_model   TEXT    NOT NULL DEFAULT '',
-			created_at     DATETIME DEFAULT CURRENT_TIMESTAMP
+			id               INTEGER PRIMARY KEY AUTOINCREMENT,
+			username         TEXT    NOT NULL UNIQUE COLLATE NOCASE,
+			email            TEXT    NOT NULL UNIQUE COLLATE NOCASE,
+			password_hash    TEXT    NOT NULL,
+			is_verified      INTEGER NOT NULL DEFAULT 0,
+			is_admin         INTEGER NOT NULL DEFAULT 0,
+			ollama_api_key   TEXT    NOT NULL DEFAULT '',
+			ollama_model     TEXT    NOT NULL DEFAULT '',
+			created_at       DATETIME DEFAULT CURRENT_TIMESTAMP
 		)`,
 		`CREATE TABLE IF NOT EXISTS verification_codes (
 			email      TEXT     NOT NULL,
@@ -62,6 +63,8 @@ func (d *DB) migrate() error {
 			return fmt.Errorf("migrate: %w", err)
 		}
 	}
+	// Idempotent column additions for existing databases.
+	_, _ = d.conn.Exec("ALTER TABLE users ADD COLUMN locked_parameters TEXT NOT NULL DEFAULT '[]'")
 	return nil
 }
 
@@ -91,14 +94,15 @@ func (d *DB) SeedAdmin(username, password string) error {
 
 // User represents a row from the users table.
 type User struct {
-	ID            int64
-	Username      string
-	Email         string
-	PasswordHash  string
-	IsVerified    bool
-	IsAdmin       bool
-	OllamaAPIKey  string
-	OllamaModel   string
+	ID               int64
+	Username         string
+	Email            string
+	PasswordHash     string
+	IsVerified       bool
+	IsAdmin          bool
+	OllamaAPIKey     string
+	OllamaModel      string
+	LockedParameters []string
 }
 
 func (d *DB) CreateUser(username, email, passwordHash string) error {
@@ -112,30 +116,40 @@ func (d *DB) CreateUser(username, email, passwordHash string) error {
 func (d *DB) GetUserByUsername(username string) (*User, error) {
 	u := &User{}
 	var verified, admin int
+	var lockedJSON string
 	err := d.conn.QueryRow(
-		"SELECT id, username, email, password_hash, is_verified, is_admin, ollama_api_key, ollama_model FROM users WHERE username = ?",
+		"SELECT id, username, email, password_hash, is_verified, is_admin, ollama_api_key, ollama_model, locked_parameters FROM users WHERE username = ?",
 		username,
-	).Scan(&u.ID, &u.Username, &u.Email, &u.PasswordHash, &verified, &admin, &u.OllamaAPIKey, &u.OllamaModel)
+	).Scan(&u.ID, &u.Username, &u.Email, &u.PasswordHash, &verified, &admin, &u.OllamaAPIKey, &u.OllamaModel, &lockedJSON)
 	if err != nil {
 		return nil, err
 	}
 	u.IsVerified = verified == 1
 	u.IsAdmin = admin == 1
+	_ = json.Unmarshal([]byte(lockedJSON), &u.LockedParameters)
+	if u.LockedParameters == nil {
+		u.LockedParameters = []string{}
+	}
 	return u, nil
 }
 
 func (d *DB) GetUserByEmail(email string) (*User, error) {
 	u := &User{}
 	var verified, admin int
+	var lockedJSON string
 	err := d.conn.QueryRow(
-		"SELECT id, username, email, password_hash, is_verified, is_admin, ollama_api_key, ollama_model FROM users WHERE email = ?",
+		"SELECT id, username, email, password_hash, is_verified, is_admin, ollama_api_key, ollama_model, locked_parameters FROM users WHERE email = ?",
 		email,
-	).Scan(&u.ID, &u.Username, &u.Email, &u.PasswordHash, &verified, &admin, &u.OllamaAPIKey, &u.OllamaModel)
+	).Scan(&u.ID, &u.Username, &u.Email, &u.PasswordHash, &verified, &admin, &u.OllamaAPIKey, &u.OllamaModel, &lockedJSON)
 	if err != nil {
 		return nil, err
 	}
 	u.IsVerified = verified == 1
 	u.IsAdmin = admin == 1
+	_ = json.Unmarshal([]byte(lockedJSON), &u.LockedParameters)
+	if u.LockedParameters == nil {
+		u.LockedParameters = []string{}
+	}
 	return u, nil
 }
 
@@ -144,8 +158,18 @@ func (d *DB) VerifyUser(email string) error {
 	return err
 }
 
-func (d *DB) UpdateConfig(userID int64, apiKey, model string) error {
-	_, err := d.conn.Exec("UPDATE users SET ollama_api_key = ?, ollama_model = ? WHERE id = ?", apiKey, model, userID)
+func (d *DB) UpdateConfig(userID int64, apiKey, model string, lockedParameters []string) error {
+	if lockedParameters == nil {
+		lockedParameters = []string{}
+	}
+	lockedJSON, err := json.Marshal(lockedParameters)
+	if err != nil {
+		return fmt.Errorf("marshal locked_parameters: %w", err)
+	}
+	_, err = d.conn.Exec(
+		"UPDATE users SET ollama_api_key = ?, ollama_model = ?, locked_parameters = ? WHERE id = ?",
+		apiKey, model, string(lockedJSON), userID,
+	)
 	return err
 }
 

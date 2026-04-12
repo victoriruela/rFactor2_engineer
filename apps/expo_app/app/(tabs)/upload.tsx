@@ -3,6 +3,7 @@ import { View, Text, StyleSheet, Pressable, Platform, ScrollView, ActivityIndica
 import { useAppStore } from '../../src/store/useAppStore';
 import { buildPreparsedPayloadFromFiles } from '../../src/utils/preparsedClientPayload';
 import type { SetupChange, AnalysisResponse, PreparsedAnalyzePayload } from '../../src/api';
+import { authUpdateConfig } from '../../src/api';
 import SetupCompleteSection from '../../src/components/SetupCompleteSection';
 import LockedParametersPanel from '../../src/components/LockedParametersPanel';
 import { gzip, ungzip } from 'pako';
@@ -122,6 +123,7 @@ export default function DatosScreen() {
     fullSetup, setFullSetup,
     preparsedPayload, setPreparsedPayload,
     lockedParameters, setLockedParameters,
+    ollamaApiKey, selectedModel, jwt,
   } = useAppStore();
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
@@ -287,7 +289,7 @@ export default function DatosScreen() {
     }
   }, [setAnalysisResult, setFullSetup, setActiveSessionId, setLockedParameters, setPreparsedPayload]);
 
-  // ── Save locked params to local file ──
+  // ── Save locked params to local file (+ persist to server if logged in) ──
   const handleSaveLockedParams = useCallback(() => {
     if (lockedParameters.size === 0) return;
     const file: LockedParamsFile = {
@@ -297,7 +299,11 @@ export default function DatosScreen() {
     };
     downloadJSON(file, `locked_params_${new Date().toISOString().slice(0, 10)}.json`);
     setSuccess('Parámetros fijados guardados en archivo');
-  }, [lockedParameters]);
+    // Persist to server-side user profile (fire and forget)
+    if (jwt) {
+      authUpdateConfig(ollamaApiKey, selectedModel, Array.from(lockedParameters)).catch(() => { /* silent */ });
+    }
+  }, [lockedParameters, ollamaApiKey, selectedModel, jwt]);
 
   // ── Load locked params from local file ──
   const handleLoadLockedParams = useCallback(async () => {
