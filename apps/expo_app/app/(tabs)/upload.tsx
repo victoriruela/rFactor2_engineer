@@ -1,12 +1,25 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import { View, Text, StyleSheet, Pressable, Platform, ScrollView, ActivityIndicator } from 'react-native';
 import { useAppStore } from '../../src/store/useAppStore';
-import { uploadFile, getSetup, loadSessionTelemetry, setSessionState, getClientSessionId, overrideClientSessionId } from '../../src/api';
-import type { SetupChange, AnalysisResponse } from '../../src/api';
+import { buildPreparsedPayloadFromFiles } from '../../src/utils/preparsedClientPayload';
+import type { SetupChange, AnalysisResponse, PreparsedAnalyzePayload } from '../../src/api';
 import SetupCompleteSection from '../../src/components/SetupCompleteSection';
 import LockedParametersPanel from '../../src/components/LockedParametersPanel';
+import { gzip, ungzip } from 'pako';
 
-// ── File helpers (web-only: download / pick JSON) ──
+// ── File helpers (web-only: download / pick) ──
+
+function downloadCompressed(data: unknown, filename: string): void {
+  const json = JSON.stringify(data);
+  const compressed = gzip(json);
+  const blob = new Blob([compressed], { type: 'application/gzip' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
 
 function downloadJSON(data: unknown, filename: string): void {
   const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
@@ -18,16 +31,44 @@ function downloadJSON(data: unknown, filename: string): void {
   URL.revokeObjectURL(url);
 }
 
-function pickJSONFile(): Promise<unknown | null> {
+function pickSessionFile(): Promise<unknown> {
+  return new Promise((resolve, reject) => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.rf2session,.json';
+    input.onchange = () => {
+      const file = input.files?.[0];
+      if (!file) { reject(new Error('No se seleccionó archivo')); return; }
+      const reader = new FileReader();
+      reader.onload = () => {
+        try {
+          const buf = new Uint8Array(reader.result as ArrayBuffer);
+          // Detect gzip magic bytes (0x1f 0x8b)
+          if (buf.length >= 2 && buf[0] === 0x1f && buf[1] === 0x8b) {
+            const decompressed = ungzip(buf, { to: 'string' });
+            resolve(JSON.parse(decompressed));
+          } else {
+            // Legacy uncompressed JSON
+            const text = new TextDecoder().decode(buf);
+            resolve(JSON.parse(text));
+          }
+        } catch { reject(new Error('Archivo inválido (no se pudo descomprimir ni leer como JSON)')); }
+      };
+      reader.onerror = () => reject(new Error('Error leyendo archivo'));
+      reader.readAsArrayBuffer(file);
+    };
+    input.click();
+  });
+}
+
+function pickJSONFile(): Promise<unknown> {
   return new Promise((resolve, reject) => {
     const input = document.createElement('input');
     input.type = 'file';
     input.accept = '.json';
-    // Fired in modern browsers when the dialog is closed without selecting a file
-    input.addEventListener('cancel', () => resolve(null));
     input.onchange = () => {
       const file = input.files?.[0];
-      if (!file) { resolve(null); return; }
+      if (!file) { reject(new Error('No se seleccionó archivo')); return; }
       const reader = new FileReader();
       reader.onload = () => {
         try { resolve(JSON.parse(reader.result as string)); }
@@ -43,19 +84,31 @@ function pickJSONFile(): Promise<unknown | null> {
 // ── Session / locked-params file formats ──
 
 interface SessionFile {
-  version: 1;
+  version: 1 | 2;
   session_id: string;
-  client_session_id?: string;
   saved_at: string;
   analysis_result: AnalysisResponse | null;
   full_setup: Record<string, SetupChange[]> | null;
   locked_parameters: string[];
+  preparsed_payload?: PreparsedAnalyzePayload | null; // v2+
 }
 
 interface LockedParamsFile {
   version: 1;
   saved_at: string;
   locked_parameters: string[];
+}
+
+function buildSelectedFilesKey(telemetryFile: File | null, svmFile: File | null): string | null {
+  if (!telemetryFile || !svmFile) return null;
+  return [
+    telemetryFile.name,
+    telemetryFile.size,
+    telemetryFile.lastModified,
+    svmFile.name,
+    svmFile.size,
+    svmFile.lastModified,
+  ].join('|');
 }
 
 export default function DatosScreen() {
@@ -67,33 +120,61 @@ export default function DatosScreen() {
     activeSessionId, setActiveSessionId,
     analysisResult, setAnalysisResult,
     fullSetup, setFullSetup,
+    preparsedPayload, setPreparsedPayload,
     lockedParameters, setLockedParameters,
   } = useAppStore();
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [loadingSession, setLoadingSession] = useState(false);
+  const [lastProcessedFilesKey, setLastProcessedFilesKey] = useState<string | null>(null);
 
   const hasSession = Boolean(activeSessionId && (analysisResult || fullSetup));
 
   // ── Pick telemetry / svm files ──
+  const getBaseName = (f: File) => f.name.replace(/\.[^.]+$/, '');
+
   const pickFile = useCallback(async (type: 'telemetry' | 'svm') => {
     if (Platform.OS === 'web') {
       const input = document.createElement('input');
       input.type = 'file';
-      input.accept = type === 'telemetry' ? '.mat,.csv' : '.svm';
+      input.accept = type === 'telemetry' ? '.ld' : '.svm';
       input.onchange = () => {
         const file = input.files?.[0];
-        if (file) {
-          type === 'telemetry' ? setTelemetryFile(file) : setSvmFile(file);
+        if (!file) return;
+        if (type === 'telemetry') {
+          if (svmFile && getBaseName(file) !== getBaseName(svmFile)) {
+            setError(`El archivo .ld ("${getBaseName(file)}") no coincide con el .svm ya seleccionado ("${getBaseName(svmFile)}"). Deben tener el mismo nombre.`);
+            setSvmFile(null);
+          } else {
+            setError(null);
+          }
+          setTelemetryFile(file);
+        } else {
+          if (telemetryFile && getBaseName(file) !== getBaseName(telemetryFile)) {
+            setError(`El archivo .svm ("${getBaseName(file)}") no coincide con el .ld ya seleccionado ("${getBaseName(telemetryFile)}"). Deben tener el mismo nombre.`);
+            return; // reject the wrong svm
+          }
+          setError(null);
+          setSvmFile(file);
         }
       };
       input.click();
     }
-  }, [setTelemetryFile, setSvmFile]);
+  }, [setTelemetryFile, setSvmFile, telemetryFile, svmFile]);
 
-  // ── Upload files to server ──
-  const handleUpload = useCallback(async () => {
+  // ── Parse files in browser and store preparsed payload ──
+  const processSelectedFiles = useCallback(async (isAutomatic: boolean) => {
     if (!telemetryFile || !svmFile) {
+      setError('Selecciona ambos archivos');
+      return;
+    }
+    if (telemetryFile.name.replace(/\.[^.]+$/, '') !== svmFile.name.replace(/\.[^.]+$/, '')) {
+      setError(`Los archivos deben tener el mismo nombre: "${telemetryFile.name.replace(/\.[^.]+$/, '')}" ≠ "${svmFile.name.replace(/\.[^.]+$/, '')}".`);
+      return;
+    }
+
+    const selectedFilesKey = buildSelectedFilesKey(telemetryFile, svmFile);
+    if (!selectedFilesKey) {
       setError('Selecciona ambos archivos');
       return;
     }
@@ -104,52 +185,78 @@ export default function DatosScreen() {
     setUploadProgress(0);
 
     try {
-      const telemetrySessionId = await uploadFile(telemetryFile, (pct) => setUploadProgress(pct / 2));
-      const svmSessionId = await uploadFile(svmFile, (pct) => setUploadProgress(50 + pct / 2));
+      setUploadProgress(15);
+      const parsed = await buildPreparsedPayloadFromFiles(telemetryFile, svmFile);
 
-      if (telemetrySessionId !== svmSessionId) {
-        throw new Error('Los archivos subidos no quedaron asociados a la misma sesión');
-      }
+      const localSessionId = `local-${Date.now().toString(36)}`;
+      setActiveSessionId(localSessionId);
+      setPreparsedPayload(parsed.payload);
+      setUploadProgress(80);
 
-      setActiveSessionId(svmSessionId);
-      setSessionState(svmSessionId, 'uploaded');
+      setFullSetup(parsed.fullSetup);
+      setAnalysisResult({
+        circuit_data: parsed.preview.circuit_data,
+        issues_on_map: [],
+        driving_analysis: '',
+        telemetry_analysis: '',
+        setup_analysis: {},
+        full_setup: parsed.fullSetup,
+        session_stats: parsed.preview.session_stats,
+        laps_data: parsed.preview.laps_data,
+        agent_reports: [],
+        telemetry_summary_sent: parsed.preview.telemetry_summary_sent,
+        chief_reasoning: '',
+        telemetry_series: parsed.preview.telemetry_series,
+      });
 
-      const telemetryPayload = await loadSessionTelemetry(svmSessionId);
-      setAnalysisResult(telemetryPayload);
-      setSessionState(svmSessionId, 'telemetry_loaded');
-
-      const setup = await getSetup(svmSessionId);
-      setFullSetup(setup);
-
-      setSuccess('Archivos subidos correctamente');
+      setUploadProgress(100);
+      setLastProcessedFilesKey(selectedFilesKey);
+      setSuccess(isAutomatic ? 'Archivos procesados automaticamente y listos para analizar' : 'Archivos reprocesados correctamente');
     } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : 'Error de subida';
+      const msg = e instanceof Error ? e.message : (typeof e === 'string' ? e : String(e));
       setError(msg);
     } finally {
       setUploading(false);
     }
   }, [
     telemetryFile, svmFile, setUploading, setUploadProgress,
-    setActiveSessionId, setAnalysisResult, setFullSetup,
+    setActiveSessionId, setAnalysisResult, setFullSetup, setPreparsedPayload,
+    setLastProcessedFilesKey,
   ]);
+
+  const handleUpload = useCallback(async () => {
+    await processSelectedFiles(false);
+  }, [processSelectedFiles]);
+
+  useEffect(() => {
+    const selectedFilesKey = buildSelectedFilesKey(telemetryFile, svmFile);
+    if (!selectedFilesKey) {
+      setLastProcessedFilesKey(null);
+      return;
+    }
+    if (isUploading || selectedFilesKey === lastProcessedFilesKey) return;
+    void processSelectedFiles(true);
+  }, [telemetryFile, svmFile, isUploading, lastProcessedFilesKey, processSelectedFiles]);
 
   // ── Save session to local file ──
   const handleSaveSession = useCallback(() => {
     if (!hasSession) return;
     const sessionFile: SessionFile = {
-      version: 1,
+      version: 2,
       session_id: activeSessionId!,
-      client_session_id: getClientSessionId(),
       saved_at: new Date().toISOString(),
       analysis_result: analysisResult,
       full_setup: fullSetup,
       locked_parameters: Array.from(lockedParameters),
+      preparsed_payload: preparsedPayload,
     };
-    const safeName = (activeSessionId ?? 'session').replace(/[^a-zA-Z0-9_\-]/g, '_');
-    const filename = `session_${safeName}_${new Date().toISOString().slice(0, 10)}.json`;
-    downloadJSON(sessionFile, filename);
-    setSuccess('Sesión guardada en archivo');
-  }, [hasSession, activeSessionId, analysisResult, fullSetup, lockedParameters]);
+    const baseName = telemetryFile
+      ? telemetryFile.name.replace(/\.ld$/i, '')
+      : (activeSessionId ?? 'session').replace(/[^a-zA-Z0-9_\- .]/g, '_');
+    const filename = `${baseName}_${new Date().toISOString().slice(0, 10)}.rf2session`;
+    downloadCompressed(sessionFile, filename);
+    setSuccess('Sesión guardada en archivo comprimido');
+  }, [hasSession, activeSessionId, analysisResult, fullSetup, lockedParameters, preparsedPayload, telemetryFile]);
 
   // ── Load session from local file ──
   const handleLoadSession = useCallback(async () => {
@@ -157,17 +264,19 @@ export default function DatosScreen() {
     setSuccess(null);
     setLoadingSession(true);
     try {
-      const data = await pickJSONFile() as SessionFile | null;
-      if (data === null) return;
-      if (!data || data.version !== 1) {
+      const data = await pickSessionFile() as SessionFile;
+      if (!data || (data.version !== 1 && data.version !== 2)) {
         throw new Error('Formato de archivo de sesión no reconocido');
       }
       if (data.analysis_result) setAnalysisResult(data.analysis_result);
       if (data.full_setup) setFullSetup(data.full_setup);
-      if (data.client_session_id) overrideClientSessionId(data.client_session_id);
       if (data.session_id) setActiveSessionId(data.session_id);
       if (Array.isArray(data.locked_parameters)) {
         setLockedParameters(new Set(data.locked_parameters));
+      }
+      // Restore preparsed payload (v2+) so the user can re-analyze
+      if (data.preparsed_payload) {
+        setPreparsedPayload(data.preparsed_payload);
       }
       setSuccess('Sesión cargada desde archivo');
     } catch (e: unknown) {
@@ -176,7 +285,7 @@ export default function DatosScreen() {
     } finally {
       setLoadingSession(false);
     }
-  }, [setAnalysisResult, setFullSetup, setActiveSessionId, setLockedParameters]);
+  }, [setAnalysisResult, setFullSetup, setActiveSessionId, setLockedParameters, setPreparsedPayload]);
 
   // ── Save locked params to local file ──
   const handleSaveLockedParams = useCallback(() => {
@@ -195,8 +304,7 @@ export default function DatosScreen() {
     setError(null);
     setSuccess(null);
     try {
-      const data = await pickJSONFile() as LockedParamsFile | null;
-      if (data === null) return;
+      const data = await pickJSONFile() as LockedParamsFile;
       if (!data || data.version !== 1 || !Array.isArray(data.locked_parameters)) {
         throw new Error('Formato de archivo de parámetros no reconocido');
       }
@@ -233,7 +341,7 @@ export default function DatosScreen() {
 
         <Pressable style={styles.pickBtn} onPress={() => pickFile('telemetry')}>
           <Text style={styles.pickText}>
-            {telemetryFile ? `📊 ${telemetryFile.name}` : 'Seleccionar telemetría (.mat/.csv)'}
+            {telemetryFile ? `📊 ${telemetryFile.name}` : 'Seleccionar telemetría (.ld)'}
           </Text>
         </Pressable>
 
@@ -254,7 +362,7 @@ export default function DatosScreen() {
             onPress={handleUpload}
             disabled={!telemetryFile || !svmFile}
           >
-            <Text style={styles.btnText}>Subir Archivos</Text>
+            <Text style={styles.btnText}>Reprocesar Archivos</Text>
           </Pressable>
         )}
       </View>

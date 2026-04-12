@@ -15,11 +15,11 @@ interface Props {
   charts?: ChartConfig[];
 }
 
-const CHART_HEIGHT = 200;
-const PAD_LEFT = 46;
+const CHART_HEIGHT = 230;
+const PAD_LEFT = 68;
 const PAD_RIGHT = 16;
 const PAD_TOP = 10;
-const PAD_BOTTOM = 26;
+const PAD_BOTTOM = 28;
 const GRID_LINES = 6; // number of horizontal grid divisions
 
 export interface ChartConfig {
@@ -69,9 +69,8 @@ const CHARTS: ChartConfig[] = [
 
 function formatCursorTimestamp(seconds: number): string {
   if (!Number.isFinite(seconds) || seconds < 0) return '--:--.---';
-  const totalMs = Math.round(seconds * 1000);
-  const minutes = Math.floor(totalMs / 60000);
-  const secondsPart = (totalMs % 60000) / 1000;
+  const minutes = Math.floor(seconds / 60);
+  const secondsPart = seconds - minutes * 60;
   return `${minutes.toString().padStart(2, '0')}:${secondsPart.toFixed(3).padStart(6, '0')}`;
 }
 
@@ -171,16 +170,26 @@ function removePedalArtifacts(values: number[], activeThreshold: number, minSamp
 }
 
 /**
- * During gear changes the telemetry briefly reports gear = 0 (neutral).
- * Replace each zero with the last known valid gear to avoid downward needles.
+ * During gear changes the telemetry briefly reports gear = 0 (neutral)
+ * or non-consecutive jumps (e.g. 3→6→5 instead of 3→4→5).
+ * Replace zeros with last valid gear, and clamp jumps larger than 1
+ * to step incrementally so the chart doesn't show impossible spikes.
  */
 function removeGearZeros(values: number[]): number[] {
   const out = [...values];
   let lastValid = 1; // default to 1st gear if data starts with zeros
   for (let i = 0; i < out.length; i++) {
-    if (out[i] <= 0) {
+    const g = Math.round(out[i]);
+    if (g <= 0) {
       out[i] = lastValid;
     } else {
+      // Clamp non-consecutive jumps to ±1 step from previous gear
+      const diff = g - lastValid;
+      if (Math.abs(diff) > 1) {
+        out[i] = lastValid + Math.sign(diff);
+      } else {
+        out[i] = g;
+      }
       lastValid = out[i];
     }
   }
@@ -198,13 +207,16 @@ function computeStats(values: number[]): { min: number; max: number; avg: number
   return { min: mn, max: mx, avg: sum / values.length };
 }
 
-function formatStatValue(value: number, label: string): string {
+function formatStatValue(value: number, label: string, unit?: string): string {
   switch (label) {
     case 'Acelerador / Freno': return `${value.toFixed(0)}%`;
     case 'Marcha':             return `${Math.round(value)}ª`;
-    case 'RPM':                return value >= 1000 ? `${(value / 1000).toFixed(1)}k` : value.toFixed(0);
+    case 'RPM':                return value >= 1000 ? `${(value / 1000).toFixed(1)}k rpm` : `${value.toFixed(0)} rpm`;
     case 'Velocidad':          return `${value.toFixed(0)} km/h`;
-    default:                   return value.toFixed(1);
+    default: {
+      const numStr = Math.abs(value) >= 10 ? value.toFixed(1) : value.toFixed(2);
+      return unit ? `${numStr} ${unit}` : numStr;
+    }
   }
 }
 
@@ -218,24 +230,20 @@ function downsampleToPixels(values: number[], pixelCount: number): number[] {
   const n = values.length;
   if (n <= pixelCount) return values;
   const result = new Array<number>(pixelCount);
+  if (pixelCount === 1) {
+    result[0] = values[0];
+    return result;
+  }
   for (let p = 0; p < pixelCount; p++) {
-    const start = Math.floor((p / pixelCount) * n);
-    const end = Math.floor(((p + 1) / pixelCount) * n) - 1;
-    if (start >= n) { result[p] = values[n - 1]; continue; }
-    if (start > end) { result[p] = values[start]; continue; }
-    // Sort a copy of the slice and take the median.
-    const bucket = values.slice(start, end + 1).sort((a, b) => a - b);
-    const mid = Math.floor(bucket.length / 2);
-    result[p] = bucket.length % 2 === 0
-      ? (bucket[mid - 1] + bucket[mid]) / 2
-      : bucket[mid];
+    const idx = Math.floor((p / (pixelCount - 1)) * (n - 1));
+    result[p] = values[idx];
   }
   return result;
 }
 
 function buildPolylinePoints(norm: number[], innerW: number, innerH: number, n: number): string {
   if (n < 2) return '';
-  const pixelCount = Math.max(2, Math.floor(innerW));
+  const pixelCount = Math.max(2, Math.floor(innerW * 2));
   const pts = n > pixelCount ? downsampleToPixels(norm, pixelCount) : norm;
   const m = pts.length;
   return pts
@@ -299,6 +307,7 @@ export default function TelemetryCharts({ samples, onIndexChange, showCursorBar 
         // only ~200 samples; 60 samples would represent >25 s — far too aggressive.
         // Scale proportionally: 0.5 % of current sample count, minimum 2.
         const minPedalSamples = Math.max(2, Math.floor(safeSamples.length * 0.005));
+        const smoothRadius = cfg.label === 'Marcha' ? 0 : Math.min(cfg.smoothRadius ?? 0, 1);
         const series = cfg.keys.map((k) => {
           const raw = safeSamples.map((s) => finiteOrZero(s[k]));
           let transformed = isPedalsChart ? raw.map((v) => normalizePedalPercent(v)) : raw;
@@ -309,7 +318,7 @@ export default function TelemetryCharts({ samples, onIndexChange, showCursorBar 
           } else if (isGearChart) {
             transformed = removeGearZeros(transformed);
           }
-          return smoothSeries(transformed, cfg.smoothRadius ?? 0);
+          return smoothSeries(transformed, smoothRadius);
         });
 
         let min = Number.POSITIVE_INFINITY;
@@ -379,12 +388,35 @@ export default function TelemetryCharts({ samples, onIndexChange, showCursorBar 
   const cursorX = PAD_LEFT + (cursorIdx / (n - 1)) * innerW;
 
   // Grid line y positions & values for a chart
-  const gridLinesForChart = (min: number, max: number) => {
+  const gridLinesForChart = (min: number, max: number, cfg?: ChartConfig) => {
+    const isGear = cfg?.label === 'Marcha';
+    if (isGear) {
+      // Show integer gear ticks from floor(min) to ceil(max)
+      const lo = Math.max(1, Math.floor(min));
+      const hi = Math.ceil(max);
+      return Array.from({ length: hi - lo + 1 }, (_, i) => {
+        const value = lo + i;
+        return {
+          value,
+          y: PAD_TOP + (1 - (value - min) / ((max - min) || 1)) * innerH,
+          label: `${value}ª`,
+        };
+      });
+    }
     const step = (max - min) / GRID_LINES;
     return Array.from({ length: GRID_LINES + 1 }, (_, i) => ({
       value: min + step * i,
       y: PAD_TOP + (1 - i / GRID_LINES) * innerH,
+      label: undefined as string | undefined,
     }));
+  };
+
+  const formatGridValue = (value: number, unit: string): string => {
+    let numStr: string;
+    if (value > 1000) numStr = `${(value / 1000).toFixed(1)}k`;
+    else if (Math.abs(value) >= 10) numStr = value.toFixed(0);
+    else numStr = value.toFixed(2);
+    return unit ? `${numStr} ${unit}` : numStr;
   };
 
   return (
@@ -408,7 +440,7 @@ export default function TelemetryCharts({ samples, onIndexChange, showCursorBar 
       {activeCharts.map((cfg, ci) => {
         const seriesData = chartData[ci];
         if (!seriesData || seriesData.length === 0) return null;
-        const grid = gridLinesForChart(seriesData[0].min, seriesData[0].max);
+        const grid = gridLinesForChart(seriesData[0].min, seriesData[0].max, cfg);
 
         return (
           <View key={cfg.label} style={styles.chartWrap}>
@@ -418,7 +450,7 @@ export default function TelemetryCharts({ samples, onIndexChange, showCursorBar 
               <View style={styles.chartStatsRow}>
                 {seriesData.map((sd, si) => {
                   const stats = computeStats(sd.raw);
-                  const fmt = (v: number) => formatStatValue(v, cfg.label);
+                  const fmt = (v: number) => formatStatValue(v, cfg.label, cfg.unit);
                   const seriesLabel = cfg.seriesLabels?.[si] ?? (cfg.keys.length > 1 ? (si === 0 ? 'Acelerador' : 'Freno') : null);
                   const cursorVal = sd.raw[cursorIdx] ?? 0;
                   const statText = [
@@ -491,15 +523,11 @@ export default function TelemetryCharts({ samples, onIndexChange, showCursorBar 
                       x={PAD_LEFT - 6}
                       y={g.y + 4}
                       textAnchor="end"
-                      fill="#555"
-                      fontSize={9}
+                      fill="#666"
+                      fontSize={11}
                       fontFamily="monospace"
                     >
-                      {g.value > 1000
-                        ? `${(g.value / 1000).toFixed(1)}k`
-                        : g.value > 10
-                        ? g.value.toFixed(0)
-                        : g.value.toFixed(2)}
+                      {g.label ?? formatGridValue(g.value, cfg.unit)}
                     </SvgText>
                   </React.Fragment>
                 ))}
@@ -550,7 +578,7 @@ export default function TelemetryCharts({ samples, onIndexChange, showCursorBar 
                 })}
 
                 {/* X-axis label (time) at bottom */}
-                <SvgText x={PAD_LEFT + innerW / 2} y={CHART_HEIGHT - 4} textAnchor="middle" fill="#444" fontSize={9}>
+                <SvgText x={PAD_LEFT + innerW / 2} y={CHART_HEIGHT - 4} textAnchor="middle" fill="#555" fontSize={11}>
                   tiempo (s)
                 </SvgText>
               </Svg>

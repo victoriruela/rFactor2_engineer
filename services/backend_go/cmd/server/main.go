@@ -4,17 +4,24 @@ import (
 	"context"
 	"embed"
 	"fmt"
+	"io"
 	"io/fs"
 	"net/http"
 	"os"
 	"os/signal"
+	"path"
+	"path/filepath"
+	"regexp"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
+	"github.com/viciruela/rfactor2-engineer/internal/auth"
 	"github.com/viciruela/rfactor2-engineer/internal/config"
 	"github.com/viciruela/rfactor2-engineer/internal/handlers"
 	"github.com/viciruela/rfactor2-engineer/internal/middleware"
@@ -23,6 +30,8 @@ import (
 
 //go:embed all:static
 var staticFS embed.FS
+
+var expoEntryScriptRE = regexp.MustCompile(`<script\s+src="(/_expo/static/js/web/entry-[a-f0-9]+\.js)"\s+defer></script>`)
 
 func main() {
 	// ── Logging ──
@@ -46,19 +55,39 @@ func main() {
 	if err := os.MkdirAll(cfg.DataDir, 0o755); err != nil {
 		log.Fatal().Err(err).Msg("cannot create data directory")
 	}
+	cleanDataDir(cfg.DataDir)
+
+	// ── Auth DB ──
+	authDB, err := auth.OpenDB(cfg.DataDir)
+	if err != nil {
+		log.Fatal().Err(err).Msg("cannot open auth database")
+	}
+	if err := authDB.SeedAdmin("Mulder_admin", "100fuchupabien31416"); err != nil {
+		log.Fatal().Err(err).Msg("cannot seed admin user")
+	}
+
+	jwtSecret := cfg.JWTSecret
+	if jwtSecret == "" {
+		jwtSecret = uuid.NewString()
+		log.Warn().Msg("RF2_JWT_SECRET not set — using random secret (tokens will not survive restarts)")
+	}
+
+	smtpCfg := auth.SMTPConfig{
+		Host: cfg.SMTPHost,
+		Port: cfg.SMTPPort,
+		User: cfg.SMTPUser,
+		Pass: cfg.SMTPPass,
+		From: cfg.SMTPFrom,
+	}
+	authH := auth.NewHandlers(authDB, jwtSecret, smtpCfg)
 
 	// ── Ollama client ──
 	ollamaClient := ollama.NewClient(cfg.OllamaURL, cfg.OllamaModel, cfg.OllamaAPIKey)
 
 	// ── Handlers ──
-	uploadH := handlers.NewUploadHandler(cfg.DataDir)
-	sessionH := handlers.NewSessionHandler(cfg.DataDir)
 	analysisH := handlers.NewAnalysisHandler(cfg.DataDir, ollamaClient)
 	modelsH := handlers.NewModelsHandler(ollamaClient)
 	tracksH := handlers.NewTracksHandler()
-
-	// ── Start background cleanup worker ──
-	go startCleanupWorker(sessionH)
 
 	// ── Router ──
 	r := gin.New()
@@ -69,33 +98,34 @@ func main() {
 	api := r.Group("/api")
 	api.Use(middleware.SessionResolver())
 	{
-		// Health
+		// Health (public)
 		api.GET("/health", modelsH.HealthCheck)
 
-		// Upload (chunked)
-		api.POST("/uploads/init", uploadH.InitUpload)
-		api.PUT("/uploads/:upload_id/chunk", uploadH.UploadChunk)
-		api.POST("/uploads/:upload_id/complete", uploadH.CompleteUpload)
+		// Auth (public)
+		authGroup := api.Group("/auth")
+		{
+			authGroup.POST("/register", authH.Register)
+			authGroup.POST("/verify", authH.Verify)
+			authGroup.POST("/login", authH.Login)
+		}
 
-		// Sessions
-		api.GET("/sessions", sessionH.ListSessions)
-		api.GET("/sessions/:session_id/file/:filename", sessionH.DownloadFile)
-		api.DELETE("/sessions/:session_id", sessionH.DeleteSession)
-		api.POST("/cleanup", sessionH.Cleanup)
-		api.POST("/cleanup_all", sessionH.CleanupAll)
+		// Protected routes
+		protected := api.Group("")
+		protected.Use(middleware.JWTRequired(jwtSecret))
+		{
+			// Analysis (preparsed client payload — no file writes)
+			protected.POST("/analyze_preparsed", analysisH.AnalyzePreparsed)
+			protected.POST("/analyze_preparsed_stream", analysisH.AnalyzePreparsedStream)
 
-		// Analysis
-		api.POST("/analyze", analysisH.Analyze)
-		api.POST("/analyze_session", analysisH.AnalyzeSession)
-		api.POST("/analyze_stream", analysisH.AnalyzeStream)
-		api.POST("/session_telemetry", analysisH.LoadSessionTelemetry)
-		api.GET("/setup/:sessionId", analysisH.GetSetup)
+			// Models
+			protected.GET("/models", modelsH.ListModels)
 
-		// Models
-		api.GET("/models", modelsH.ListModels)
+			// Tracks
+			protected.GET("/tracks", tracksH.ListTracks)
 
-		// Tracks
-		api.GET("/tracks", tracksH.ListTracks)
+			// Auth config
+			protected.PUT("/auth/config", authH.UpdateConfig)
+		}
 	}
 
 	// ── Serve Expo static build via go:embed ──
@@ -146,17 +176,81 @@ func spaHandler(fsys http.FileSystem) http.Handler {
 			return
 		}
 
-		path := r.URL.Path
+		routePath := r.URL.Path
+		if routePath == "/favicon.ico" {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		isHTMLRoute := routePath == "/" || strings.HasSuffix(routePath, ".html")
+		if isHTMLRoute {
+			// Keep HTML uncacheable so clients pick up new hashed bundles after deploys.
+			w.Header().Set("Cache-Control", "no-store, no-cache, must-revalidate")
+			w.Header().Set("Pragma", "no-cache")
+			w.Header().Set("Expires", "0")
+			if routePath == "/" || routePath == "/index.html" {
+				serveNormalizedIndexHTML(w, fsys)
+				return
+			}
+		}
 		// Try to open — if not found, serve index.html
-		f, err := fsys.Open(path)
+		f, err := fsys.Open(routePath)
 		if err != nil {
-			r.URL.Path = "/"
-			fileServer.ServeHTTP(w, r)
+			// Missing static assets (e.g. old entry-*.js) must return 404, not index.html.
+			if ext := path.Ext(routePath); ext != "" {
+				http.NotFound(w, r)
+				return
+			}
+			w.Header().Set("Cache-Control", "no-store, no-cache, must-revalidate")
+			w.Header().Set("Pragma", "no-cache")
+			w.Header().Set("Expires", "0")
+			serveNormalizedIndexHTML(w, fsys)
 			return
 		}
 		f.Close()
 		fileServer.ServeHTTP(w, r)
 	})
+}
+
+func serveNormalizedIndexHTML(w http.ResponseWriter, fsys http.FileSystem) {
+	f, err := fsys.Open("/index.html")
+	if err != nil {
+		http.Error(w, "index.html not found", http.StatusInternalServerError)
+		return
+	}
+	defer f.Close()
+
+	content, err := io.ReadAll(f)
+	if err != nil {
+		http.Error(w, "cannot read index.html", http.StatusInternalServerError)
+		return
+	}
+
+	html := string(content)
+	normalized := expoEntryScriptRE.ReplaceAllString(html, `<script type="module" src="$1" defer></script>`)
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte(normalized))
+}
+
+// cleanDataDir removes all entries inside dir (but keeps the directory itself
+// and the auth database files).
+func cleanDataDir(dir string) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	for _, entry := range entries {
+		name := entry.Name()
+		if strings.HasPrefix(name, "rf2_users.db") {
+			continue // preserve auth database and its WAL/SHM files
+		}
+		p := filepath.Join(dir, name)
+		if err := os.RemoveAll(p); err != nil {
+			log.Warn().Err(err).Str("path", p).Msg("failed to remove data entry on startup")
+		}
+	}
+	log.Info().Str("dir", dir).Msg("data directory cleaned on startup")
 }
 
 func ginZerolog() gin.HandlerFunc {
@@ -172,17 +266,4 @@ func ginZerolog() gin.HandlerFunc {
 	}
 }
 
-// startCleanupWorker runs a periodic cleanup task to remove old sessions.
-// Sessions older than 24 hours are cleaned up every hour.
-func startCleanupWorker(sessionH *handlers.SessionHandler) {
-	ticker := time.NewTicker(1 * time.Hour)
-	defer ticker.Stop()
 
-	// Run cleanup immediately on startup
-	sessionH.CleanupOldSessions(24 * time.Hour)
-
-	// Then run periodically
-	for range ticker.C {
-		sessionH.CleanupOldSessions(24 * time.Hour)
-	}
-}

@@ -13,7 +13,7 @@ Responde SOLO con un JSON válido con el formato:
 {{"translations": {{"nombre_interno": "Traducción en español", ...}}}}
 `
 
-const DRIVING_PROMPT = `Eres un ingeniero de datos de telemetría de carreras de automoción. Analiza la conducción de TODAS las vueltas disponibles para detectar patrones repetitivos mejorables y genera exactamente 5 puntos de mejora.
+const DRIVING_PROMPT = `Eres un ingeniero de carreras que da feedback de conducción al piloto. Analiza la conducción de TODAS las vueltas disponibles para detectar patrones repetitivos mejorables.
 
 REGLAS ESTRICTAS:
 1. SOLO analiza la conducción del piloto. NO sugieras cambios de setup.
@@ -22,9 +22,8 @@ REGLAS ESTRICTAS:
 4. También puedes incluir recomendaciones globales (no ligadas a una sola curva) si el patrón es general de conducción.
 5. Para recomendaciones por curva, compara la MISMA curva entre diferentes vueltas, citando valores reales de telemetría.
 6. Usa datos numéricos reales del resumen proporcionado — especialmente el análisis por zonas y estadísticas por vuelta.
-7. Para cada punto, indica brevemente si el patrón es "repetitivo" (multi-vuelta) o "puntual".
-8. Responde SIEMPRE en español (Castellano).
-9. Incluye el tipo de curva (horquilla, chicane, ese rápida, etc.) cuando la recomendación sea por curva.
+7. Responde SIEMPRE en español (Castellano).
+8. Incluye el tipo de curva (horquilla, chicane, ese rápida, etc.) cuando la recomendación sea por curva.
 
 Resumen de telemetría:
 {telemetry_summary}
@@ -32,7 +31,7 @@ Resumen de telemetría:
 Estadísticas de sesión:
 {session_stats}
 
-Genera exactamente 5 puntos de mejora concretos y específicos.`
+Genera los puntos de mejora que la telemetría justifique — sin límite fijo: pueden ser 2, pueden ser 8, los que haya. Si hay poco que corregir, di menos; si hay mucho, di más. Sé claro y directo: el piloto tiene que entender qué hacer sin necesidad de conocimientos técnicos. Cada punto debe ser accionable y concreto.`
 
 // --- Telemetry domain specialist prompts (Phase 1) ---
 

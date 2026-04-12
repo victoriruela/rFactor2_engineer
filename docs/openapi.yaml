@@ -1,8 +1,8 @@
 openapi: 3.0.0
 info:
   title: rFactor2 Engineer Backend API
-  version: 2.0.0
-  description: RESTful API for AI-powered sim-racing telemetry analysis and vehicle setup recommendations
+  version: 3.0.0
+  description: RESTful API for AI-powered sim-racing telemetry analysis and vehicle setup recommendations. All file parsing is done client-side (WASM); the backend only runs the AI analysis pipeline.
   license:
     name: MIT
 
@@ -15,16 +15,291 @@ servers:
 tags:
   - name: Health
     description: Service health and readiness
-  - name: Sessions
-    description: Client session management
-  - name: Upload
-    description: Chunked file upload
+  - name: Auth
+    description: User registration, verification, and login
   - name: Analysis
-    description: AI-powered telemetry and setup analysis
+    description: AI-powered telemetry and setup analysis (client-preparsed payload only)
   - name: Models
     description: Available LLM models
   - name: Tracks
     description: Track library (AIW-derived JSON)
+
+paths:
+  /health:
+    get:
+      tags: [Health]
+      summary: Health check
+      operationId: getHealth
+      responses:
+        '200':
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum: [healthy]
+                  uptime:
+                    type: integer
+
+  /analyze_preparsed:
+    post:
+      tags: [Analysis]
+      summary: Analyze client-preparsed telemetry/setup payload
+      operationId: analyzePreparsed
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                channels:
+                  type: object
+                  additionalProperties:
+                    type: array
+                    items:
+                      type: number
+                time_col:
+                  type: string
+                lap_col:
+                  type: string
+                session_stats:
+                  $ref: '#/components/schemas/SessionStats'
+                setup:
+                  type: object
+                  properties:
+                    sections:
+                      type: object
+                      additionalProperties:
+                        type: object
+                        properties:
+                          name:
+                            type: string
+                          params:
+                            type: object
+                            additionalProperties:
+                              type: string
+                          read_only_params:
+                            type: array
+                            items:
+                              type: string
+                model:
+                  type: string
+                provider:
+                  type: string
+                  enum: [ollama_cloud]
+                ollama_base_url:
+                  type: string
+                ollama_api_key:
+                  type: string
+                fixed_params:
+                  type: array
+                  items:
+                    type: string
+              required: [channels, setup]
+      responses:
+        '200':
+          description: Analysis results
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AnalysisResponse'
+
+  /analyze_preparsed_stream:
+    post:
+      tags: [Analysis]
+      summary: Analyze client-preparsed telemetry/setup payload with SSE progress events
+      operationId: analyzePreparsedStream
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                channels:
+                  type: object
+                  additionalProperties:
+                    type: array
+                    items:
+                      type: number
+                time_col:
+                  type: string
+                lap_col:
+                  type: string
+                session_stats:
+                  $ref: '#/components/schemas/SessionStats'
+                setup:
+                  type: object
+                model:
+                  type: string
+                provider:
+                  type: string
+                  enum: [ollama_cloud]
+                ollama_base_url:
+                  type: string
+                ollama_api_key:
+                  type: string
+                fixed_params:
+                  type: array
+                  items:
+                    type: string
+              required: [channels, setup]
+      responses:
+        '200':
+          description: Server-Sent Events stream ending with an AnalysisResponse result payload
+          content:
+            text/event-stream:
+              schema:
+                type: string
+
+  /models:
+    get:
+      tags: [Models]
+      summary: List available LLM models
+      operationId: getModels
+      parameters:
+        - name: ollama_base_url
+          in: query
+          schema:
+            type: string
+        - name: ollama_api_key
+          in: query
+          schema:
+            type: string
+        - name: model
+          in: query
+          schema:
+            type: string
+        - name: provider
+          in: query
+          schema:
+            type: string
+            enum: [ollama_cloud]
+      responses:
+        '200':
+          description: Available models
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  models:
+                    type: array
+                    items:
+                      type: string
+
+  /tracks:
+    get:
+      tags: [Tracks]
+      summary: List available tracks
+      operationId: listTracks
+      responses:
+        '200':
+          description: Track list
+
+  /auth/register:
+    post:
+      tags: [Auth]
+      summary: Register a new user
+      operationId: authRegister
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                username:
+                  type: string
+                  minLength: 3
+                email:
+                  type: string
+                  format: email
+                password:
+                  type: string
+                  minLength: 8
+              required: [username, email, password]
+      responses:
+        '201':
+          description: User registered, verification code sent
+        '400':
+          description: Validation error
+        '409':
+          description: Username or email already exists
+
+  /auth/verify:
+    post:
+      tags: [Auth]
+      summary: Verify email with code
+      operationId: authVerify
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                email:
+                  type: string
+                code:
+                  type: string
+              required: [email, code]
+      responses:
+        '200':
+          description: Email verified
+        '400':
+          description: Invalid or expired code
+
+  /auth/login:
+    post:
+      tags: [Auth]
+      summary: Authenticate and receive JWT
+      operationId: authLogin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                username:
+                  type: string
+                password:
+                  type: string
+              required: [username, password]
+      responses:
+        '200':
+          description: Login successful with JWT token and user config
+        '401':
+          description: Invalid credentials or unverified account
+
+  /auth/config:
+    put:
+      tags: [Auth]
+      summary: Update user Ollama config (requires JWT)
+      operationId: authUpdateConfig
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                ollama_api_key:
+                  type: string
+                ollama_model:
+                  type: string
+      responses:
+        '200':
+          description: Config updated
+        '401':
+          description: Unauthorized
 
 paths:
   /health:
@@ -285,6 +560,118 @@ paths:
               schema:
                 $ref: '#/components/schemas/AnalysisResponse'
 
+  /analyze_preparsed:
+    post:
+      tags: [Analysis]
+      summary: Analyze client-preparsed telemetry/setup payload
+      operationId: analyzePreparsed
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                channels:
+                  type: object
+                  additionalProperties:
+                    type: array
+                    items:
+                      type: number
+                time_col:
+                  type: string
+                lap_col:
+                  type: string
+                session_stats:
+                  $ref: '#/components/schemas/SessionStats'
+                setup:
+                  type: object
+                  properties:
+                    sections:
+                      type: object
+                      additionalProperties:
+                        type: object
+                        properties:
+                          name:
+                            type: string
+                          params:
+                            type: object
+                            additionalProperties:
+                              type: string
+                          read_only_params:
+                            type: array
+                            items:
+                              type: string
+                model:
+                  type: string
+                provider:
+                  type: string
+                  enum: [ollama_cloud]
+                ollama_base_url:
+                  type: string
+                ollama_api_key:
+                  type: string
+                fixed_params:
+                  type: array
+                  items:
+                    type: string
+              required: [channels, setup]
+      responses:
+        '200':
+          description: Analysis results
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AnalysisResponse'
+
+  /analyze_preparsed_stream:
+    post:
+      tags: [Analysis]
+      summary: Analyze client-preparsed telemetry/setup payload with SSE progress events
+      operationId: analyzePreparsedStream
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                channels:
+                  type: object
+                  additionalProperties:
+                    type: array
+                    items:
+                      type: number
+                time_col:
+                  type: string
+                lap_col:
+                  type: string
+                session_stats:
+                  $ref: '#/components/schemas/SessionStats'
+                setup:
+                  type: object
+                model:
+                  type: string
+                provider:
+                  type: string
+                  enum: [ollama_cloud]
+                ollama_base_url:
+                  type: string
+                ollama_api_key:
+                  type: string
+                fixed_params:
+                  type: array
+                  items:
+                    type: string
+              required: [channels, setup]
+      responses:
+        '200':
+          description: Server-Sent Events stream ending with an AnalysisResponse result payload
+          content:
+            text/event-stream:
+              schema:
+                type: string
+
   /session_telemetry:
     post:
       tags: [Analysis]
@@ -344,15 +731,6 @@ paths:
                     items:
                       type: string
 
-  /cleanup:
-    post:
-      tags: [Sessions]
-      summary: Cleanup current client session data
-      operationId: cleanupData
-      responses:
-        '200':
-          description: Cleaned up
-
   /tracks:
     get:
       tags: [Tracks]
@@ -361,20 +739,6 @@ paths:
       responses:
         '200':
           description: Track list
-
-    post:
-      tags: [Tracks]
-      summary: Upload a track (AIW-derived JSON)
-      operationId: uploadTrack
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-      responses:
-        '201':
-          description: Track stored (SHA256 deduplicated)
 
 components:
   schemas:
@@ -396,7 +760,7 @@ components:
       properties:
         driving_analysis:
           type: string
-          description: 5 driving improvement points (Spanish)
+          description: Driving improvement points in Spanish (variable number based on telemetry data)
         setup_analysis:
           type: object
           additionalProperties:
@@ -423,3 +787,39 @@ components:
           type: string
         llm_model:
           type: string
+    LapStats:
+      type: object
+      properties:
+        lap:
+          type: integer
+        duration:
+          type: number
+        avg_speed:
+          type: number
+        max_speed:
+          type: number
+        avg_throttle:
+          type: number
+        max_throttle:
+          type: number
+        avg_brake:
+          type: number
+        max_brake:
+          type: number
+        avg_rpm:
+          type: number
+    SessionStats:
+      type: object
+      properties:
+        circuit_name:
+          type: string
+        total_laps:
+          type: integer
+        best_lap_time:
+          type: number
+        avg_lap_time:
+          type: number
+        laps:
+          type: array
+          items:
+            $ref: '#/components/schemas/LapStats'

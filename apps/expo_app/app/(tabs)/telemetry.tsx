@@ -1,7 +1,6 @@
-﻿import { useCallback, useEffect, useMemo, useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, useWindowDimensions, Pressable, ActivityIndicator } from 'react-native';
+﻿import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { View, Text, StyleSheet, ScrollView, useWindowDimensions, Pressable, Platform } from 'react-native';
 import { useAppStore } from '../../src/store/useAppStore';
-import { loadSessionTelemetry, listSessions } from '../../src/api';
 import type { GPSPoint, TelemetrySample } from '../../src/api';
 import CircuitMap from '../../src/components/CircuitMap';
 import TelemetryCharts, { type ChartConfig } from '../../src/components/TelemetryCharts';
@@ -22,7 +21,7 @@ const TAB_CHARTS: Record<ChartTab, ChartConfig[]> = {
   'Neumáticos': [
     { label: 'Temp. Neumático',    keys: ['tyre_t_fl', 'tyre_t_fr', 'tyre_t_rl', 'tyre_t_rr'],       colors: CORNER_COLORS, seriesLabels: CORNER_LABELS, unit: '°C',   smoothRadius: 3 },
     { label: 'Presión Neumático',  keys: ['tyre_p_fl', 'tyre_p_fr', 'tyre_p_rl', 'tyre_p_rr'],       colors: CORNER_COLORS, seriesLabels: CORNER_LABELS, unit: 'kPa',  smoothRadius: 3 },
-    { label: 'Desgaste Neumático', keys: ['tyre_w_fl', 'tyre_w_fr', 'tyre_w_rl', 'tyre_w_rr'],       colors: CORNER_COLORS, seriesLabels: CORNER_LABELS, unit: '',     smoothRadius: 2 },
+    { label: 'Desgaste Neumático', keys: ['tyre_w_fl', 'tyre_w_fr', 'tyre_w_rl', 'tyre_w_rr'],       colors: CORNER_COLORS, seriesLabels: CORNER_LABELS, unit: '%',    smoothRadius: 2 },
     { label: 'Carga Neumático',    keys: ['tyre_l_fl', 'tyre_l_fr', 'tyre_l_rl', 'tyre_l_rr'],       colors: CORNER_COLORS, seriesLabels: CORNER_LABELS, unit: 'N',    smoothRadius: 2 },
     { label: 'Grip Fraction',      keys: ['grip_fl', 'grip_fr', 'grip_rl', 'grip_rr'],               colors: CORNER_COLORS, seriesLabels: CORNER_LABELS, unit: '',     smoothRadius: 2 },
     { label: 'Vel. Rueda',         keys: ['wheel_sp_fl', 'wheel_sp_fr', 'wheel_sp_rl', 'wheel_sp_rr'], colors: CORNER_COLORS, seriesLabels: CORNER_LABELS, unit: 'rad/s', smoothRadius: 2 },
@@ -56,26 +55,10 @@ function formatLapTime(seconds: number): string {
   return `${m}:${s.toFixed(3).padStart(6, '0')}`;
 }
 
-function deriveCircuitNameFromTelemetryFile(filename: string | null | undefined): string | null {
-  if (!filename) return null;
-
-  let name = filename
-    .replace(/\.(mat|csv)$/i, '')
-    .replace(/^\d{4}-\d{2}-\d{2}\s*-\s*\d{2}-\d{2}-\d{2}\s*-\s*/i, '')
-    .replace(/^\d{8,}\s*-\s*/i, '')
-    .replace(/\s*-\s*(R|Q|FP|P)\d+$/i, '')
-    .replace(/\s+/g, ' ')
-    .trim();
-
-  if (!name) return null;
-  return name;
-}
-
 function formatCursorTimestamp(seconds: number): string {
   if (!Number.isFinite(seconds) || seconds < 0) return '--:--.---';
-  const totalMs = Math.round(seconds * 1000);
-  const minutes = Math.floor(totalMs / 60000);
-  const secondsPart = (totalMs % 60000) / 1000;
+  const minutes = Math.floor(seconds / 60);
+  const secondsPart = seconds - minutes * 60;
   return `${minutes.toString().padStart(2, '0')}:${secondsPart.toFixed(3).padStart(6, '0')}`;
 }
 
@@ -92,16 +75,32 @@ function formatPedalPercent(value: number): string {
   })}%`;
 }
 
+function filterDisplayLaps<T extends { lap: number; duration: number; lap_distance?: number }>(laps: T[]): T[] {
+  const sorted = laps
+    .filter((lap) => Number.isFinite(lap.lap) && lap.lap >= 0 && Number.isFinite(lap.duration) && lap.duration > 0)
+    .sort((a, b) => a.lap - b.lap);
+
+  if (sorted.length === 0) return sorted;
+
+  // Remove lap 0 (formation/outlap) if present — race sessions in rFactor2 start with a
+  // formation lap recorded as lap 0. Practice sessions don't have it, so we keep from [0].
+  const withoutFormation = sorted[0].lap === 0 ? sorted.slice(1) : sorted;
+
+  // Remove the last entry (inlap / incomplete lap).
+  return withoutFormation.length > 1 ? withoutFormation.slice(0, -1) : withoutFormation;
+}
+
 export default function TelemetryScreen() {
-  const { analysisResult, activeSessionId, setActiveSessionId, setAnalysisResult } = useAppStore();
+  const { analysisResult } = useAppStore();
   const [cursorPosition, setCursorPosition] = useState<GPSPoint | null>(null);
   const [cursorSample, setCursorSample] = useState<TelemetrySample | null>(null);
   const [selectedLap, setSelectedLap] = useState<number | null>(null);
   const [chartTab, setChartTab] = useState<ChartTab>('Conducción');
-  const [restoringTelemetry, setRestoringTelemetry] = useState(false);
-  const [restoredSessionId, setRestoredSessionId] = useState<string | null>(null);
-  const [restoreError, setRestoreError] = useState<string | null>(null);
-  const [sessions, setSessions] = useState<{ id: string; telemetry: string; svm: string }[]>([]);
+  const [panelHeight, setPanelHeight] = useState<number | null>(null);
+  const dragRef = useRef<{ startY: number; startH: number } | null>(null);
+  const panelHeightRef = useRef<number | null>(null);
+  panelHeightRef.current = panelHeight;
+  const fixedPanelRef = useRef<View>(null);
   const { width: windowWidth, height: windowHeight } = useWindowDimensions();
   const isWide = windowWidth >= 900;
   const topPanelAsColumns = windowWidth >= 1100;
@@ -109,94 +108,60 @@ export default function TelemetryScreen() {
   const telemetrySeries = Array.isArray(analysisResult?.telemetry_series)
     ? analysisResult.telemetry_series
     : [];
-  const canRestoreFromSession = Boolean(activeSessionId) || restoringTelemetry || Boolean(restoreError) || !analysisResult;
   const hasTelemetry = telemetrySeries.length > 0;
   const stats = analysisResult?.session_stats ?? null;
   const lapsData = Array.isArray(analysisResult?.laps_data) ? analysisResult.laps_data : null;
   const statsLaps = Array.isArray(stats?.laps) ? stats.laps : [];
-  const laps = lapsData ?? statsLaps;
-  const bestLapTime = stats?.best_lap_time ?? 0;
-  const currentSession = sessions.find((session) => session.id === activeSessionId) ?? null;
-  const fallbackCircuitName = deriveCircuitNameFromTelemetryFile(currentSession?.telemetry);
+  // laps_data is already filtered by preparsedClientPayload; only apply
+  // filterDisplayLaps when falling back to the raw stats.laps array.
+  const laps = useMemo(
+    () => (lapsData ? lapsData : filterDisplayLaps(statsLaps)),
+    [lapsData, statsLaps],
+  );
+  const bestLapTime = useMemo(() => {
+    const lapDurations = laps.map((lap) => lap.duration).filter((duration) => duration > 0);
+    return lapDurations.length > 0 ? Math.min(...lapDurations) : 0;
+  }, [laps]);
+  const avgLapTime = useMemo(() => {
+    const lapDurations = laps.map((lap) => lap.duration).filter((duration) => duration > 0);
+    return lapDurations.length > 0
+      ? lapDurations.reduce((sum, duration) => sum + duration, 0) / lapDurations.length
+      : 0;
+  }, [laps]);
+
+  /** Average tyre wear per lap (percentage points per lap, per corner). */
+  const avgWearPerLap = useMemo(() => {
+    const keys = ['wear_fl', 'wear_fr', 'wear_rl', 'wear_rr'] as const;
+    const sums = [0, 0, 0, 0];
+    let count = 0;
+    for (const lap of laps) {
+      const vals = keys.map((k) => lap[k]);
+      if (vals.every((v) => v != null && Number.isFinite(v))) {
+        vals.forEach((v, i) => { sums[i] += v!; });
+        count += 1;
+      }
+    }
+    if (count === 0) return null;
+    return sums.map((s) => s / count) as [number, number, number, number];
+  }, [laps]);
+
+  /** Average fuel consumed per lap (litres). */
+  const avgFuelPerLap = useMemo(() => {
+    const vals = laps.map((l) => l.fuel_used).filter((v): v is number => v != null && Number.isFinite(v) && v > 0);
+    if (vals.length === 0) return null;
+    return vals.reduce((a, b) => a + b, 0) / vals.length;
+  }, [laps]);
   const circuitName = stats?.circuit_name && stats.circuit_name.trim().length > 0 && stats.circuit_name.trim().toLowerCase() !== 'desconocido'
     ? stats.circuit_name
-    : (fallbackCircuitName ?? 'Desconocido');
+    : 'Desconocido';
 
   const availableLaps = useMemo(() => {
-    const fromSeries = telemetrySeries
-      .map((s) => s.lap)
-      .filter((lap) => Number.isFinite(lap) && lap > 0);
-    const fromStats = laps.map((l) => l.lap).filter((lap) => Number.isFinite(lap) && lap > 0);
-    return Array.from(new Set([...fromSeries, ...fromStats])).sort((a, b) => a - b);
-  }, [telemetrySeries, laps]);
+    return laps.map((lap) => lap.lap).filter((lap) => Number.isFinite(lap) && lap > 0);
+  }, [laps]);
 
-  const restoreTelemetryForCurrentOrLatestSession = useCallback(async () => {
-    setRestoringTelemetry(true);
-    setRestoreError(null);
-
-    try {
-      let targetSessionId = activeSessionId;
-      const availableSessions = await listSessions();
-      setSessions(availableSessions);
-
-      // If current active session no longer exists (e.g. deleted), fallback to latest available.
-      if (targetSessionId && !availableSessions.some((s) => s.id === targetSessionId)) {
-        targetSessionId = null;
-      }
-
-      if (!targetSessionId) {
-        targetSessionId = availableSessions[0]?.id ?? null;
-      }
-
-      if (targetSessionId && targetSessionId !== activeSessionId) {
-        setActiveSessionId(targetSessionId);
-      }
-
-      if (!targetSessionId) {
-        setRestoreError('No hay sesiones disponibles para restaurar telemetría');
-        return;
-      }
-
-      const telemetryPayload = await loadSessionTelemetry(targetSessionId);
-      setAnalysisResult(telemetryPayload);
-      setRestoredSessionId(targetSessionId);
-    } catch (error: unknown) {
-      const message = error instanceof Error ? error.message : 'No se pudo restaurar la telemetría';
-      setRestoreError(message);
-      if (activeSessionId) {
-        setRestoredSessionId(activeSessionId);
-      }
-    } finally {
-      setRestoringTelemetry(false);
-    }
-  }, [activeSessionId, setActiveSessionId, setAnalysisResult, setSessions]);
-
-  useEffect(() => {
-    // Clear stale restore errors as soon as valid telemetry exists.
-    if (telemetrySeries.length > 0) {
-      setRestoreError(null);
-    }
-  }, [telemetrySeries.length]);
-
-  useEffect(() => {
-    const needsRecovery = !analysisResult || telemetrySeries.length === 0;
-    const sameSessionAlreadyAttempted = Boolean(activeSessionId) && restoredSessionId === activeSessionId;
-    if (!needsRecovery || restoringTelemetry || sameSessionAlreadyAttempted) return;
-
-    void restoreTelemetryForCurrentOrLatestSession();
-  }, [
-    analysisResult,
-    telemetrySeries.length,
-    activeSessionId,
-    restoredSessionId,
-    restoringTelemetry,
-    restoreTelemetryForCurrentOrLatestSession,
-  ]);
-
-  const handleRetryRestore = useCallback(async () => {
-    setRestoredSessionId(null);
-    await restoreTelemetryForCurrentOrLatestSession();
-  }, [restoreTelemetryForCurrentOrLatestSession]);
+  const lapDurationByNumber = useMemo(() => {
+    return new Map(laps.map((lap) => [lap.lap, lap.duration]));
+  }, [laps]);
 
   useEffect(() => {
     if (availableLaps.length === 0) {
@@ -219,6 +184,19 @@ export default function TelemetryScreen() {
       (min, sample) => (sample.t < min ? sample.t : min),
       selectedLapSamples[0].t,
     );
+  }, [selectedLapSamples]);
+
+  /** GPS-precise lap duration from laps_data (or time-span fallback). */
+  const selectedLapPreciseDuration = useMemo(() => {
+    if (selectedLap == null) return 0;
+    const lapData = laps.find((l) => l.lap === selectedLap);
+    return lapData?.duration ?? 0;
+  }, [laps, selectedLap]);
+
+  /** Raw sample time span (t_last − t_first). */
+  const selectedLapSampleSpan = useMemo(() => {
+    if (selectedLapSamples.length < 2) return 0;
+    return selectedLapSamples[selectedLapSamples.length - 1].t - selectedLapSamples[0].t;
   }, [selectedLapSamples]);
 
   // Peak throttle/brake come from the backend LapStats (computed at full resolution
@@ -251,29 +229,10 @@ export default function TelemetryScreen() {
     [selectedLapSamples],
   );
 
-  const allTelemetryGpsPoints = useMemo(
-    () =>
-      telemetrySeries
-        .filter(
-          (s) =>
-            Number.isFinite(s.lat) &&
-            Number.isFinite(s.lon) &&
-            s.lat >= -90 &&
-            s.lat <= 90 &&
-            s.lon >= -180 &&
-            s.lon <= 180 &&
-            (s.lat !== 0 || s.lon !== 0),
-        )
-        .map((s) => ({ lat: s.lat, lon: s.lon })),
-    [telemetrySeries],
-  );
-
-  const mapPoints = selectedLapGpsPoints.length >= 2
+  const mapPoints = selectedLap == null
     ? selectedLapGpsPoints
-    : Array.isArray(analysisResult?.circuit_data) && analysisResult.circuit_data.length >= 2
-    ? analysisResult.circuit_data
-    : allTelemetryGpsPoints.length >= 2
-    ? allTelemetryGpsPoints
+    : selectedLapGpsPoints.length >= 2
+    ? selectedLapGpsPoints
     : [];
 
   const hasCircuit = mapPoints.length >= 2;
@@ -286,8 +245,8 @@ export default function TelemetryScreen() {
   }, [laps]);
 
   const lapSelectorVisible = hasTelemetry && availableLaps.length > 0;
-  const targetTopPanelHeight = Math.max(Math.floor(windowHeight * 0.4), 220);
-  const topPanelHeight = Math.min(targetTopPanelHeight, 380);
+  const defaultTopPanelHeight = Math.min(Math.max(Math.floor(windowHeight * 0.4), 220), 380);
+  const topPanelHeight = panelHeight ?? defaultTopPanelHeight;
   const mapWidth = topPanelAsColumns
     ? Math.max(
         320,
@@ -312,25 +271,53 @@ export default function TelemetryScreen() {
     setCursorSample(sample);
   }, []);
 
+  // ── Resizable divider drag handlers (web only) ──
+  const MIN_PANEL = 120;
+  const MAX_PANEL = Math.floor(windowHeight * 0.75);
+
+  useEffect(() => {
+    if (Platform.OS !== 'web') return;
+    const onMouseMove = (e: MouseEvent) => {
+      const d = dragRef.current;
+      if (!d) return;
+      e.preventDefault();
+      const newH = Math.max(MIN_PANEL, Math.min(MAX_PANEL, d.startH + (e.clientY - d.startY)));
+      setPanelHeight(newH);
+    };
+    const onMouseUp = () => {
+      if (dragRef.current) {
+        dragRef.current = null;
+        document.body.style.cursor = '';
+        document.body.style.userSelect = '';
+      }
+    };
+    window.addEventListener('mousemove', onMouseMove);
+    window.addEventListener('mouseup', onMouseUp);
+    return () => {
+      window.removeEventListener('mousemove', onMouseMove);
+      window.removeEventListener('mouseup', onMouseUp);
+    };
+  }, [MAX_PANEL]);
+
+  const handleDividerMouseDown = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    // Use the actual rendered height of the panel (which may be smaller than
+    // the state value when maxHeight > content height) so dragging responds
+    // immediately instead of requiring the user to move past the dead zone.
+    let actualH = panelHeightRef.current ?? defaultTopPanelHeight;
+    if (Platform.OS === 'web' && fixedPanelRef.current) {
+      const el = fixedPanelRef.current as unknown as HTMLElement;
+      if (el.offsetHeight) actualH = el.offsetHeight;
+    }
+    dragRef.current = { startY: (e as unknown as MouseEvent).clientY, startH: actualH };
+    document.body.style.cursor = 'row-resize';
+    document.body.style.userSelect = 'none';
+  }, [defaultTopPanelHeight]);
+
   if (!analysisResult) {
     return (
       <ScrollView style={styles.container} contentContainerStyle={styles.center}>
-        {restoringTelemetry && canRestoreFromSession ? (
-          <>
-            <ActivityIndicator size="large" color="#e53935" />
-            <Text style={styles.emptyText}>Restaurando telemetría de la sesión activa...</Text>
-          </>
-        ) : (
-          <>
-            <Text style={styles.emptyText}>Sube archivos en Subida para ver la telemetria</Text>
-            {restoreError ? <Text style={styles.restoreErrorText}>{restoreError}</Text> : null}
-            {canRestoreFromSession ? (
-              <Pressable style={styles.retryBtn} onPress={handleRetryRestore}>
-                <Text style={styles.retryBtnText}>Reintentar restauración</Text>
-              </Pressable>
-            ) : null}
-          </>
-        )}
+        <Text style={styles.emptyText}>Sube archivos en Subida para ver la telemetria</Text>
       </ScrollView>
     );
   }
@@ -338,22 +325,7 @@ export default function TelemetryScreen() {
   if (!hasTelemetry && !hasCircuit) {
     return (
       <ScrollView style={styles.container} contentContainerStyle={styles.center}>
-        {restoringTelemetry ? (
-          <>
-            <ActivityIndicator size="large" color="#e53935" />
-            <Text style={styles.emptyText}>Cargando telemetría de la sesión...</Text>
-          </>
-        ) : (
-          <>
-            <Text style={styles.emptyText}>Sin datos de telemetria disponibles</Text>
-            {restoreError ? <Text style={styles.restoreErrorText}>{restoreError}</Text> : null}
-            {canRestoreFromSession ? (
-              <Pressable style={styles.retryBtn} onPress={handleRetryRestore}>
-                <Text style={styles.retryBtnText}>Reintentar restauración</Text>
-              </Pressable>
-            ) : null}
-          </>
-        )}
+        <Text style={styles.emptyText}>Sin datos de telemetria disponibles</Text>
       </ScrollView>
     );
   }
@@ -361,42 +333,62 @@ export default function TelemetryScreen() {
   return (
     <View style={styles.container}>
       {/* Fixed top panel: left stats + center map + right lap selector */}
-      <View style={styles.fixedPanel}>
+      <View ref={fixedPanelRef} style={[styles.fixedPanel, { maxHeight: topPanelHeight }]}>
         <View style={[styles.fixedGrid, topPanelAsColumns ? styles.fixedGridRow : styles.fixedGridColumn]}>
           <View
             style={[
               styles.fixedInfoColumn,
               topPanelAsColumns ? styles.fixedInfoColumnDesktop : null,
-              topPanelAsColumns ? { height: topColumnHeight } : null,
+              topPanelAsColumns ? { height: topColumnHeight, overflow: 'hidden' } : null,
             ]}
           >
             <Text style={styles.sectionTitle}>Resumen</Text>
-            <View style={styles.infoCard}>
-              <Text style={styles.infoLabel}>Circuito</Text>
-              <Text style={styles.infoValue} numberOfLines={2}>
-                {circuitName}
-              </Text>
-            </View>
-            <View style={styles.infoCard}>
-              <Text style={styles.infoLabel}>Vueltas</Text>
-              <Text style={styles.infoValue}>{stats?.total_laps ?? 0}</Text>
-            </View>
+            <ScrollView
+              nestedScrollEnabled
+              showsVerticalScrollIndicator={false}
+              style={{ flex: 1 }}
+              contentContainerStyle={{ gap: 5 }}
+            >
+            {avgWearPerLap && (
+              <View style={styles.infoCard}>
+                <Text style={styles.infoLabel}>Desgaste medio / vuelta</Text>
+                <Text style={styles.infoValueSmall}>
+                  FL {avgWearPerLap[0].toFixed(2)}%  FR {avgWearPerLap[1].toFixed(2)}%
+                </Text>
+                <Text style={styles.infoValueSmall}>
+                  RL {avgWearPerLap[2].toFixed(2)}%  RR {avgWearPerLap[3].toFixed(2)}%
+                </Text>
+              </View>
+            )}
+            {avgFuelPerLap != null && (
+              <View style={styles.infoCard}>
+                <Text style={styles.infoLabel}>Combustible medio / vuelta</Text>
+                <Text style={styles.infoValueCompact}>{avgFuelPerLap.toFixed(2)} L</Text>
+              </View>
+            )}
             <View style={styles.infoCard}>
               <Text style={styles.infoLabel}>Mejor vuelta</Text>
-              <Text style={[styles.infoValue, styles.infoValueAccent]}>
-                {formatLapTime(stats?.best_lap_time ?? 0)}
+              <Text style={[styles.infoValueCompact, styles.infoValueAccent]}>
+                {formatLapTime(bestLapTime)}
               </Text>
             </View>
             <View style={styles.infoCard}>
               <Text style={styles.infoLabel}>Media</Text>
-              <Text style={styles.infoValue}>{formatLapTime(stats?.avg_lap_time ?? 0)}</Text>
+              <Text style={styles.infoValueCompact}>{formatLapTime(avgLapTime)}</Text>
             </View>
+            <View style={styles.infoCard}>
+              <Text style={styles.infoLabel}>Vueltas</Text>
+              <Text style={styles.infoValueCompact}>{laps.length}</Text>
+            </View>
+            </ScrollView>
           </View>
 
           <View style={styles.fixedMapColumn}>
             {hasCircuit && (
               <View style={styles.mapSection}>
-                <Text style={styles.sectionTitle}>Mapa del Circuito</Text>
+                <Text style={styles.sectionTitle}>
+                  Mapa del Circuito{circuitName !== 'Desconocido' ? ` (${circuitName})` : ''}
+                </Text>
                 <CircuitMap
                   gpsPoints={mapPoints}
                   telemetrySamples={selectedLapSamples}
@@ -433,6 +425,8 @@ export default function TelemetryScreen() {
                   availableLaps.map((lap) => {
                     const isActive = lap === selectedLap;
                     const isBest = bestLapNumber != null && lap === bestLapNumber;
+                    const lapDuration = lapDurationByNumber.get(lap) ?? 0;
+                    const lapTimeText = formatLapTime(lapDuration);
                     return (
                       <Pressable
                         key={lap}
@@ -443,12 +437,17 @@ export default function TelemetryScreen() {
                         ]}
                         onPress={() => setSelectedLap(lap)}
                       >
-                        <Text style={[styles.lapRowText, isActive ? styles.lapRowTextActive : null]}>
-                          Vuelta {lap}
+                        <View style={styles.lapRowMain}>
+                          <Text style={[styles.lapRowText, isActive ? styles.lapRowTextActive : null]}>
+                            Vuelta {lap}
+                          </Text>
+                          {isBest ? (
+                            <Text style={[styles.lapRowBadge, isActive ? styles.lapRowBadgeActive : null]}>★ Mejor</Text>
+                          ) : null}
+                        </View>
+                        <Text style={[styles.lapRowTime, isActive ? styles.lapRowTimeActive : null]}>
+                          ({lapTimeText})
                         </Text>
-                        {isBest ? (
-                          <Text style={[styles.lapRowBadge, isActive ? styles.lapRowBadgeActive : null]}>★ Mejor</Text>
-                        ) : null}
                       </Pressable>
                     );
                   })
@@ -460,39 +459,56 @@ export default function TelemetryScreen() {
           </View>
         </View>
 
-        {hasTelemetry && (
-          <View style={styles.fixedCursorBar}>
-            <View style={styles.fixedCursorBarRow}>
-              {CHART_TABS.map((tab) => (
-                <Pressable
-                  key={tab}
-                  style={[styles.inlineTabItem, chartTab === tab && styles.inlineTabItemActive]}
-                  onPress={() => setChartTab(tab)}
-                >
-                  <Text style={[styles.inlineTabLabel, chartTab === tab && styles.inlineTabLabelActive]}>
-                    {tab}
-                  </Text>
-                </Pressable>
-              ))}
-              {cursorSample && (
-                <>
-                  <Text style={styles.fixedCursorBarText}>{' │ '}</Text>
-                  <Text style={styles.fixedCursorBarText}>
-                    {`t = ${formatCursorTimestamp(Math.max(0, cursorSample.t - selectedLapTimeOffset))} | Vuelta `}
-                  </Text>
-                  <Text style={[styles.fixedCursorBarText, styles.fixedCursorBarHighlight]}>{cursorSample.lap}</Text>
-                  <Text style={styles.fixedCursorBarText}>{' | '}</Text>
-                  <Text style={[styles.fixedCursorBarText, styles.fixedCursorSpeed]}>{cursorSample.spd.toFixed(0)} km/h</Text>
-                  <Text style={[styles.fixedCursorBarText, styles.fixedCursorThrottle]}>{formatPedalPercent(cursorSample.thr)}</Text>
-                  <Text style={[styles.fixedCursorBarText, styles.fixedCursorBrake]}>{formatPedalPercent(cursorSample.brk)}</Text>
-                  <Text style={[styles.fixedCursorBarText, styles.fixedCursorRpm]}>{cursorSample.rpm.toFixed(0)} rpm</Text>
-                  <Text style={[styles.fixedCursorBarText, styles.fixedCursorGear]}>{Math.round(cursorSample.gear)}ª</Text>
-                </>
-              )}
-            </View>
-          </View>
-        )}
       </View>
+
+      {/* Cursor bar — outside fixedPanel so it never gets clipped */}
+      {hasTelemetry && (
+        <View style={styles.fixedCursorBar}>
+          <View style={styles.fixedCursorBarRow}>
+            {CHART_TABS.map((tab) => (
+              <Pressable
+                key={tab}
+                style={[styles.inlineTabItem, chartTab === tab && styles.inlineTabItemActive]}
+                onPress={() => setChartTab(tab)}
+              >
+                <Text style={[styles.inlineTabLabel, chartTab === tab && styles.inlineTabLabelActive]}>
+                  {tab}
+                </Text>
+              </Pressable>
+            ))}
+            {cursorSample && (
+              <>
+                <Text style={styles.fixedCursorBarText}>{' │ '}</Text>
+                <Text style={styles.fixedCursorBarText}>
+                  {`t = ${formatCursorTimestamp(Math.max(0,
+                    selectedLapPreciseDuration > 0 && selectedLapSampleSpan > 0
+                      ? (cursorSample.t - selectedLapTimeOffset) * (selectedLapPreciseDuration / selectedLapSampleSpan)
+                      : cursorSample.t - selectedLapTimeOffset,
+                  ))} | Vuelta `}
+                </Text>
+                <Text style={[styles.fixedCursorBarText, styles.fixedCursorBarHighlight]}>{cursorSample.lap}</Text>
+                <Text style={styles.fixedCursorBarText}>{' | '}</Text>
+                <Text style={[styles.fixedCursorBarText, styles.fixedCursorSpeed]}>{cursorSample.spd.toFixed(0)} km/h</Text>
+                <Text style={[styles.fixedCursorBarText, styles.fixedCursorThrottle]}>{formatPedalPercent(cursorSample.thr)}</Text>
+                <Text style={[styles.fixedCursorBarText, styles.fixedCursorBrake]}>{formatPedalPercent(cursorSample.brk)}</Text>
+                <Text style={[styles.fixedCursorBarText, styles.fixedCursorRpm]}>{cursorSample.rpm.toFixed(0)} rpm</Text>
+                <Text style={[styles.fixedCursorBarText, styles.fixedCursorGear]}>{Math.round(cursorSample.gear)}ª</Text>
+              </>
+            )}
+          </View>
+        </View>
+      )}
+
+      {/* Resize drag handle */}
+      {Platform.OS === 'web' && (
+        <View
+          style={styles.resizeHandle}
+          // @ts-ignore web-only mouse events
+          onMouseDown={handleDividerMouseDown}
+        >
+          <View style={styles.resizeHandleBar} />
+        </View>
+      )}
 
       {/* Scrollable body: charts + lap table */}
       <ScrollView
@@ -588,20 +604,37 @@ const styles = StyleSheet.create({
   },
   fixedPanel: {
     backgroundColor: '#090919',
-    borderBottomWidth: 1,
-    borderBottomColor: '#1e1e3a',
+    borderBottomWidth: 0,
     paddingHorizontal: 16,
     paddingTop: 12,
     paddingBottom: 8,
+    overflow: 'hidden',
+  },
+  resizeHandle: {
+    height: 10,
+    backgroundColor: '#090919',
+    borderBottomWidth: 1,
+    borderBottomColor: '#1e1e3a',
+    alignItems: 'center',
+    justifyContent: 'center',
+    cursor: 'row-resize',
+  } as object,
+  resizeHandleBar: {
+    width: 48,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: '#333355',
   },
   fixedCursorBar: {
-    marginTop: 8,
     backgroundColor: '#111128',
     borderWidth: 1,
     borderColor: '#1e1e3a',
     borderRadius: 8,
     paddingHorizontal: 12,
     paddingVertical: 7,
+    marginHorizontal: 16,
+    marginTop: 4,
+    marginBottom: 2,
   },
   fixedCursorBarText: {
     color: '#aaa',
@@ -715,6 +748,19 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     fontFamily: 'monospace',
   },
+  infoValueSmall: {
+    color: '#ddd',
+    fontSize: 12,
+    fontWeight: '600',
+    fontFamily: 'monospace',
+    lineHeight: 16,
+  },
+  infoValueCompact: {
+    color: '#ddd',
+    fontSize: 13,
+    fontWeight: '700',
+    fontFamily: 'monospace',
+  },
   infoValueAccent: {
     color: '#4caf50',
   },
@@ -782,6 +828,13 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
     paddingVertical: 6,
   },
+  lapRowMain: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    flexShrink: 1,
+    minWidth: 0,
+  },
   lapRowBest: {
     borderColor: '#4caf50',
   },
@@ -804,6 +857,15 @@ const styles = StyleSheet.create({
   },
   lapRowBadgeActive: {
     color: '#123b12',
+  },
+  lapRowTime: {
+    color: '#e5e8ff',
+    fontSize: 12,
+    fontWeight: '700',
+    fontFamily: 'monospace',
+  },
+  lapRowTimeActive: {
+    color: '#0b1b0b',
   },
   noLapsText: {
     color: '#666',

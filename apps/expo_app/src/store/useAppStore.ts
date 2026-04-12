@@ -1,8 +1,23 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import type { AnalysisResponse, ModelInfo, TrackInfo, SetupChange } from '../api';
+import type { AnalysisResponse, ModelInfo, TrackInfo, SetupChange, PreparsedAnalyzePayload } from '../api';
+
+const DEFAULT_OLLAMA_BASE_URL = process.env.EXPO_PUBLIC_OLLAMA_BASE_URL ?? 'https://www.ollama.com';
+
+function isInvalidOllamaUrl(url: string | null | undefined): boolean {
+  if (!url) return true;
+  const normalized = url.trim().toLowerCase();
+  return normalized.length === 0 || normalized === 'undefined' || normalized === 'null';
+}
 
 interface AppState {
+  // Auth
+  jwt: string | null;
+  authUsername: string | null;
+  isAdmin: boolean;
+  setAuth: (jwt: string, username: string, isAdmin: boolean) => void;
+  clearAuth: () => void;
+
   // Health
   serverStatus: 'unknown' | 'ok' | 'degraded' | 'offline';
   setServerStatus: (s: AppState['serverStatus']) => void;
@@ -49,6 +64,10 @@ interface AppState {
   setTelemetryFile: (f: File | null) => void;
   setSvmFile: (f: File | null) => void;
 
+  // Client-preparsed payload (.ld + .svm)
+  preparsedPayload: PreparsedAnalyzePayload | null;
+  setPreparsedPayload: (payload: PreparsedAnalyzePayload | null) => void;
+
   // Locked parameters (prevent AI from suggesting changes)
   lockedParameters: Set<string>;
   toggleLockedParameter: (param: string) => void;
@@ -57,6 +76,12 @@ interface AppState {
 }
 
 export const useAppStore = create<AppState>()(persist((set) => ({
+  jwt: null,
+  authUsername: null,
+  isAdmin: false,
+  setAuth: (jwt, authUsername, isAdmin) => set({ jwt, authUsername, isAdmin }),
+  clearAuth: () => set({ jwt: null, authUsername: null, isAdmin: false, ollamaApiKey: '', selectedModel: 'llama3.2:latest' }),
+
   serverStatus: 'unknown',
   setServerStatus: (serverStatus) => set({ serverStatus }),
 
@@ -80,7 +105,7 @@ export const useAppStore = create<AppState>()(persist((set) => ({
   models: [],
   selectedModel: 'llama3.2:latest',
   selectedProvider: 'ollama_cloud',
-  ollamaBaseUrl: 'https://ollama.com',
+  ollamaBaseUrl: DEFAULT_OLLAMA_BASE_URL,
   ollamaApiKey: '',
   setModels: (models) => set({ models }),
   setSelectedModel: (selectedModel) => set({ selectedModel }),
@@ -96,6 +121,9 @@ export const useAppStore = create<AppState>()(persist((set) => ({
   setTelemetryFile: (telemetryFile) => set({ telemetryFile }),
   setSvmFile: (svmFile) => set({ svmFile }),
 
+  preparsedPayload: null,
+  setPreparsedPayload: (preparsedPayload) => set({ preparsedPayload }),
+
   lockedParameters: new Set(),
   toggleLockedParameter: (param) => set((state) => {
     const newLocked = new Set(state.lockedParameters);
@@ -110,21 +138,16 @@ export const useAppStore = create<AppState>()(persist((set) => ({
   clearLockedParameters: () => set({ lockedParameters: new Set() }),
 }), {
   name: 'rf2-app-store',
-  version: 1,
-  migrate: (persistedState: unknown, fromVersion: number) => {
-    const state = (persistedState ?? {}) as Record<string, unknown>;
-    if (fromVersion < 1) {
-      // Set default Ollama URL for users who had an empty string stored
-      if (!state.ollamaBaseUrl) {
-        state.ollamaBaseUrl = 'https://ollama.com';
-      }
-    }
-    return state;
+  version: 5,
+  migrate: () => ({}), // clear stale persisted data on version bump
+  onRehydrateStorage: () => (state) => {
+    if (!state) return;
+    // Reset transient UI state on page load.
+    // jwt, authUsername, isAdmin, ollamaApiKey, selectedModel persist across reloads.
+    state.setActiveSessionId(null);
+    state.setOllamaBaseUrl(DEFAULT_OLLAMA_BASE_URL);
+    state.setSelectedProvider('ollama_cloud');
   },
-  partialize: (state) => ({
-    activeSessionId: state.activeSessionId,
-    selectedModel: state.selectedModel,
-    selectedProvider: state.selectedProvider,
-    ollamaBaseUrl: state.ollamaBaseUrl,
-  }),
+  // jwt, auth, ollamaApiKey, selectedModel survive reloads; clearAuth clears everything
+  partialize: (state) => ({ jwt: state.jwt, authUsername: state.authUsername, isAdmin: state.isAdmin, ollamaApiKey: state.ollamaApiKey, selectedModel: state.selectedModel }),
 }));

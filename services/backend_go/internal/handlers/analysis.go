@@ -36,6 +36,29 @@ type ollamaRequestOptions struct {
 	APIKey  string
 }
 
+type preparsedSetupSection struct {
+	Name           string            `json:"name"`
+	Params         map[string]string `json:"params"`
+	ReadOnlyParams []string          `json:"read_only_params"`
+}
+
+type preparsedSetup struct {
+	Sections map[string]preparsedSetupSection `json:"sections"`
+}
+
+type preparsedAnalyzeRequest struct {
+	Channels      map[string][]float64 `json:"channels"`
+	TimeCol       string               `json:"time_col"`
+	LapCol        string               `json:"lap_col"`
+	Setup         preparsedSetup       `json:"setup"`
+	SessionStats  *domain.SessionStats `json:"session_stats"`
+	Model         string               `json:"model"`
+	Provider      string               `json:"provider"`
+	OllamaBaseURL string               `json:"ollama_base_url"`
+	OllamaAPIKey  string               `json:"ollama_api_key"`
+	FixedParams   []string             `json:"fixed_params"`
+}
+
 // NewAnalysisHandler creates an analysis handler.
 func NewAnalysisHandler(dataDir string, ollamaClient *ollama.Client) *AnalysisHandler {
 	defaultPipeline := agents.NewPipeline(ollamaClient, "")
@@ -169,6 +192,185 @@ func (h *AnalysisHandler) Analyze(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, resp)
+}
+
+// AnalyzePreparsed handles POST /api/analyze_preparsed (client-side parsed telemetry/setup).
+func (h *AnalysisHandler) AnalyzePreparsed(c *gin.Context) {
+	var req preparsedAnalyzeRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid JSON payload"})
+		return
+	}
+
+	resp, err := h.analyzePreparsedRequest(c, &req, nil)
+	if err != nil {
+		log.Error().Err(err).Msg("preparsed analysis failed")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, resp)
+}
+
+// AnalyzePreparsedStream handles POST /api/analyze_preparsed_stream and streams
+// Server-Sent Events while analyzing a client-preparsed payload.
+func (h *AnalysisHandler) AnalyzePreparsedStream(c *gin.Context) {
+	var req preparsedAnalyzeRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid JSON payload"})
+		return
+	}
+
+	c.Header("Content-Type", "text/event-stream")
+	c.Header("Cache-Control", "no-cache")
+	c.Header("X-Accel-Buffering", "no")
+	c.Status(http.StatusOK)
+
+	flusher, canFlush := c.Writer.(http.Flusher)
+	var streamMu sync.Mutex
+
+	sendSSE := func(eventType string, payload any) {
+		streamMu.Lock()
+		defer streamMu.Unlock()
+
+		data, _ := json.Marshal(payload)
+		fmt.Fprintf(c.Writer, "event: %s\ndata: %s\n\n", eventType, data)
+		if canFlush {
+			flusher.Flush()
+		}
+	}
+
+	progress := func(ev agents.ProgressEvent) {
+		sendSSE("progress", ev)
+	}
+
+	resp, err := h.analyzePreparsedRequest(c, &req, progress)
+	if err != nil {
+		log.Error().Err(err).Msg("preparsed stream analysis failed")
+		sendSSE("error", gin.H{"error": err.Error()})
+		return
+	}
+
+	sendSSE("result", resp)
+	fmt.Fprintf(c.Writer, "event: done\ndata: {}\n\n")
+	if canFlush {
+		flusher.Flush()
+	}
+}
+
+func (h *AnalysisHandler) analyzePreparsedRequest(c *gin.Context, req *preparsedAnalyzeRequest, progress agents.ProgressFn) (*domain.AnalysisResponse, error) {
+	if req == nil {
+		return nil, fmt.Errorf("nil preparsed request")
+	}
+
+	if len(req.Channels) == 0 {
+		return nil, fmt.Errorf("channels are required")
+	}
+
+	timeCol, lapCol := resolvePreparsedTimeLapCols(req.Channels, req.TimeCol, req.LapCol)
+	if timeCol == "" || lapCol == "" {
+		return nil, fmt.Errorf("time_col and lap_col (or recognizable equivalents) are required")
+	}
+
+	setup := convertPreparsedSetup(req.Setup)
+	if len(setup.Sections) == 0 {
+		return nil, fmt.Errorf("setup sections are required")
+	}
+
+	runner, err := h.resolveAnalyzer(strings.TrimSpace(req.Model), strings.TrimSpace(req.Provider), ollamaRequestOptions{
+		BaseURL: strings.TrimSpace(req.OllamaBaseURL),
+		APIKey:  strings.TrimSpace(req.OllamaAPIKey),
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	td := &domain.TelemetryData{
+		Channels: req.Channels,
+		TimeCol:  timeCol,
+		LapCol:   lapCol,
+	}
+
+	summary := agents.BuildEnhancedTelemetrySummary(td)
+	stats := td.SessionStats()
+	if req.SessionStats != nil && hasUsefulPreparsedSessionStats(req.SessionStats) {
+		stats = *req.SessionStats
+	}
+	timeSeries := td.ExtractTimeSeries()
+
+	var resp *domain.AnalysisResponse
+	if p, ok := runner.(*agents.Pipeline); ok && progress != nil {
+		resp, err = p.AnalyzeWithProgress(c.Request.Context(), summary, &stats, setup, req.FixedParams, progress)
+	} else {
+		resp, err = runner.Analyze(c.Request.Context(), summary, &stats, setup, req.FixedParams)
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	resp.TelemetrySummary = summary
+	resp.SessionStats = &stats
+	resp.LapsData = stats.Laps
+	resp.TelemetryTimeSeries = timeSeries
+	resp.CircuitData = parsers.ExtractGPS(td, 2000)
+
+	return resp, nil
+}
+
+func hasUsefulPreparsedSessionStats(stats *domain.SessionStats) bool {
+	if stats == nil {
+		return false
+	}
+	return stats.TotalLaps > 0 || stats.BestLapTime > 0 || stats.AvgLapTime > 0 || len(stats.Laps) > 0 || strings.TrimSpace(stats.CircuitName) != ""
+}
+
+func convertPreparsedSetup(input preparsedSetup) *domain.Setup {
+	setup := domain.NewSetup()
+	for key, sec := range input.Sections {
+		params := make(map[string]string)
+		for k, v := range sec.Params {
+			params[k] = v
+		}
+		name := sec.Name
+		if strings.TrimSpace(name) == "" {
+			name = key
+		}
+		setup.Sections[key] = &domain.SetupSection{
+			Name:           name,
+			Params:         params,
+			ReadOnlyParams: sec.ReadOnlyParams,
+		}
+	}
+	return setup
+}
+
+func resolvePreparsedTimeLapCols(channels map[string][]float64, timeCol, lapCol string) (string, string) {
+	if _, ok := channels[timeCol]; !ok {
+		timeCol = ""
+	}
+	if _, ok := channels[lapCol]; !ok {
+		lapCol = ""
+	}
+
+	if timeCol == "" {
+		for _, candidate := range []string{"Session_Elapsed_Time", "Time", "time"} {
+			if _, ok := channels[candidate]; ok {
+				timeCol = candidate
+				break
+			}
+		}
+	}
+
+	if lapCol == "" {
+		for _, candidate := range []string{"Lap_Number", "Lap", "lap"} {
+			if _, ok := channels[candidate]; ok {
+				lapCol = candidate
+				break
+			}
+		}
+	}
+
+	return timeCol, lapCol
 }
 
 // AnalyzeSession handles POST /api/analyze_session (use pre-uploaded files)

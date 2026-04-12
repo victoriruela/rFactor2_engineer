@@ -12,6 +12,12 @@ type Config struct {
 	OllamaModel  string
 	OllamaAPIKey string
 	LogLevel     string
+	JWTSecret    string
+	SMTPHost     string
+	SMTPPort     string
+	SMTPUser     string
+	SMTPPass     string
+	SMTPFrom     string
 }
 
 func Load() *Config {
@@ -22,6 +28,12 @@ func Load() *Config {
 		OllamaModel:  getEnv("OLLAMA_MODEL", "llama3.2:latest"),
 		OllamaAPIKey: getEnv("OLLAMA_API_KEY", ""),
 		LogLevel:     getEnv("RF2_LOG_LEVEL", "info"),
+		JWTSecret:    getEnv("RF2_JWT_SECRET", ""),
+		SMTPHost:     getEnv("RF2_SMTP_HOST", ""),
+		SMTPPort:     getEnv("RF2_SMTP_PORT", "587"),
+		SMTPUser:     getEnv("RF2_SMTP_USER", ""),
+		SMTPPass:     getEnv("RF2_SMTP_PASS", ""),
+		SMTPFrom:     getEnv("RF2_SMTP_FROM", ""),
 	}
 }
 
