@@ -1,0 +1,512 @@
+{
+  "version": "1.0",
+  "description": "Machine-readable physics rules for rFactor 2 setup analysis. Used by validateRecommendation() to verify LLM output against known vehicle dynamics.",
+  "domains": {
+    "tire_pressure": [
+      {
+        "id": "TP-001",
+        "if": "Tire_Temp_Center > Tire_Temp_Inner AND Tire_Temp_Center > Tire_Temp_Outer",
+        "then": "REDUCE tire pressure (PressureSetting)",
+        "direction": "decrease",
+        "affected_params": ["PressureSetting"],
+        "physics": "Excessive pressure concentrates contact patch at center; reduces total grip area and increases center wear."
+      },
+      {
+        "id": "TP-002",
+        "if": "Tire_Temp_Inner > Tire_Temp_Center AND Tire_Temp_Outer > Tire_Temp_Center",
+        "then": "INCREASE tire pressure (PressureSetting)",
+        "direction": "increase",
+        "affected_params": ["PressureSetting"],
+        "physics": "Under-pressure causes tire to bulge at edges; center runs cold, losing grip."
+      },
+      {
+        "id": "TP-003",
+        "if": "Front tire temps consistently > Rear tire temps",
+        "then": "Rebalance load: lower front pressure OR increase rear pressure",
+        "direction": "rebalance",
+        "affected_params": ["PressureSetting"],
+        "physics": "Front overworked relative to rear; equalizing thermal load improves overall grip."
+      },
+      {
+        "id": "TP-004",
+        "if": "Tire_Temp_Delta(LapN - Lap1) > 15°C without track temp change",
+        "then": "Pressure setting outside optimal window — adjust toward target",
+        "direction": "adjust",
+        "affected_params": ["PressureSetting"],
+        "physics": "Progressive heat buildup over laps indicates thermal instability from incorrect pressure."
+      }
+    ],
+    "tire_camber": [
+      {
+        "id": "TC-001",
+        "if": "Tire_Temp_Outer > Tire_Temp_Inner by >10°C",
+        "then": "INCREASE negative camber",
+        "direction": "increase_negative",
+        "affected_params": ["CamberSetting"],
+        "physics": "Outer edge overheating means insufficient camber for lateral loads; more negative camber distributes contact patch inward."
+      },
+      {
+        "id": "TC-002",
+        "if": "Tire_Temp_Inner >> Tire_Temp_Outer",
+        "then": "REDUCE negative camber magnitude",
+        "direction": "decrease_negative",
+        "affected_params": ["CamberSetting"],
+        "physics": "Excessive negative camber concentrates load on inner edge; reducing magnitude widens contact patch."
+      },
+      {
+        "id": "TC-003",
+        "if": "Camber < -4.0° AND braking instability observed",
+        "then": "REDUCE camber magnitude",
+        "direction": "decrease_negative",
+        "affected_params": ["CamberSetting"],
+        "physics": "Extreme negative camber reduces straight-line braking contact patch, causing instability under heavy braking."
+      },
+      {
+        "id": "TC-004",
+        "if": "Camber made more negative by 1.5° AND Grip_Fract increases",
+        "then": "Confirm new camber is beneficial",
+        "direction": "confirm",
+        "affected_params": ["CamberSetting"],
+        "physics": "Negative camber typically beneficial up to ~-3.5° for most tire constructions; beyond that, diminishing returns."
+      }
+    ],
+    "tire_saturation": [
+      {
+        "id": "TS-001",
+        "if": "Grip_Fract_Front > 0.90 AND Grip_Fract_Rear < 0.75",
+        "then": "Balance setup toward rear grip",
+        "direction": "rebalance_rear",
+        "affected_params": ["RearWingSetting", "RearARBSetting", "PressureSetting"],
+        "physics": "Front at saturation, rear underutilized — unstable state with high oversteer risk."
+      },
+      {
+        "id": "TS-002",
+        "if": "Grip_Fract_Rear > 0.95 in acceleration zones",
+        "then": "Reduce rear load or increase mechanical grip",
+        "direction": "reduce_rear_load",
+        "affected_params": ["DiffLockSetting", "RearSpringRate", "RearWingSetting"],
+        "physics": "Rear tires beyond saturation point means traction loss risk; either reduce demand or increase capacity."
+      },
+      {
+        "id": "TS-003",
+        "if": "Grip_Fract < 0.70 sustained across session",
+        "then": "Check for insufficient downforce or cold tire condition",
+        "direction": "investigate",
+        "affected_params": ["FrontWingSetting", "RearWingSetting", "PressureSetting"],
+        "physics": "Available grip not exploited suggests thermal or aerodynamic root cause rather than mechanical setup."
+      },
+      {
+        "id": "TS-004",
+        "if": "Grip_Fract > 1.05",
+        "then": "FLAG — data error, reject analysis",
+        "direction": "reject",
+        "affected_params": [],
+        "physics": "Physically impossible grip fraction >1.0 indicates sensor/scaling issue in telemetry data."
+      }
+    ],
+    "suspension": [
+      {
+        "id": "SU-001",
+        "if": "Ride_Height < 15mm (front) OR Ride_Height < 20mm (rear)",
+        "then": "INCREASE ride height 2–5mm",
+        "direction": "increase",
+        "affected_params": ["RideHeightSetting"],
+        "physics": "Risk of chassis bottoming — contact with surface destroys aero seal and damages floor."
+      },
+      {
+        "id": "SU-002",
+        "if": "Ride_Height variation under braking > 5mm vs acceleration",
+        "then": "Stiffen front spring OR increase front slow bump damper",
+        "direction": "increase",
+        "affected_params": ["FrontSpringRate", "SlowBumpSetting"],
+        "physics": "Excessive nose dive under braking means weight transfer too aggressive; stiffer front resists compression."
+      },
+      {
+        "id": "SU-003",
+        "if": "Body roll > 2.5° at G_Lat > 1.5g",
+        "then": "INCREASE ARB stiffness (front or rear depending on balance)",
+        "direction": "increase",
+        "affected_params": ["FrontAntiRollBarSetting", "RearAntiRollBarSetting"],
+        "physics": "Excessive roll reduces aerodynamic efficiency and tire contact consistency."
+      },
+      {
+        "id": "SU-004",
+        "if": "Ride_Height_Front >> Ride_Height_Rear (rake > 5mm)",
+        "then": "Normalize rake — lower front or raise rear",
+        "direction": "normalize",
+        "affected_params": ["RideHeightSetting"],
+        "physics": "Extreme rake increases rear load bias, can promote understeer and ground effect instability."
+      },
+      {
+        "id": "SU-005",
+        "if": "G_Force_Long high (braking) AND large front ride height variation",
+        "then": "Front springs too soft OR bump damping insufficient",
+        "direction": "increase",
+        "affected_params": ["FrontSpringRate", "SlowBumpSetting"],
+        "physics": "Braking load causes excessive front compression; stiffer springs or dampers resist dive."
+      },
+      {
+        "id": "SU-D01",
+        "if": "Ride height oscillates ±5mm between consecutive corners",
+        "then": "INCREASE rebound damping",
+        "direction": "increase",
+        "affected_params": ["SlowReboundSetting"],
+        "physics": "Under-damped extension phase causes suspension ringing — car doesn't settle between inputs."
+      },
+      {
+        "id": "SU-D02",
+        "if": "G-force spike at corner entry AND sharp ride height drop AND slow recovery",
+        "then": "INCREASE bump damping (slow)",
+        "direction": "increase",
+        "affected_params": ["SlowBumpSetting"],
+        "physics": "Insufficient slow compression damping fails to control braking-phase weight transfer."
+      },
+      {
+        "id": "SU-D03",
+        "if": "Damper rebound increased AND ride height becomes erratic",
+        "then": "Decrease fast rebound; increase slow rebound (split tuning)",
+        "direction": "split_adjust",
+        "affected_params": ["FastReboundSetting", "SlowReboundSetting"],
+        "physics": "Over-stiff rebound at all speeds bounces suspension; split damping treats transient and steady differently."
+      },
+      {
+        "id": "SU-D04",
+        "if": "Grip_Fract drops after first lap AND ride height degradation observed",
+        "then": "INCREASE slow bump damping",
+        "direction": "increase",
+        "affected_params": ["SlowBumpSetting"],
+        "physics": "Track heat increases compliance; stiffer damping holds geometry as conditions evolve."
+      },
+      {
+        "id": "SU-006",
+        "if": "Spring_Rate increased 20% AND ride height increases >2mm",
+        "then": "FLAG — verify data, normally contradictory",
+        "direction": "verify",
+        "affected_params": ["SpringRate", "RideHeightSetting"],
+        "physics": "Stiffer springs reduce compression; ride height should decrease or stay constant, not increase."
+      }
+    ],
+    "anti_roll_bar_balance": [
+      {
+        "id": "AB-001",
+        "if": "Understeer at corner entry/mid: Grip_Front > Grip_Rear",
+        "then": "Soften front ARB OR stiffen rear ARB",
+        "direction": "rebalance",
+        "affected_params": ["FrontAntiRollBarSetting", "RearAntiRollBarSetting"],
+        "physics": "Reducing front roll stiffness relative to rear transfers lateral load distribution rearward, freeing front grip."
+      },
+      {
+        "id": "AB-002",
+        "if": "Oversteer at corner mid/exit: Grip_Rear > Grip_Front",
+        "then": "Soften rear ARB OR stiffen front ARB",
+        "direction": "rebalance",
+        "affected_params": ["FrontAntiRollBarSetting", "RearAntiRollBarSetting"],
+        "physics": "Reducing rear roll stiffness stabilizes the rear by allowing more rear grip under lateral load."
+      },
+      {
+        "id": "AB-003",
+        "if": "Understeer at entry → oversteer at exit in same corner",
+        "then": "Damper tuning issue, not ARB alone — investigate transient response",
+        "direction": "investigate",
+        "affected_params": ["SlowBumpSetting", "SlowReboundSetting", "FastBumpSetting"],
+        "physics": "Entry/exit split behavior indicates transient vs steady-state imbalance; ARBs address steady state only."
+      },
+      {
+        "id": "AB-004",
+        "if": "Understeer proportional to speed (worse at higher speeds)",
+        "then": "Aerodynamic imbalance, not mechanical — address wing settings",
+        "direction": "aero_adjust",
+        "affected_params": ["FrontWingSetting", "RearWingSetting"],
+        "physics": "Speed-dependent handling is dominated by aerodynamic forces, not mechanical grip."
+      },
+      {
+        "id": "AB-005",
+        "if": "Body roll > 2.5° in fast corners (>150 km/h)",
+        "then": "INCREASE ARB stiffness (front or rear or both)",
+        "direction": "increase",
+        "affected_params": ["FrontAntiRollBarSetting", "RearAntiRollBarSetting"],
+        "physics": "Excessive roll at high speed reduces effective downforce and degrades tire contact angle."
+      },
+      {
+        "id": "BL-001",
+        "if": "Exit oversteer: rear loose on throttle application",
+        "then": "Stiffen rear spring OR increase diff lock",
+        "direction": "increase",
+        "affected_params": ["RearSpringRate", "DiffLockSetting"],
+        "physics": "Rear unloads under acceleration; stiffer spring resists squat and diff lock couples wheel speeds."
+      },
+      {
+        "id": "BL-002",
+        "if": "Exit understeer: car pushes on throttle application",
+        "then": "Soften front spring OR soften front ARB",
+        "direction": "decrease",
+        "affected_params": ["FrontSpringRate", "FrontAntiRollBarSetting"],
+        "physics": "Front remains loaded on exit preventing nose rotation; softening front allows weight transfer rearward."
+      },
+      {
+        "id": "BL-003",
+        "if": "Mid-corner understeer at low speed only (not high speed)",
+        "then": "Soften front ARB or reduce diff preload",
+        "direction": "decrease",
+        "affected_params": ["FrontAntiRollBarSetting", "DiffPreloadSetting"],
+        "physics": "Low-speed understeer is mechanical (not aero); ARB and diff preload adjustments address mechanical balance."
+      }
+    ],
+    "aerodynamics": [
+      {
+        "id": "AE-001",
+        "if": "Understeer in fast corners (>150 km/h) AND low rear wing angle",
+        "then": "INCREASE rear wing 1–2°",
+        "direction": "increase",
+        "affected_params": ["RearWingSetting"],
+        "physics": "More rear downforce shifts aerodynamic balance rearward, reducing high-speed understeer."
+      },
+      {
+        "id": "AE-002",
+        "if": "Oversteer at high speed (not present at low speed)",
+        "then": "REDUCE front wing OR INCREASE rear wing",
+        "direction": "rebalance",
+        "affected_params": ["FrontWingSetting", "RearWingSetting"],
+        "physics": "Speed-dependent oversteer indicates front-biased aerodynamic balance producing excess front grip."
+      },
+      {
+        "id": "AE-003",
+        "if": "Front_Downforce / Total_Downforce > 55%",
+        "then": "Increase rear wing or reduce front wing to approach 50/50",
+        "direction": "rebalance",
+        "affected_params": ["FrontWingSetting", "RearWingSetting"],
+        "physics": "Ideal aero balance targets ~50/50 for neutral high-speed handling; front bias causes oversteer."
+      },
+      {
+        "id": "AE-004",
+        "if": "Top speed deficit on straight AND high wing angles (both >5°)",
+        "then": "REDUCE wing angles (both) cautiously",
+        "direction": "decrease",
+        "affected_params": ["FrontWingSetting", "RearWingSetting"],
+        "physics": "High drag penalty from excessive wing angles exceeds aero grip benefit on straights."
+      },
+      {
+        "id": "AE-005",
+        "if": "Rear wing > +5° AND measured downforce < baseline",
+        "then": "Possible wing stall — reduce angle and verify efficiency",
+        "direction": "decrease",
+        "affected_params": ["RearWingSetting"],
+        "physics": "Excessive wing angle can cause airflow separation (stall), reducing downforce despite higher geometric angle."
+      },
+      {
+        "id": "AE-B01",
+        "if": "Understeer in fast corners AND rear wing already high (>6°)",
+        "then": "Root cause is likely mechanical, not aero — investigate springs/ARB",
+        "direction": "investigate",
+        "affected_params": ["FrontSpringRate", "FrontAntiRollBarSetting"],
+        "physics": "When aero is already maximized, further wing increases have diminishing returns; mechanical setup is limiting factor."
+      },
+      {
+        "id": "AE-B02",
+        "if": "Aero balance shift applied AND ride height drops significantly",
+        "then": "Verify spring capacity for added aero load",
+        "direction": "verify",
+        "affected_params": ["SpringRate", "RideHeightSetting"],
+        "physics": "More downforce compresses suspension; springs must support additional load to maintain target ride height."
+      },
+      {
+        "id": "AE-B03",
+        "if": "Wing change ≤1° AND predicted speed impact <2%",
+        "then": "Wing change justified — marginal drag acceptable",
+        "direction": "confirm",
+        "affected_params": ["FrontWingSetting", "RearWingSetting"],
+        "physics": "Small wing adjustments produce meaningful aero balance shift with negligible drag penalty."
+      }
+    ],
+    "braking": [
+      {
+        "id": "BR-001",
+        "if": "Brake_Temp_Front > 400°C AND Brake_Temp_Rear < 250°C",
+        "then": "Shift brake bias rearward 2–5%",
+        "direction": "shift_rear",
+        "affected_params": ["BrakeBiasSetting"],
+        "physics": "Front brakes overheating while rear underutilized; rearward bias equalizes thermal load and improves deceleration."
+      },
+      {
+        "id": "BR-002",
+        "if": "G_Force_Lat spikes detected during braking zones",
+        "then": "Check brake bias and rear spring stiffness",
+        "direction": "investigate",
+        "affected_params": ["BrakeBiasSetting", "RearSpringRate"],
+        "physics": "Combined lateral and longitudinal load under braking destabilizes rear; bias or spring adjustment needed."
+      },
+      {
+        "id": "BR-003",
+        "if": "Brake_Temp_FL > Brake_Temp_FR by >50°C (single side)",
+        "then": "FLAG — hardware issue, not setup",
+        "direction": "flag",
+        "affected_params": [],
+        "physics": "Asymmetric front brake temps indicate caliper or disc mechanical problem, not a setup calibration issue."
+      },
+      {
+        "id": "BR-004",
+        "if": "G_Force_Long peak low AND all brake temps < 300°C",
+        "then": "Insufficient brake pressure or duct cooling issue",
+        "direction": "investigate",
+        "affected_params": ["BrakeDuctSetting"],
+        "physics": "Low deceleration with low temps means brakes aren't working hard enough — either pressure or cooling problem."
+      },
+      {
+        "id": "BR-D01",
+        "if": "Brake temps rise continuously without reaching plateau",
+        "then": "INCREASE brake duct setting",
+        "direction": "increase",
+        "affected_params": ["BrakeDuctSetting"],
+        "physics": "Insufficient cooling airflow prevents thermal equilibrium; larger ducts dissipate heat faster."
+      },
+      {
+        "id": "BR-D02",
+        "if": "Brake_Temp > 450°C AND deceleration decreasing over laps",
+        "then": "INCREASE duct setting until temp < 420°C",
+        "direction": "increase",
+        "affected_params": ["BrakeDuctSetting"],
+        "physics": "Brake fade threshold typically 400–450°C; beyond this, friction material effectiveness decreases nonlinearly."
+      },
+      {
+        "id": "BR-005",
+        "if": "Front ride height dive > 15mm under heavy braking",
+        "then": "Front spring too soft for braking load",
+        "direction": "increase",
+        "affected_params": ["FrontSpringRate"],
+        "physics": "Excessive front dive reduces front brake effectiveness by changing caliper geometry and pad contact angle."
+      },
+      {
+        "id": "BR-006",
+        "if": "G_Force_Long pulsing (non-smooth deceleration curve)",
+        "then": "Fine-tune brake bias ±2%",
+        "direction": "adjust",
+        "affected_params": ["BrakeBiasSetting"],
+        "physics": "Pulsing deceleration indicates front/rear alternating lock; precise bias balances lock-up threshold."
+      }
+    ],
+    "differential": [
+      {
+        "id": "DF-001",
+        "if": "RL/RR wheel speed delta > 10 rad/s during traction application",
+        "then": "INCREASE differential lock %",
+        "direction": "increase",
+        "affected_params": ["DiffLockSetting"],
+        "physics": "Inside wheel spinning faster than outside means open diff losing torque to path of least resistance."
+      },
+      {
+        "id": "DF-002",
+        "if": "Snap oversteer at corner exit AND diff lock > 70%",
+        "then": "REDUCE differential lock 5–10%",
+        "direction": "decrease",
+        "affected_params": ["DiffLockSetting"],
+        "physics": "Over-locked diff forces both rear wheels to same speed, causing premature inside wheel slip on exit."
+      },
+      {
+        "id": "DF-003",
+        "if": "Traction G_Long < 0.5g consistently AND no wheel lock events",
+        "then": "INCREASE diff lock 5–10%",
+        "direction": "increase",
+        "affected_params": ["DiffLockSetting"],
+        "physics": "Differential too open; not exploiting available traction from both driven wheels."
+      },
+      {
+        "id": "DF-004",
+        "if": "Diff lock increased AND steering becomes noticeably heavy",
+        "then": "FLAG — verify lock isn't excessive for cornering",
+        "direction": "verify",
+        "affected_params": ["DiffLockSetting"],
+        "physics": "High differential lock reduces cornering compliance by forcing speed equality; compromises rotation."
+      },
+      {
+        "id": "DF-005",
+        "if": "Corner exit understeer AND diff lock < 30%",
+        "then": "INCREASE diff lock cautiously (5–10%)",
+        "direction": "increase",
+        "affected_params": ["DiffLockSetting"],
+        "physics": "More differential coupling helps rotate the car out of corners by reducing inside wheel slip."
+      }
+    ],
+    "validation": [
+      {
+        "id": "VC-001",
+        "if": "Recommendation says 'reduce rear wing to fix understeer'",
+        "then": "REJECT — physics inversion",
+        "direction": "reject",
+        "affected_params": ["RearWingSetting"],
+        "physics": "Less rear downforce = less rear grip = MORE oversteer, not less understeer. This is a common LLM hallucination."
+      },
+      {
+        "id": "VC-002",
+        "if": "Recommendation says 'increase front spring to improve traction on exit'",
+        "then": "REJECT — no causal link",
+        "direction": "reject",
+        "affected_params": ["FrontSpringRate"],
+        "physics": "Front spring rate has no direct causal relationship to rear axle traction on corner exit."
+      },
+      {
+        "id": "VC-003",
+        "if": "Recommendation says 'soften brake bias for mid-corner balance'",
+        "then": "REJECT — scope error",
+        "direction": "reject",
+        "affected_params": ["BrakeBiasSetting"],
+        "physics": "Brake bias affects braking phase only; it has no impact on steady-state mid-corner balance."
+      },
+      {
+        "id": "VC-004",
+        "if": "Recommendation softens BOTH front AND rear ARB simultaneously",
+        "then": "REJECT — symmetrical change doesn't fix balance",
+        "direction": "reject",
+        "affected_params": ["FrontAntiRollBarSetting", "RearAntiRollBarSetting"],
+        "physics": "Balance is a relative concept; changing both ARBs in the same direction doesn't shift balance point."
+      },
+      {
+        "id": "VC-005",
+        "if": "Reason cites a numeric value not present in the telemetry input",
+        "then": "REJECT — hallucinated data",
+        "direction": "reject",
+        "affected_params": [],
+        "physics": "LLM fabricated a telemetry value; data must be traceable to actual input."
+      },
+      {
+        "id": "VC-006",
+        "if": "Reason says 'increase' but new_value < old_value (or vice versa)",
+        "then": "REJECT — internal coherence failure",
+        "direction": "reject",
+        "affected_params": [],
+        "physics": "The stated direction of change contradicts the actual numeric change applied."
+      },
+      {
+        "id": "VC-007",
+        "if": "Recommendation contains driving advice ('reduce speed', 'brake earlier') instead of setup change",
+        "then": "REJECT — not a setup recommendation",
+        "direction": "reject",
+        "affected_params": [],
+        "physics": "Setup recommendations must propose parameter changes, not driving technique changes."
+      },
+      {
+        "id": "VC-008",
+        "if": "Recommendation says 'increase front downforce to reduce oversteer'",
+        "then": "REJECT — physics inversion",
+        "direction": "reject",
+        "affected_params": ["FrontWingSetting"],
+        "physics": "More front downforce shifts balance forward = more front grip relative to rear = worsens oversteer."
+      },
+      {
+        "id": "VC-009",
+        "if": "Parameter proposed is present in fixed_params list",
+        "then": "REJECT — locked parameter violation",
+        "direction": "reject",
+        "affected_params": [],
+        "physics": "User has explicitly locked this parameter; it must not be modified regardless of analysis."
+      },
+      {
+        "id": "VC-010",
+        "if": "new_value is expressed in clicks/steps instead of physical units",
+        "then": "REJECT — unit policy violation",
+        "direction": "reject",
+        "affected_params": [],
+        "physics": "Setup values must use physical units (kPa, deg, N/mm, etc.), never click counts or step indices."
+      }
+    ]
+  }
+}
