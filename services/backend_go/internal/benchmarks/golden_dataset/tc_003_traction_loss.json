@@ -1,0 +1,24 @@
+{
+  "id": "TC-003",
+  "role": "powertrain",
+  "description": "Tracción pobre en salida de curva lenta — diferencial abierto",
+  "telemetry_summary": "Lap 4: Curva T5 (horquilla, 55km/h vértice). WheelSpin trasero 8% al aplicar throttle. TractionControl interviene 3 veces en 1.2s. Throttle aplicado 85% pero aceleración lateral solo 0.4g. Diferencia RPM ruedas traseras: 350rpm pico. Tiempo salida curva 0.8s mayor que referencia.",
+  "session_stats": {
+    "circuit": "Barcelona-Catalunya",
+    "car": "Formula ISI 2012",
+    "best_lap_time": 82.109,
+    "total_laps": 10,
+    "avg_speed_kmh": 192.7
+  },
+  "setup_sections": {
+    "DIFFERENTIAL": {
+      "DiffPowerLock": "15%",
+      "DiffCoastLock": "10%",
+      "DiffPreload": "20 Nm"
+    }
+  },
+  "expected_direction": {
+    "DIFFERENTIAL.DiffPowerLock": "increase"
+  },
+  "expected_keywords": ["tracción", "diferencial", "patinaje", "bloqueo", "potencia"]
+}

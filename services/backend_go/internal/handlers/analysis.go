@@ -61,7 +61,7 @@ type preparsedAnalyzeRequest struct {
 
 // NewAnalysisHandler creates an analysis handler.
 func NewAnalysisHandler(dataDir string, ollamaClient *ollama.Client) *AnalysisHandler {
-	defaultPipeline := agents.NewPipeline(ollamaClient, "")
+	defaultPipeline := agents.NewPipeline(ollamaClient, dataDir)
 	return &AnalysisHandler{
 		DataDir:  dataDir,
 		Client:   ollamaClient,
@@ -128,7 +128,7 @@ func (h *AnalysisHandler) resolveAnalyzer(model, provider string, opts ollamaReq
 		overrideClient.HTTPClient = h.Client.HTTPClient
 	}
 
-	return agents.NewPipeline(overrideClient, ""), nil
+	return agents.NewPipeline(overrideClient, h.DataDir), nil
 }
 
 // Analyze handles POST /api/analyze (multipart upload + analysis)

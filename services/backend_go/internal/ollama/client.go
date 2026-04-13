@@ -212,3 +212,57 @@ func (c *Client) EnsureRunning(ctx context.Context) error {
 
 	return fmt.Errorf("ollama did not start within %d seconds", StartupRetries)
 }
+
+// GenerateWithModel calls Ollama with a specific model and temperature override.
+// If model is empty, falls back to the client's default model.
+func (c *Client) GenerateWithModel(ctx context.Context, prompt, system, model string, temp float64) (string, error) {
+	if model == "" {
+		model = c.Model
+	}
+	if temp <= 0 {
+		temp = c.Temp
+	}
+
+	req := GenerateRequest{
+		Model:  model,
+		Prompt: prompt,
+		System: system,
+		Stream: false,
+		Options: map[string]any{
+			"num_predict": c.NumPredict,
+			"temperature": temp,
+		},
+	}
+
+	body, err := json.Marshal(req)
+	if err != nil {
+		return "", fmt.Errorf("marshaling request: %w", err)
+	}
+
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", c.BaseURL+"/api/generate", bytes.NewReader(body))
+	if err != nil {
+		return "", fmt.Errorf("creating request: %w", err)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	if c.APIKey != "" {
+		httpReq.Header.Set("Authorization", "Bearer "+c.APIKey)
+	}
+
+	resp, err := c.HTTPClient.Do(httpReq)
+	if err != nil {
+		return "", fmt.Errorf("calling ollama: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		return "", fmt.Errorf("ollama returned %d: %s", resp.StatusCode, string(respBody))
+	}
+
+	var result GenerateResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return "", fmt.Errorf("decoding response: %w", err)
+	}
+
+	return result.Response, nil
+}

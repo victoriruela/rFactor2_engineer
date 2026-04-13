@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"os"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strconv"
@@ -13,6 +15,7 @@ import (
 
 	"github.com/rs/zerolog/log"
 
+	"github.com/viciruela/rfactor2-engineer/internal/config"
 	"github.com/viciruela/rfactor2-engineer/internal/domain"
 	"github.com/viciruela/rfactor2-engineer/internal/ollama"
 	"github.com/viciruela/rfactor2-engineer/internal/parsers"
@@ -42,15 +45,39 @@ type ProgressEvent struct {
 // ProgressFn is an optional callback receiving real-time pipeline events.
 type ProgressFn func(ProgressEvent)
 
-// Pipeline orchestrates the 4-agent analysis pipeline.
+// Pipeline orchestrates the multi-agent analysis pipeline.
 type Pipeline struct {
-	Client      *ollama.Client
-	MappingPath string
+	Client       *ollama.Client
+	MappingPath  string // deprecated — kept for compat
+	DataDir      string
+	PhysicsRules *PhysicsRuleset
+	Routing      *config.ModelRouting
 }
 
 // NewPipeline creates a new analysis pipeline.
-func NewPipeline(client *ollama.Client, mappingPath string) *Pipeline {
-	return &Pipeline{Client: client, MappingPath: mappingPath}
+// dataDir points to the application data directory containing knowledge/ and physics_rules.json.
+func NewPipeline(client *ollama.Client, dataDir string) *Pipeline {
+	p := &Pipeline{Client: client, DataDir: dataDir, MappingPath: dataDir}
+	if dataDir != "" {
+		rulesPath := filepath.Join(dataDir, "physics_rules.json")
+		rules, err := LoadPhysicsRules(rulesPath)
+		if err != nil {
+			log.Warn().Err(err).Msg("physics rules not loaded — validation disabled")
+		} else {
+			p.PhysicsRules = rules
+			log.Info().Int("domains", len(rules.Domains)).Msg("physics rules loaded")
+		}
+
+		routingPath := filepath.Join(dataDir, "model_routing.json")
+		routing, err := config.LoadModelRouting(routingPath)
+		if err != nil {
+			log.Warn().Err(err).Msg("model routing not loaded — using global defaults")
+		} else if routing != nil {
+			p.Routing = routing
+			log.Info().Int("assignments", len(routing.Assignments)).Msg("model routing loaded")
+		}
+	}
+	return p
 }
 
 // Analyze runs the full 4-agent pipeline and returns the analysis response.
@@ -89,26 +116,47 @@ func (p *Pipeline) AnalyzeWithProgress(ctx context.Context, telemetrySummary str
 		emit(ProgressEvent{Type: "progress", Agent: "driving", Message: "Análisis de conducción completado."})
 	}
 
-	// 2. Telemetry domain specialists (braking, cornering, tyre, mechanical balance — all parallel)
-	emit(ProgressEvent{Type: "progress", Agent: "telemetry", Message: "Lanzando expertos de telemetría (frenado, curvas, neumáticos, equilibrio mecánico)..."})
-	log.Info().Msg("Running telemetry domain specialists...")
-	telemetryInsights, telemetryAnalysis := p.runTelemetrySpecialists(ctx, telemetrySummary, sessionStats, emit)
+	// 2. Domain engineers (4 parallel — replaces telemetry specialists + section specialists)
+	emit(ProgressEvent{Type: "progress", Agent: "domain_engineers", Message: "Lanzando ingenieros de dominio (suspensión, chasis, aero, tren motriz)..."})
+	log.Info().Msg("Running domain engineers...")
+	domainResults := p.runDomainEngineers(ctx, telemetrySummary, sessionStats, filteredSetup, string(fixedParamsJSON), emit)
 
-	// 3. Section specialists (one per section, in parallel)
-	emit(ProgressEvent{Type: "progress", Agent: "specialist", Message: "Lanzando agentes especialistas de setup por secciones..."})
-	log.Info().Msg("Running section specialist agents...")
-	specialistReports := filterLockedChanges(
-		filterInvalidSectionReports(
-			p.runSpecialistsWithProgress(ctx, telemetrySummary, filteredSetup, string(fixedParamsJSON), telemetryInsights, emit),
-			filteredSetup,
-		),
+	// 2.5 Physics validation on domain engineer outputs
+	if p.PhysicsRules != nil {
+		for i := range domainResults {
+			for j := range domainResults[i].Sections {
+				validated, valSummary := validateAgentReport(domainResults[i].Sections[j], p.PhysicsRules, allFixedParams)
+				domainResults[i].Sections[j] = validated
+				if valSummary.LowConfidence {
+					log.Warn().Str("agent", domainResults[i].Label).Str("section", validated.Section).Msg("domain engineer section flagged low-confidence")
+				}
+			}
+		}
+	}
+
+	// Build telemetry display from domain engineer findings
+	telemetryAnalysis := buildDomainEngineerAnalysisDisplay(domainResults)
+
+	// Flatten domain engineer sections into specialist reports (for fallback/display)
+	var specialistReports []domain.SectionReport
+	for _, dr := range domainResults {
+		specialistReports = append(specialistReports, dr.Sections...)
+	}
+	specialistReports = filterLockedChanges(
+		filterInvalidSectionReports(specialistReports, filteredSetup),
 		allFixedParams,
 	)
 
-	// 4. Chief engineer consolidation
-	emit(ProgressEvent{Type: "progress", Agent: "chief", Message: "Ingeniero jefe consolidando propuestas de los especialistas..."})
+	// 3. Contradiction detection (deterministic — no LLM call)
+	contradictions := detectContradictions(domainResults)
+	if len(contradictions) > 0 {
+		emit(ProgressEvent{Type: "progress", Agent: "contradictions", Message: fmt.Sprintf("Detectadas %d contradicciones entre ingenieros de dominio.", len(contradictions))})
+	}
+
+	// 4. Chief engineer consolidation with conflict brief
+	emit(ProgressEvent{Type: "progress", Agent: "chief", Message: "Ingeniero jefe consolidando propuestas de los ingenieros de dominio..."})
 	log.Info().Msg("Running chief engineer agent...")
-	chiefResult, err := p.runChiefEngineer(ctx, telemetrySummary, filteredSetup, specialistReports, string(fixedParamsJSON), telemetryInsights)
+	chiefResult, err := p.runChiefEngineerV2(ctx, telemetrySummary, filteredSetup, domainResults, contradictions, string(fixedParamsJSON))
 	if err != nil {
 		log.Error().Err(err).Msg("Chief engineer failed")
 		chiefResult = &chiefOutput{Reasoning: "Error en el ingeniero jefe: " + err.Error()}
@@ -117,6 +165,14 @@ func (p *Pipeline) AnalyzeWithProgress(ctx context.Context, telemetrySummary str
 		chiefResult = filterLockedChiefOutput(chiefResult, allFixedParams)
 		chiefResult = filterInvalidSetupParams(chiefResult, filteredSetup)
 		emit(ProgressEvent{Type: "progress", Agent: "chief", Message: "Ingeniero jefe: " + truncate(chiefResult.Reasoning, 300)})
+	}
+
+	// 4.5 Physics validation on chief output
+	if p.PhysicsRules != nil {
+		for i := range chiefResult.Sections {
+			validated, _ := validateAgentReport(chiefResult.Sections[i], p.PhysicsRules, allFixedParams)
+			chiefResult.Sections[i] = validated
+		}
 	}
 
 	// 5. Post-processing: axle symmetry
@@ -143,7 +199,17 @@ func (p *Pipeline) runDrivingAgent(ctx context.Context, summary string, stats *d
 	statsJSON, _ := json.MarshalIndent(stats, "", "  ")
 	prompt = strings.ReplaceAll(prompt, "{session_stats}", string(statsJSON))
 
-	return p.Client.Generate(ctx, prompt, "")
+	model, temp := p.modelForRole("driving")
+	return p.Client.GenerateWithModel(ctx, prompt, "", model, temp)
+}
+
+// modelForRole returns the model and temperature for a given pipeline role.
+// Falls back to the client's defaults when routing is absent or empty.
+func (p *Pipeline) modelForRole(role string) (string, float64) {
+	if p.Routing == nil {
+		return "", 0 // empty → client defaults
+	}
+	return p.Routing.ForRole(role, ""), p.Routing.TempForRole(role, 0)
 }
 
 // --- Telemetry domain specialists ---
@@ -300,6 +366,324 @@ func (p *Pipeline) runMechanicalBalanceExpert(ctx context.Context, summary strin
 	statsJSON, _ := json.MarshalIndent(stats, "", "  ")
 	prompt = strings.ReplaceAll(prompt, "{session_stats}", string(statsJSON))
 	return p.Client.Generate(ctx, prompt, "")
+}
+
+// ─── Domain Engineer Pipeline ────────────────────────────────────────────────
+
+// domainEngineerPrompts maps role → prompt template constant.
+var domainEngineerPrompts = map[string]string{
+	"suspension": SUSPENSION_ENGINEER_PROMPT,
+	"chassis":    CHASSIS_ENGINEER_PROMPT,
+	"aero":       AERO_ENGINEER_PROMPT,
+	"powertrain": POWERTRAIN_ENGINEER_PROMPT,
+}
+
+// loadKnowledge reads and concatenates knowledge markdown files from the data directory.
+func (p *Pipeline) loadKnowledge(files ...string) string {
+	if p.DataDir == "" {
+		return "Conocimiento de dominio no disponible."
+	}
+	var sb strings.Builder
+	for _, f := range files {
+		path := filepath.Join(p.DataDir, "knowledge", f)
+		data, err := os.ReadFile(path)
+		if err != nil {
+			log.Warn().Err(err).Str("file", f).Msg("failed to load knowledge file")
+			continue
+		}
+		sb.WriteString("--- " + f + " ---\n")
+		sb.Write(data)
+		sb.WriteString("\n\n")
+	}
+	if sb.Len() == 0 {
+		return "Conocimiento de dominio no disponible."
+	}
+	return sb.String()
+}
+
+// buildSectionsParams builds a human-readable listing of params for the given sections only.
+func buildSectionsParams(setup *domain.Setup, sections []string) string {
+	if setup == nil {
+		return "No hay datos de setup disponibles."
+	}
+
+	var sb strings.Builder
+	for _, secName := range sections {
+		sec, ok := setup.Sections[secName]
+		if !ok || sec == nil || len(sec.Params) == 0 {
+			continue
+		}
+
+		params := make([]string, 0, len(sec.Params))
+		for k := range sec.Params {
+			if !isGearParam(k) {
+				params = append(params, k)
+			}
+		}
+		if len(params) == 0 {
+			continue
+		}
+		sort.Strings(params)
+
+		sb.WriteString(fmt.Sprintf("[%s]\n", secName))
+		for _, paramName := range params {
+			sb.WriteString(fmt.Sprintf("  %s (actual: %s)\n", paramName, displaySetupValue(sec.Params[paramName])))
+		}
+		sb.WriteString("\n")
+	}
+
+	if sb.Len() == 0 {
+		return "Las secciones asignadas no tienen parámetros ajustables."
+	}
+	return sb.String()
+}
+
+// runDomainEngineers runs 4 domain engineers in parallel and returns their outputs.
+func (p *Pipeline) runDomainEngineers(ctx context.Context, summary string, stats *domain.SessionStats, setup *domain.Setup, fixedParams string, emit ProgressFn) []domainEngineerOutput {
+	roles := []string{"suspension", "chassis", "aero", "powertrain"}
+
+	var wg sync.WaitGroup
+	results := make([]domainEngineerOutput, len(roles))
+
+	for i, role := range roles {
+		wg.Add(1)
+		go func(idx int, r string) {
+			defer wg.Done()
+
+			label := DomainEngineerLabels[r]
+			if emit != nil {
+				emit(ProgressEvent{Type: "progress", Agent: "domain_engineer", Section: r, Message: label + " analizando..."})
+			}
+
+			result, err := p.runSingleDomainEngineer(ctx, r, summary, stats, setup, fixedParams)
+			if err != nil {
+				log.Error().Err(err).Str("role", r).Msg("Domain engineer failed")
+				results[idx] = domainEngineerOutput{
+					Role:            r,
+					Label:           label,
+					FindingsSummary: "Error en el análisis: " + err.Error(),
+					Confidence:      0,
+				}
+				if emit != nil {
+					emit(ProgressEvent{Type: "progress", Agent: "domain_engineer", Section: r, Message: label + ": ERROR — " + err.Error()})
+				}
+				return
+			}
+
+			results[idx] = *result
+			if emit != nil {
+				totalItems := 0
+				for _, sec := range result.Sections {
+					totalItems += len(sec.Items)
+				}
+				msg := fmt.Sprintf("%s completado (%d cambios propuestos, confianza %.0f%%)", label, totalItems, result.Confidence*100)
+				emit(ProgressEvent{Type: "progress", Agent: "domain_engineer", Section: r, Message: msg})
+			}
+		}(i, role)
+	}
+
+	wg.Wait()
+	return results
+}
+
+// runSingleDomainEngineer runs one domain engineer for a specific role.
+func (p *Pipeline) runSingleDomainEngineer(ctx context.Context, role string, summary string, stats *domain.SessionStats, setup *domain.Setup, fixedParams string) (*domainEngineerOutput, error) {
+	promptTemplate, ok := domainEngineerPrompts[role]
+	if !ok {
+		return nil, fmt.Errorf("unknown domain engineer role: %s", role)
+	}
+
+	sections := DomainEngineerSections[role]
+	knowledgeFiles := DomainEngineerKnowledge[role]
+	knowledge := p.loadKnowledge(knowledgeFiles...)
+
+	sectionsParams := buildSectionsParams(setup, sections)
+	statsJSON, _ := json.MarshalIndent(stats, "", "  ")
+
+	prompt := strings.ReplaceAll(promptTemplate, "{telemetry_summary}", summary)
+	prompt = strings.ReplaceAll(prompt, "{session_stats}", string(statsJSON))
+	prompt = strings.ReplaceAll(prompt, "{assigned_sections_params}", sectionsParams)
+	prompt = strings.ReplaceAll(prompt, "{fixed_params}", fixedParams)
+	prompt = strings.ReplaceAll(prompt, "{knowledge_context}", knowledge)
+
+	model, temp := p.modelForRole(role)
+	response, err := p.Client.GenerateWithModel(ctx, prompt, "", model, temp)
+	if err != nil {
+		return nil, err
+	}
+
+	result, err := parseDomainEngineerResponse(role, response, setup, sections)
+	if err != nil {
+		return nil, fmt.Errorf("parsing domain engineer %s response: %w", role, err)
+	}
+
+	return result, nil
+}
+
+// parseDomainEngineerResponse parses the JSON output from a domain engineer.
+func parseDomainEngineerResponse(role string, response string, setup *domain.Setup, assignedSections []string) (*domainEngineerOutput, error) {
+	label := DomainEngineerLabels[role]
+
+	jsonStr := ExtractJSON(response)
+	if jsonStr == "" {
+		return &domainEngineerOutput{
+			Role:            role,
+			Label:           label,
+			FindingsSummary: response,
+			Confidence:      0.3,
+		}, nil
+	}
+
+	var raw struct {
+		Sections []struct {
+			Section string            `json:"section"`
+			Items   []json.RawMessage `json:"items"`
+		} `json:"sections"`
+		FindingsSummary string  `json:"findings_summary"`
+		Confidence      float64 `json:"confidence"`
+		// Alternate keys
+		Resumen   string  `json:"resumen"`
+		Confianza float64 `json:"confianza"`
+	}
+	if err := json.Unmarshal([]byte(jsonStr), &raw); err != nil {
+		return &domainEngineerOutput{
+			Role:            role,
+			Label:           label,
+			FindingsSummary: response,
+			Confidence:      0.3,
+		}, nil
+	}
+
+	// Allow valid sections only
+	validSections := make(map[string]bool)
+	for _, s := range assignedSections {
+		validSections[s] = true
+	}
+
+	var sections []domain.SectionReport
+	for _, sec := range raw.Sections {
+		if !validSections[sec.Section] {
+			log.Warn().Str("role", role).Str("section", sec.Section).Msg("domain engineer proposed changes for unassigned section — dropped")
+			continue
+		}
+
+		var changes []domain.SetupChange
+		for _, rawItem := range sec.Items {
+			change := normalizeSetupChange(rawItem)
+			if change.Parameter != "" {
+				// Normalize values using original setup
+				if origSec, ok := setup.Sections[sec.Section]; ok {
+					change.NewValue = ensureUnitValue(change.NewValue, origSec.Params[change.Parameter])
+				}
+				changes = append(changes, change)
+			}
+		}
+		sections = append(sections, domain.SectionReport{
+			Section: sec.Section,
+			Items:   changes,
+		})
+	}
+
+	findingsSummary := raw.FindingsSummary
+	if findingsSummary == "" {
+		findingsSummary = raw.Resumen
+	}
+	confidence := raw.Confidence
+	if confidence == 0 {
+		confidence = raw.Confianza
+	}
+	if confidence == 0 {
+		confidence = 0.7 // default when not provided
+	}
+
+	return &domainEngineerOutput{
+		Role:            role,
+		Label:           label,
+		Sections:        sections,
+		FindingsSummary: findingsSummary,
+		Confidence:      confidence,
+	}, nil
+}
+
+// runChiefEngineerV2 runs the chief engineer with domain engineer reports and contradiction list.
+func (p *Pipeline) runChiefEngineerV2(ctx context.Context, summary string, setup *domain.Setup, domainReports []domainEngineerOutput, contradictions []Contradiction, fixedParams string) (*chiefOutput, error) {
+	domainReportsText := formatDomainReportsForChief(domainReports)
+	contradictionsText := formatContradictionsForChief(contradictions)
+	setupJSON, _ := json.MarshalIndent(formatSetupSectionsForLLM(setup.Sections), "", "  ")
+
+	prompt := strings.ReplaceAll(CHIEF_ENGINEER_V2_PROMPT, "{telemetry_summary}", summary)
+	prompt = strings.ReplaceAll(prompt, "{full_setup}", string(setupJSON))
+	prompt = strings.ReplaceAll(prompt, "{domain_reports}", domainReportsText)
+	prompt = strings.ReplaceAll(prompt, "{contradictions}", contradictionsText)
+	prompt = strings.ReplaceAll(prompt, "{fixed_params}", fixedParams)
+
+	model, temp := p.modelForRole("chief")
+	response, err := p.Client.GenerateWithModel(ctx, prompt, "", model, temp)
+	if err != nil {
+		return nil, err
+	}
+
+	// Reuse parseGlobalSetupResponse which handles both "sections" and "full_setup.sections"
+	chief, err := parseGlobalSetupResponse(response)
+	if err != nil {
+		return nil, fmt.Errorf("parsing chief V2 response: %w", err)
+	}
+	chief = normalizeChiefValues(chief, setup)
+
+	return chief, nil
+}
+
+// buildDomainEngineerInsightsText builds a structured text summary of all domain engineer
+// findings for display. Analogous to buildTelemetryInsightsText but from domain engineers.
+func buildDomainEngineerInsightsText(reports []domainEngineerOutput) string {
+	var sb strings.Builder
+	for _, rep := range reports {
+		if rep.FindingsSummary == "" && len(rep.Sections) == 0 {
+			continue
+		}
+		sb.WriteString("=== " + rep.Label + " ===\n")
+		if rep.FindingsSummary != "" {
+			sb.WriteString(rep.FindingsSummary + "\n\n")
+		}
+		for _, sec := range rep.Sections {
+			for _, item := range sec.Items {
+				sb.WriteString(fmt.Sprintf("- [%s] %s → %s: %s\n", sec.Section, item.Parameter, item.NewValue, item.Reason))
+			}
+		}
+		sb.WriteString("\n")
+	}
+	if sb.Len() == 0 {
+		return "No se obtuvieron hallazgos de los ingenieros de dominio."
+	}
+	return sb.String()
+}
+
+// buildDomainEngineerAnalysisDisplay builds user-facing markdown analysis from domain engineers.
+func buildDomainEngineerAnalysisDisplay(reports []domainEngineerOutput) string {
+	var sb strings.Builder
+	for _, rep := range reports {
+		sb.WriteString("## Análisis del " + rep.Label + "\n\n")
+		if rep.FindingsSummary != "" {
+			sb.WriteString(rep.FindingsSummary + "\n\n")
+		}
+		for _, sec := range rep.Sections {
+			if len(sec.Items) == 0 {
+				continue
+			}
+			sb.WriteString(fmt.Sprintf("### %s\n", sec.Section))
+			for i, item := range sec.Items {
+				sb.WriteString(fmt.Sprintf("**%d.** %s → %s\n", i+1, item.Parameter, item.NewValue))
+				if item.Reason != "" {
+					sb.WriteString(fmt.Sprintf("   *%s*\n\n", item.Reason))
+				}
+			}
+		}
+		sb.WriteString("\n")
+	}
+	if sb.Len() == 0 {
+		return "No se obtuvieron análisis de los ingenieros de dominio.\n"
+	}
+	return sb.String()
 }
 
 func parseTelemetryExpertOutput(raw string) *telemetryExpertOutput {

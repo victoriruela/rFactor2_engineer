@@ -122,14 +122,23 @@ api.interceptors.request.use((config) => {
   return config;
 });
 
-api.interceptors.response.use((response) => {
-  const headerValue = response.headers?.['X-Client-Session-Id'] ?? response.headers?.['x-client-session-id'];
-  if (typeof headerValue === 'string' && headerValue.trim().length > 0) {
-    sessionId = headerValue.trim();
-    persistSessionId(sessionId);
-  }
-  return response;
-});
+api.interceptors.response.use(
+  (response) => {
+    const headerValue = response.headers?.['X-Client-Session-Id'] ?? response.headers?.['x-client-session-id'];
+    if (typeof headerValue === 'string' && headerValue.trim().length > 0) {
+      sessionId = headerValue.trim();
+      persistSessionId(sessionId);
+    }
+    return response;
+  },
+  (error: unknown) => {
+    if (axios.isAxiosError(error) && error.response?.status === 401) {
+      // Stale or invalidated JWT — clear auth so the UI redirects to login.
+      useAppStore.getState().clearAuth();
+    }
+    return Promise.reject(error);
+  },
+);
 
 // ── Health ──
 
@@ -166,6 +175,118 @@ export async function listModels(options?: OllamaRuntimeOptions): Promise<ModelI
   } catch (error: unknown) {
     throw new Error(extractApiErrorMessage(error, 'No se pudieron cargar los modelos.'));
   }
+}
+
+// ── Model Routing ──
+
+export interface ModelRoutingAssignment {
+  role: string;
+  model: string;
+  effective_model: string;
+  temperature: number;
+}
+
+export interface ModelRoutingResponse {
+  routing: ModelRoutingAssignment[] | null;
+  fallback: string;
+  message?: string;
+}
+
+export async function listModelRouting(): Promise<ModelRoutingResponse> {
+  const { data } = await api.get<ModelRoutingResponse>('/models/routing');
+  return data;
+}
+
+export async function saveModelRouting(
+  assignments: Record<string, { model: string; temperature: number }>,
+): Promise<void> {
+  await api.put('/models/routing', { assignments });
+}
+
+// ── Benchmark (SSE) ──
+
+export interface BenchmarkProgressEvent {
+  event: string;
+  data: Record<string, unknown>;
+}
+
+export interface BenchmarkResult {
+  assignments: Record<string, { model: string; temperature: number }>;
+  details: Array<{
+    model: string;
+    role: string;
+    json_valid: boolean;
+    structure_score: number;
+    spanish_score: number;
+    direction_score: number;
+    elapsed_seconds: number;
+    weighted_score: number;
+    error?: string;
+  }>;
+  elapsed_seconds: number;
+}
+
+export async function runModelBenchmark(
+  ollamaBaseUrl: string,
+  ollamaApiKey: string,
+  maxCandidates: number,
+  onProgress: (ev: BenchmarkProgressEvent) => void,
+): Promise<BenchmarkResult> {
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    'X-Client-Session-Id': getSessionId(),
+  };
+  const jwt = useAppStore.getState().jwt;
+  if (jwt) {
+    headers['Authorization'] = `Bearer ${jwt}`;
+  }
+
+  const response = await fetch(`${API_URL}/models/benchmark`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      ollama_base_url: ollamaBaseUrl,
+      ollama_api_key: ollamaApiKey,
+      max_candidates: maxCandidates,
+    }),
+  });
+
+  if (!response.ok || !response.body) {
+    const text = await response.text().catch(() => '');
+    throw new Error(`HTTP ${response.status}: ${text}`);
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+
+    const parts = buffer.split('\n\n');
+    buffer = parts.pop() ?? '';
+
+    for (const part of parts) {
+      const eventMatch = part.match(/^event:\s*(\S+)/m);
+      const dataMatch = part.match(/^data:\s*(.+)/ms);
+      if (!dataMatch) continue;
+
+      const eventType = eventMatch?.[1] ?? 'message';
+      const parsed = JSON.parse(dataMatch[1].trim());
+
+      if (eventType === 'error') {
+        throw new Error(parsed.error ?? 'Benchmark failed');
+      } else if (eventType === 'result') {
+        return parsed as BenchmarkResult;
+      } else {
+        onProgress({ event: eventType, data: parsed });
+      }
+    }
+  }
+
+  throw new Error('Benchmark stream ended without a result');
 }
 
 // ── Sessions ──

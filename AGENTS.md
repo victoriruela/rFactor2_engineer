@@ -94,6 +94,8 @@ Root reference files:
   SUPERVISOR.md         # Supervisor loop, merge protocol, worktree commands
   SUBAGENT.md           # Subagent protocol, quality gates
   ASANA.md              # Asana MCP plugin docs and token refresh procedure
+  SPEC_AI_ARCHITECTURE.md # Spec for multi-agent architecture and physics grounding 
+  .github/agents/ai_architect.agent.md # Agent to develop AI Architecture specs
 ```
 
 ## Environment Variables

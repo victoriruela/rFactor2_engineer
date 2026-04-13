@@ -1,0 +1,40 @@
+{
+  "id": "TC-001",
+  "role": "suspension",
+  "description": "Sobreviraje bajo frenada en curva lenta — muelle trasero demasiado blando",
+  "telemetry_summary": "Lap 5: Curva T3 (radio 45m, 80km/h entrada). Grip_Fract trasero cae a 0.65 durante frenada. G_Lat_Rear pico 1.8g. OversteerAngle 3.2°. El piloto levanta throttle 50m antes del vértice. Brake_Temp trasero 420°C (límite). Roll trasero 2.1° vs delantero 1.4°.",
+  "session_stats": {
+    "circuit": "Spa-Francorchamps",
+    "car": "Formula ISI 2012",
+    "best_lap_time": 142.567,
+    "total_laps": 12,
+    "avg_speed_kmh": 178.3
+  },
+  "setup_sections": {
+    "REARLEFT": {
+      "RearSpring": "85000 N/m",
+      "RearRideHeight": "25 mm",
+      "RearSlowBump": "4500 N/m/s",
+      "RearSlowRebound": "8500 N/m/s"
+    },
+    "REARRIGHT": {
+      "RearSpring": "85000 N/m",
+      "RearRideHeight": "25 mm",
+      "RearSlowBump": "4500 N/m/s",
+      "RearSlowRebound": "8500 N/m/s"
+    },
+    "FRONTLEFT": {
+      "FrontSpring": "105000 N/m",
+      "FrontRideHeight": "20 mm"
+    },
+    "FRONTRIGHT": {
+      "FrontSpring": "105000 N/m",
+      "FrontRideHeight": "20 mm"
+    }
+  },
+  "expected_direction": {
+    "REARLEFT.RearSpring": "increase",
+    "REARRIGHT.RearSpring": "increase"
+  },
+  "expected_keywords": ["sobreviraje", "frenada", "muelle trasero", "rigidez"]
+}
