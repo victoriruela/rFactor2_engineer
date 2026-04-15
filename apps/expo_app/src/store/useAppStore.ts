@@ -80,7 +80,21 @@ export const useAppStore = create<AppState>()(persist((set) => ({
   authUsername: null,
   isAdmin: false,
   setAuth: (jwt, authUsername, isAdmin) => set({ jwt, authUsername, isAdmin }),
-  clearAuth: () => set({ jwt: null, authUsername: null, isAdmin: false, ollamaApiKey: '', selectedModel: 'llama3.2:latest' }),
+  clearAuth: () => set({
+    // Auth
+    jwt: null, authUsername: null, isAdmin: false,
+    // Per-user config
+    ollamaApiKey: '', selectedModel: 'llama3.2:latest',
+    // Session — must be wiped so the next user never sees previous user's data
+    activeSessionId: null,
+    isAnalyzing: false,
+    analysisResult: null, analysisError: null,
+    fullSetup: null,
+    preparsedPayload: null,
+    telemetryFile: null, svmFile: null,
+    uploadProgress: 0, isUploading: false,
+    lockedParameters: new Set(),
+  }),
 
   serverStatus: 'unknown',
   setServerStatus: (serverStatus) => set({ serverStatus }),

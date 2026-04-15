@@ -219,6 +219,11 @@ asana_token.json
 
 # Runtime uploaded session data
 data/
+!services/backend_go/data/model_routing.json
+!services/backend_go/data/physics_rules.json
+!services/backend_go/data/param_mapping.json
+!services/backend_go/data/fixed_params.json
+!services/backend_go/data/knowledge/
 
 # Generated files
 * - * - * - *.mat

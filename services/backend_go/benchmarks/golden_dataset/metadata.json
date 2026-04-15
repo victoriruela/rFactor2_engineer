@@ -1,0 +1,98 @@
+{
+  "version": "1.0.0",
+  "description": "rF2-Bench golden dataset — escenarios de referencia para evaluar Domain Engineers del pipeline LLM",
+  "created_at": "2025-07-14",
+  "total_cases": 20,
+  "scenarios": [
+    {
+      "id": "brake_imbalance",
+      "file": "scenarios/brake_imbalance.jsonl",
+      "agent_role": "chassis",
+      "cases": 2,
+      "difficulty_distribution": {"easy": 1, "medium": 1},
+      "physics_domains": ["BR"]
+    },
+    {
+      "id": "understeer_midcorner",
+      "file": "scenarios/understeer_midcorner.jsonl",
+      "agent_role": "suspension",
+      "cases": 2,
+      "difficulty_distribution": {"medium": 1, "hard": 1},
+      "physics_domains": ["AB", "TC", "TS"]
+    },
+    {
+      "id": "oversteer_entry",
+      "file": "scenarios/oversteer_entry.jsonl",
+      "agent_role": "suspension",
+      "cases": 2,
+      "difficulty_distribution": {"easy": 1, "medium": 1},
+      "physics_domains": ["AB", "BR"]
+    },
+    {
+      "id": "thermal_degradation",
+      "file": "scenarios/thermal_degradation.jsonl",
+      "agent_role": "suspension",
+      "cases": 2,
+      "difficulty_distribution": {"medium": 1, "hard": 1},
+      "physics_domains": ["TP", "TC"]
+    },
+    {
+      "id": "aero_imbalance",
+      "file": "scenarios/aero_imbalance.jsonl",
+      "agent_role": "aero",
+      "cases": 2,
+      "difficulty_distribution": {"medium": 1, "hard": 1},
+      "physics_domains": ["AE"]
+    },
+    {
+      "id": "bottoming_out",
+      "file": "scenarios/bottoming_out.jsonl",
+      "agent_role": "suspension",
+      "cases": 2,
+      "difficulty_distribution": {"medium": 1, "hard": 1},
+      "physics_domains": ["SU"]
+    },
+    {
+      "id": "cold_tire_spin",
+      "file": "scenarios/cold_tire_spin.jsonl",
+      "agent_role": "suspension",
+      "cases": 2,
+      "difficulty_distribution": {"easy": 1, "medium": 1},
+      "physics_domains": ["TS", "TP"]
+    },
+    {
+      "id": "differential_tuning",
+      "file": "scenarios/differential_tuning.jsonl",
+      "agent_role": "powertrain",
+      "cases": 2,
+      "difficulty_distribution": {"medium": 1, "hard": 1},
+      "physics_domains": ["DF"]
+    },
+    {
+      "id": "snap_oversteer_exit",
+      "file": "scenarios/snap_oversteer_exit.jsonl",
+      "agent_role": "chassis",
+      "cases": 2,
+      "difficulty_distribution": {"medium": 1, "hard": 1},
+      "physics_domains": ["DF", "BR"]
+    },
+    {
+      "id": "driver_inconsistency",
+      "file": "scenarios/driver_inconsistency.jsonl",
+      "agent_role": "driving",
+      "cases": 2,
+      "difficulty_distribution": {"medium": 1, "hard": 1},
+      "physics_domains": []
+    }
+  ],
+  "role_coverage": {
+    "suspension": 6,
+    "chassis": 4,
+    "aero": 2,
+    "powertrain": 4,
+    "driving": 2,
+    "chief": 0
+  },
+  "pass_threshold": 6.0,
+  "rubric_file": "judge_rubric.md"
+}

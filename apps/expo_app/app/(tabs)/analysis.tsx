@@ -1,7 +1,7 @@
 ﻿import { useCallback, useEffect, useMemo, useState } from 'react';
-import { View, Text, StyleSheet, Pressable, ScrollView, ActivityIndicator, TextInput } from 'react-native';
+import { View, Text, StyleSheet, Pressable, ScrollView, ActivityIndicator } from 'react-native';
 import { useAppStore } from '../../src/store/useAppStore';
-import { analyzePreparsedStream, listModels, authUpdateConfig } from '../../src/api';
+import { analyzePreparsedStream, authUpdateConfig } from '../../src/api';
 import type { ProgressEvent, SetupChange } from '../../src/api';
 import SetupTable from '../../src/components/SetupTable';
 import MarkdownText from '../../src/components/MarkdownText';
@@ -11,12 +11,16 @@ import { toSpanishParameterName } from '../../src/utils/labelTranslator';
 
 const AGENT_LABELS: Record<string, string> = {
   driving: 'Análisis de conducción',
+  domain_engineers: 'Ingenieros de dominio',
+  suspension: 'Ing. Suspensión',
+  chassis: 'Ing. Chasis',
+  aero: 'Ing. Aerodinámica',
+  powertrain: 'Ing. Tren motriz',
+  contradictions: 'Detección de contradicciones',
+  chief: 'Ingeniero jefe',
   telemetry: 'Experto de telemetría',
   specialist: 'Especialista de setup',
-  chief: 'Ingeniero jefe',
 };
-
-const DEFAULT_OLLAMA_BASE_URL = process.env.EXPO_PUBLIC_OLLAMA_BASE_URL ?? 'https://www.ollama.com';
 
 function formatLapTime(seconds: number): string {
   if (seconds <= 0) return '--';
@@ -25,72 +29,19 @@ function formatLapTime(seconds: number): string {
   return `${m}:${s.toFixed(3).padStart(6, '0')}`;
 }
 
-function normalizeOllamaBaseUrl(baseUrl: string): string {
-  const trimmed = baseUrl.trim();
-  return trimmed.length > 0 ? trimmed : DEFAULT_OLLAMA_BASE_URL;
-}
-
-function canQueryRemoteModels(baseUrl: string): boolean {
-  try {
-    const parsed = new URL(baseUrl.trim());
-    const host = parsed.hostname.trim().toLowerCase();
-    return host.length > 0
-      && host !== 'localhost'
-      && host !== '127.0.0.1'
-      && host !== '::1'
-      && host !== '0.0.0.0'
-      && host !== 'host.docker.internal';
-  } catch {
-    return false;
-  }
-}
-
 export default function AnalysisScreen() {
   const {
     isAnalyzing, setAnalyzing,
     analysisResult, setAnalysisResult,
     analysisError, setAnalysisError,
-    models, setModels,
-    selectedModel, setSelectedModel,
-    selectedProvider, setSelectedProvider,
-    ollamaBaseUrl, setOllamaBaseUrl,
-    ollamaApiKey, setOllamaApiKey,
+    ollamaApiKey,
     lockedParameters,
     preparsedPayload,
-    fullSetup,
     isUploading,
-    jwt,
   } = useAppStore();
-  const [modelsLoaded, setModelsLoaded] = useState(false);
-  const [modelsRefreshing, setModelsRefreshing] = useState(false);
-  const [modelsError, setModelsError] = useState<string | null>(null);
   const [progressMessages, setProgressMessages] = useState<ProgressEvent[]>([]);
   const [progressExpanded, setProgressExpanded] = useState(true);
-  const [draftOllamaBaseUrl, setDraftOllamaBaseUrl] = useState(() => normalizeOllamaBaseUrl(ollamaBaseUrl));
-  const [draftOllamaApiKey, setDraftOllamaApiKey] = useState(ollamaApiKey);
-  const [draftSelectedModel, setDraftSelectedModel] = useState(selectedModel);
-  const [didInitialModelLoad, setDidInitialModelLoad] = useState(false);
   const [analysisElapsed, setAnalysisElapsed] = useState(0);
-  const [savingConfig, setSavingConfig] = useState(false);
-  const [configSavedMsg, setConfigSavedMsg] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (!ollamaBaseUrl.trim()) {
-      setOllamaBaseUrl(DEFAULT_OLLAMA_BASE_URL);
-    }
-  }, [ollamaBaseUrl, setOllamaBaseUrl]);
-
-  useEffect(() => {
-    setDraftOllamaBaseUrl(normalizeOllamaBaseUrl(ollamaBaseUrl));
-  }, [ollamaBaseUrl]);
-
-  useEffect(() => {
-    setDraftOllamaApiKey(ollamaApiKey);
-  }, [ollamaApiKey]);
-
-  useEffect(() => {
-    setDraftSelectedModel(selectedModel);
-  }, [selectedModel]);
 
   useEffect(() => {
     if (!isAnalyzing) {
@@ -106,86 +57,6 @@ export default function AnalysisScreen() {
     const sec = s % 60;
     return m > 0 ? `${m}m ${sec}s` : `${sec}s`;
   };
-
-  const applyRuntimeConfig = useCallback(() => {
-    const normalizedBaseUrl = normalizeOllamaBaseUrl(draftOllamaBaseUrl);
-    const normalizedApiKey = draftOllamaApiKey.trim();
-    const normalizedModel = draftSelectedModel.trim() || 'llama3.2:latest';
-    const normalizedProvider = 'ollama_cloud';
-
-    setOllamaBaseUrl(normalizedBaseUrl);
-    setOllamaApiKey(normalizedApiKey);
-    setSelectedModel(normalizedModel);
-    if (selectedProvider !== normalizedProvider) {
-      setSelectedProvider(normalizedProvider);
-    }
-
-    return {
-      ollamaBaseUrl: normalizedBaseUrl,
-      ollamaApiKey: normalizedApiKey,
-      model: normalizedModel,
-      provider: normalizedProvider,
-    };
-  }, [draftOllamaApiKey, draftOllamaBaseUrl, draftSelectedModel, selectedProvider, setOllamaApiKey, setOllamaBaseUrl, setSelectedModel, setSelectedProvider]);
-
-  const handleSaveOllamaConfig = useCallback(async () => {
-    setSavingConfig(true);
-    setConfigSavedMsg(null);
-    try {
-      const cfg = applyRuntimeConfig();
-      await authUpdateConfig(cfg.ollamaApiKey, cfg.model);
-      setConfigSavedMsg('Guardado ✓');
-      setTimeout(() => setConfigSavedMsg(null), 2500);
-    } catch {
-      setConfigSavedMsg('Error al guardar');
-      setTimeout(() => setConfigSavedMsg(null), 2500);
-    } finally {
-      setSavingConfig(false);
-    }
-  }, [applyRuntimeConfig]);
-
-  const refreshModels = useCallback(async (runtime?: { ollamaBaseUrl: string; ollamaApiKey: string; model: string; provider: string }) => {
-    const config = runtime ?? applyRuntimeConfig();
-
-    if (!canQueryRemoteModels(config.ollamaBaseUrl)) {
-      setModels([]);
-      setModelsLoaded(true);
-      setModelsError('Configura una URL cloud de Ollama válida para listar modelos.');
-      return;
-    }
-
-    setModelsRefreshing(true);
-    setModelsError(null);
-    try {
-      const m = await listModels({
-        provider: config.provider,
-        model: config.model,
-        ollamaBaseUrl: config.ollamaBaseUrl,
-        ollamaApiKey: config.ollamaApiKey,
-      });
-      setModels(m);
-      setModelsLoaded(true);
-      if (m.length === 0) {
-        setModelsError('No se encontraron modelos en Ollama.');
-      }
-    } catch {
-      setModelsLoaded(true);
-      setModelsError('No se pudieron cargar los modelos de Ollama.');
-    } finally {
-      setModelsRefreshing(false);
-    }
-  }, [applyRuntimeConfig, setModels]);
-
-  useEffect(() => {
-    if (didInitialModelLoad) return;
-    setDidInitialModelLoad(true);
-    void refreshModels({
-      provider: selectedProvider || 'ollama_cloud',
-      model: selectedModel.trim() || 'llama3.2:latest',
-      ollamaBaseUrl: normalizeOllamaBaseUrl(ollamaBaseUrl),
-      ollamaApiKey: ollamaApiKey.trim(),
-    });
-  }, [didInitialModelLoad, ollamaApiKey, ollamaBaseUrl, refreshModels, selectedModel, selectedProvider]);
 
   const filteredSetupAnalysis = useMemo<Record<string, SetupChange[]>>(() => {
     const source = analysisResult?.setup_analysis ?? {};
@@ -216,13 +87,6 @@ export default function AnalysisScreen() {
       return;
     }
 
-    const runtimeConfig = applyRuntimeConfig();
-
-    if (!runtimeConfig.ollamaBaseUrl.trim()) {
-      setAnalysisError('Debes configurar la URL de Ollama antes de analizar.');
-      return;
-    }
-
     setAnalyzing(true);
     setAnalysisError(null);
     setProgressMessages([]);
@@ -230,15 +94,16 @@ export default function AnalysisScreen() {
 
     try {
       setProgressMessages([{ type: 'progress', agent: 'driving', message: 'Analizando payload parseado en cliente...' }]);
+      const apiKey = ollamaApiKey?.trim() ?? '';
       const result = await analyzePreparsedStream(
         preparsedPayload,
-        runtimeConfig.model,
-        runtimeConfig.provider,
+        '',
+        'ollama_cloud',
         Array.from(lockedParameters),
         {
-          model: runtimeConfig.model,
-          ollamaBaseUrl: runtimeConfig.ollamaBaseUrl,
-          ollamaApiKey: runtimeConfig.ollamaApiKey,
+          model: '',
+          ollamaBaseUrl: '',
+          ollamaApiKey: apiKey,
         },
         (event) => {
           setProgressMessages((prev) => [...prev, event]);
@@ -253,8 +118,8 @@ export default function AnalysisScreen() {
       });
       setProgressExpanded(false);
 
-      // Auto-save Ollama config to user profile
-      authUpdateConfig(runtimeConfig.ollamaApiKey, runtimeConfig.model).catch(() => { /* silent */ });
+      // Auto-save API key to user profile
+      authUpdateConfig(ollamaApiKey?.trim() ?? '', '').catch(() => { /* silent */ });
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : 'Error en el análisis';
       setAnalysisError(msg);
@@ -266,7 +131,7 @@ export default function AnalysisScreen() {
     lockedParameters,
     analysisResult,
     isUploading,
-    applyRuntimeConfig,
+    ollamaApiKey,
     setAnalyzing,
     setAnalysisResult,
     setAnalysisError,
@@ -275,91 +140,6 @@ export default function AnalysisScreen() {
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
       <Text style={styles.title}>Análisis AI</Text>
-
-      {/* Model selector */}
-      <View style={styles.modelHeaderRow}>
-        <Text style={styles.label}>Modelos de Ollama:</Text>
-        <View style={styles.modelHeaderBtns}>
-          <Pressable
-            style={[styles.refreshBtn, modelsRefreshing && styles.disabled]}
-            onPress={() => {
-              void refreshModels();
-            }}
-            disabled={modelsRefreshing}
-          >
-            <Text style={styles.refreshBtnText}>{modelsRefreshing ? 'Refrescando...' : 'Refrescar modelos'}</Text>
-          </Pressable>
-          <Pressable
-            style={[styles.refreshBtn, (savingConfig || !jwt) && styles.disabled]}
-            onPress={() => { void handleSaveOllamaConfig(); }}
-            disabled={savingConfig || !jwt}
-          >
-            <Text style={styles.refreshBtnText}>
-              {configSavedMsg ?? (savingConfig ? 'Guardando...' : 'Guardar configuración Ollama')}
-            </Text>
-          </Pressable>
-        </View>
-      </View>
-
-      {modelsLoaded && models.length > 0 ? (
-        <View style={styles.modelRow}>
-          <View style={styles.modelList}>
-            {models.map((m) => (
-              <Pressable
-                key={m.name}
-                style={[styles.modelChip, draftSelectedModel === m.name && styles.modelChipActive]}
-                onPress={() => setDraftSelectedModel(m.name)}
-              >
-                <Text style={[styles.modelChipText, draftSelectedModel === m.name && styles.modelChipTextActive]}>
-                  {m.name}
-                </Text>
-              </Pressable>
-            ))}
-          </View>
-        </View>
-      ) : null}
-
-      {modelsError ? <Text style={styles.modelError}>{modelsError}</Text> : null}
-
-      <View style={styles.modelConfigRow}>
-        <Text style={styles.label}>URL Ollama (usuario):</Text>
-        <TextInput
-          style={styles.modelInput}
-          value={draftOllamaBaseUrl}
-          onChangeText={setDraftOllamaBaseUrl}
-          placeholder="https://tu-endpoint-ollama"
-          placeholderTextColor="#777"
-          autoCapitalize="none"
-          autoCorrect={false}
-        />
-      </View>
-
-      <View style={styles.modelConfigRow}>
-        <Text style={styles.label}>API Key Ollama (opcional):</Text>
-        <TextInput
-          style={styles.modelInput}
-          value={draftOllamaApiKey}
-          onChangeText={setDraftOllamaApiKey}
-          placeholder="sk-..."
-          placeholderTextColor="#777"
-          autoCapitalize="none"
-          autoCorrect={false}
-          secureTextEntry
-        />
-      </View>
-
-      <View style={styles.modelConfigRow}>
-        <Text style={styles.label}>Modelo (manual):</Text>
-        <TextInput
-          style={styles.modelInput}
-          value={draftSelectedModel}
-          onChangeText={setDraftSelectedModel}
-          placeholder="llama3.2:latest"
-          placeholderTextColor="#777"
-          autoCapitalize="none"
-          autoCorrect={false}
-        />
-      </View>
 
       {/* Analyze button */}
       <Pressable
@@ -686,6 +466,115 @@ const styles = StyleSheet.create({
     color: '#000',
     fontSize: 12,
     fontWeight: '600',
+  },
+  modelSuccess: {
+    color: '#4caf50',
+    fontSize: 12,
+    marginBottom: 12,
+  },
+  routingSection: {
+    width: '100%',
+    backgroundColor: '#1a1a3e',
+    borderRadius: 8,
+    padding: 12,
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: '#333',
+  },
+  routingSectionTitle: {
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: '600',
+    marginBottom: 8,
+  },
+  routingFallback: {
+    color: '#888',
+    fontSize: 12,
+    marginBottom: 8,
+  },
+  routingRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 4,
+    borderBottomWidth: 1,
+    borderBottomColor: '#222',
+  },
+  routingRole: {
+    color: '#ccc',
+    fontSize: 12,
+    flex: 2,
+  },
+  routingModel: {
+    color: '#4a90e2',
+    fontSize: 12,
+    flex: 3,
+    textAlign: 'center',
+  },
+  routingTemp: {
+    color: '#ff9800',
+    fontSize: 12,
+    flex: 1,
+    textAlign: 'right',
+  },
+  routingHeaderRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  benchmarkBtn: {
+    backgroundColor: '#4a90e2',
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 6,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  benchmarkBtnText: {
+    color: '#fff',
+    fontWeight: '600',
+    fontSize: 12,
+  },
+  benchmarkProgressBox: {
+    backgroundColor: '#0d0d1f',
+    borderRadius: 6,
+    padding: 10,
+    marginBottom: 8,
+    borderWidth: 1,
+    borderColor: '#333',
+  },
+  benchmarkBar: {
+    height: 6,
+    backgroundColor: '#222',
+    borderRadius: 3,
+    overflow: 'hidden',
+    marginBottom: 4,
+  },
+  benchmarkBarFill: {
+    height: '100%',
+    backgroundColor: '#4a90e2',
+    borderRadius: 3,
+  },
+  benchmarkPercentText: {
+    color: '#4a90e2',
+    fontSize: 11,
+    textAlign: 'right',
+    marginBottom: 6,
+  },
+  benchmarkLog: {
+    maxHeight: 160,
+  },
+  benchmarkLogMsg: {
+    color: '#aaa',
+    fontSize: 11,
+    lineHeight: 16,
+  },
+  benchmarkError: {
+    color: '#f44336',
+    fontSize: 12,
+    marginVertical: 6,
   },
 });
 

@@ -22,6 +22,7 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"github.com/viciruela/rfactor2-engineer/internal/auth"
+	"github.com/viciruela/rfactor2-engineer/internal/benchmarks"
 	"github.com/viciruela/rfactor2-engineer/internal/config"
 	"github.com/viciruela/rfactor2-engineer/internal/handlers"
 	"github.com/viciruela/rfactor2-engineer/internal/middleware"
@@ -32,6 +33,10 @@ import (
 var staticFS embed.FS
 
 var expoEntryScriptRE = regexp.MustCompile(`<script\s+src="(/_expo/static/js/web/entry-[a-f0-9]+\.js)"\s+defer></script>`)
+
+// buildVersion is injected at compile time via -ldflags "-X main.buildVersion=<timestamp>".
+// Falls back to "dev" when building locally without the flag.
+var buildVersion = "dev"
 
 func main() {
 	// ── Logging ──
@@ -81,12 +86,34 @@ func main() {
 	}
 	authH := auth.NewHandlers(authDB, jwtSecret, smtpCfg)
 
+	// Auto-benchmark: run in background when user saves their API key and routing is incomplete.
+	routingPath := filepath.Join(cfg.DataDir, "model_routing.json")
+	authH.OnConfigUpdated = func(apiKey string) {
+		routing, _ := config.LoadModelRouting(routingPath)
+		if routing != nil && isRoutingComplete(routing) {
+			log.Debug().Msg("model routing already complete, skipping auto-benchmark")
+			return
+		}
+		log.Info().Msg("starting auto-benchmark after API key save")
+		result, err := benchmarks.AutoSelectModels(context.Background(), cfg.OllamaURL, apiKey, 5, nil)
+		if err != nil {
+			log.Error().Err(err).Msg("auto-benchmark failed")
+			return
+		}
+		newRouting := &config.ModelRouting{Version: 1, Assignments: result.Assignments}
+		if err := config.SaveModelRouting(routingPath, newRouting); err != nil {
+			log.Error().Err(err).Msg("failed to save model routing after auto-benchmark")
+			return
+		}
+		log.Info().Int("roles", len(result.Assignments)).Msg("auto-benchmark completed, routing saved")
+	}
+
 	// ── Ollama client ──
 	ollamaClient := ollama.NewClient(cfg.OllamaURL, cfg.OllamaModel, cfg.OllamaAPIKey)
 
 	// ── Handlers ──
 	analysisH := handlers.NewAnalysisHandler(cfg.DataDir, ollamaClient)
-	modelsH := handlers.NewModelsHandler(ollamaClient)
+	modelsH := handlers.NewModelsHandler(ollamaClient, cfg.DataDir, authDB, buildVersion)
 	tracksH := handlers.NewTracksHandler()
 
 	// ── Router ──
@@ -119,6 +146,10 @@ func main() {
 
 			// Models
 			protected.GET("/models", modelsH.ListModels)
+			protected.GET("/models/available", modelsH.ListAvailableModels)
+			protected.GET("/models/routing", modelsH.GetModelRouting)
+			protected.PUT("/models/routing", modelsH.SaveModelRouting)
+			protected.POST("/models/benchmark", modelsH.RunBenchmark)
 
 			// Tracks
 			protected.GET("/tracks", tracksH.ListTracks)
@@ -241,10 +272,18 @@ func cleanDataDir(dir string) {
 	if err != nil {
 		return
 	}
+	// Preserve application data alongside auth database
+	preserve := map[string]bool{
+		"knowledge":           true,
+		"physics_rules.json":  true,
+		"param_mapping.json":  true,
+		"fixed_params.json":   true,
+		"model_routing.json":  true,
+	}
 	for _, entry := range entries {
 		name := entry.Name()
-		if strings.HasPrefix(name, "rf2_users.db") {
-			continue // preserve auth database and its WAL/SHM files
+		if strings.HasPrefix(name, "rf2_users.db") || preserve[name] {
+			continue
 		}
 		p := filepath.Join(dir, name)
 		if err := os.RemoveAll(p); err != nil {
@@ -265,6 +304,21 @@ func ginZerolog() gin.HandlerFunc {
 			Dur("latency", time.Since(start)).
 			Msg("")
 	}
+}
+
+// isRoutingComplete returns true when every known agent role has a non-empty model assigned.
+func isRoutingComplete(r *config.ModelRouting) bool {
+	if r == nil || len(r.Assignments) == 0 {
+		return false
+	}
+	knownRoles := []string{"driving", "suspension", "chassis", "aero", "powertrain", "chief"}
+	for _, role := range knownRoles {
+		a, ok := r.Assignments[role]
+		if !ok || strings.TrimSpace(a.Model) == "" {
+			return false
+		}
+	}
+	return true
 }
 
 

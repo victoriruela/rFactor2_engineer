@@ -1,0 +1,9 @@
+# Ignore uploaded session files but track application data
+*
+!.gitignore
+!model_routing.json
+!physics_rules.json
+!param_mapping.json
+!fixed_params.json
+!knowledge/
+!knowledge/**

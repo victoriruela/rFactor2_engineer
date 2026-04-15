@@ -70,6 +70,16 @@ services/backend_go/
   internal/auth/                  # db.go (SQLite)  jwt.go  email.go  handlers.go (register/verify/login/config)
   data/param_mapping.json         # Internal → Spanish friendly name map (auto-extended by Translation Agent)
   data/fixed_params.json          # Locked params list (AI agents must not change these)
+  data/physics_rules.json         # 63 physics validation rules (domains A–G + VC) — loaded by validation.go
+  data/knowledge/                 # RAG knowledge base (6 .md files injected into domain prompts)
+  internal/agents/validation.go   # LoadPhysicsRules, validateRecommendation, validateAgentReport
+  internal/benchmark/             # types.go  runner.go  judge.go  report.go — rF2-Bench evaluation suite
+  cmd/rf2bench/main.go            # CLI: go run ./cmd/rf2bench — golden dataset benchmark runner
+
+benchmarks/golden_dataset/
+  scenarios/                      # 10 JSONL scenario files (20 test cases total)
+  metadata.json                   # dataset index (scenarios, roles, difficulty distribution)
+  judge_rubric.md                 # 5-dimension scoring rubric + judge prompt template
 
 apps/expo_app/
   app/(tabs)/                     # index.tsx  upload.tsx (Datos)  analysis.tsx  tracks.tsx  telemetry.tsx
@@ -94,6 +104,8 @@ Root reference files:
   SUPERVISOR.md         # Supervisor loop, merge protocol, worktree commands
   SUBAGENT.md           # Subagent protocol, quality gates
   ASANA.md              # Asana MCP plugin docs and token refresh procedure
+  SPEC_AI_ARCHITECTURE.md # Spec for multi-agent architecture and physics grounding 
+  .github/agents/ai_architect.agent.md # Agent to develop AI Architecture specs
 ```
 
 ## Environment Variables
