@@ -28,7 +28,7 @@ func newTestRouter(dataDir string) *gin.Engine {
 	client := ollama.NewClient("http://localhost:11434", "test", "")
 	sessionH := handlers.NewSessionHandler(dataDir)
 	analysisH := handlers.NewAnalysisHandler(dataDir, client)
-	modelsH := handlers.NewModelsHandler(client)
+	modelsH := handlers.NewModelsHandler(client, dataDir, nil)
 	tracksH := handlers.NewTracksHandler()
 	uploadH := handlers.NewUploadHandler(dataDir)
 

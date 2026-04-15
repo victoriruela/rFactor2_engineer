@@ -14,9 +14,10 @@ import (
 
 // Handlers groups all auth-related HTTP handlers.
 type Handlers struct {
-	DB        *DB
-	JWTSecret string
-	SMTP      *SMTPConfig
+	DB              *DB
+	JWTSecret       string
+	SMTP            *SMTPConfig
+	OnConfigUpdated func(apiKey string) // called after API key is saved; may be nil
 }
 
 // NewHandlers creates a Handlers instance.
@@ -211,6 +212,12 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 	if err := h.DB.UpdateConfig(cl.UserID, strings.TrimSpace(req.OllamaAPIKey), strings.TrimSpace(req.OllamaModel), req.LockedParameters); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Error guardando configuración"})
 		return
+	}
+
+	// Trigger auto-benchmark in background if an API key was saved
+	if h.OnConfigUpdated != nil && strings.TrimSpace(req.OllamaAPIKey) != "" {
+		apiKey := strings.TrimSpace(req.OllamaAPIKey)
+		go h.OnConfigUpdated(apiKey)
 	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "Configuración guardada"})

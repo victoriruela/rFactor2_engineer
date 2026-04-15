@@ -20,6 +20,7 @@ export default function TabLayout() {
       <Tabs.Screen name="analysis" options={{ title: 'Análisis', tabBarLabel: 'Análisis', href: isLoggedIn ? undefined : null }} />
       <Tabs.Screen name="telemetry" options={{ title: 'Telemetría', tabBarLabel: 'Telemetría', href: isLoggedIn ? undefined : null }} />
       <Tabs.Screen name="tracks" options={{ title: 'Circuitos', tabBarLabel: 'Circuitos', href: isLoggedIn ? undefined : null }} />
+      <Tabs.Screen name="config" options={{ title: 'Config', tabBarLabel: 'Config', href: isLoggedIn ? undefined : null }} />
     </Tabs>
   );
 }

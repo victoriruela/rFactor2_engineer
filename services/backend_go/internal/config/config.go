@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/json"
 	"os"
 	"strconv"
 )
@@ -18,6 +19,64 @@ type Config struct {
 	SMTPUser     string
 	SMTPPass     string
 	SMTPFrom     string
+}
+
+// ModelAssignment holds the model and temperature for a specific agent role.
+type ModelAssignment struct {
+	Model       string  `json:"model"`
+	Temperature float64 `json:"temperature"`
+}
+
+// ModelRouting holds per-role model assignments, loaded from model_routing.json or env vars.
+type ModelRouting struct {
+	Version     int                          `json:"version"`
+	Assignments map[string]ModelAssignment   `json:"assignments"`
+}
+
+// ForRole returns the model for a given role, falling back to the global default.
+func (mr *ModelRouting) ForRole(role, globalDefault string) string {
+	if mr != nil {
+		if a, ok := mr.Assignments[role]; ok && a.Model != "" {
+			return a.Model
+		}
+	}
+	return globalDefault
+}
+
+// TempForRole returns the temperature for a given role, falling back to defaultTemp.
+func (mr *ModelRouting) TempForRole(role string, defaultTemp float64) float64 {
+	if mr != nil {
+		if a, ok := mr.Assignments[role]; ok {
+			return a.Temperature
+		}
+	}
+	return defaultTemp
+}
+
+// LoadModelRouting loads model routing config from the given JSON file.
+// Returns nil (no error) if the file does not exist.
+func LoadModelRouting(path string) (*ModelRouting, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	var mr ModelRouting
+	if err := json.Unmarshal(data, &mr); err != nil {
+		return nil, err
+	}
+	return &mr, nil
+}
+
+// SaveModelRouting writes the routing config to the given JSON file.
+func SaveModelRouting(path string, routing *ModelRouting) error {
+	data, err := json.MarshalIndent(routing, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, data, 0644)
 }
 
 func Load() *Config {

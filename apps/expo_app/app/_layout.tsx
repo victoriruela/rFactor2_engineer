@@ -1,8 +1,8 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useRef } from 'react';
 import { Stack } from 'expo-router';
 import { View, Text, ScrollView, StyleSheet, Pressable } from 'react-native';
 import { useAppStore } from '../src/store/useAppStore';
-import { deleteSessionOnUnload, authGetConfig } from '../src/api/client';
+import { deleteSessionOnUnload, authGetConfig, authUpdateConfig } from '../src/api/client';
 
 const TEXT_NODE_DEBUG_ENABLED =
   __DEV__ &&
@@ -128,17 +128,67 @@ export default function RootLayout() {
   const activeSessionId = useAppStore((state) => state.activeSessionId);
   const jwt = useAppStore((state) => state.jwt);
   const setLockedParameters = useAppStore((state) => state.setLockedParameters);
+  const lockedParameters = useAppStore((state) => state.lockedParameters);
+  const ollamaApiKey = useAppStore((state) => state.ollamaApiKey);
+  const selectedModel = useAppStore((state) => state.selectedModel);
+
+  // Version check: force hard reload if the server has been updated since last load.
+  // This ensures users with stale JS bundles always get the latest code.
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    fetch('/api/health')
+      .then((r) => r.json())
+      .then((data: { version?: string }) => {
+        if (!data.version || data.version === 'dev') return;
+        const stored = sessionStorage.getItem('rf2_app_version');
+        if (stored && stored !== data.version) {
+          // Server was updated — force a full reload to get the new JS bundle.
+          sessionStorage.setItem('rf2_app_version', data.version);
+          window.location.reload();
+        } else if (!stored) {
+          sessionStorage.setItem('rf2_app_version', data.version);
+        }
+      })
+      .catch(() => { /* offline or server not responding — silent */ });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Restore locked parameters from server on page reload (when already logged in)
+  // configRestoredRef gates the auto-persist effect: we must not write an empty Set
+  // to the DB before the restore completes (Zustand rehydrates jwt synchronously from
+  // localStorage, so the auto-persist effect may fire on mount with lockedParameters={}
+  // before authGetConfig returns, which would overwrite the server DB with []).
+  const configRestoredRef = useRef(false);
   useEffect(() => {
-    if (!jwt) return;
+    if (!jwt) {
+      configRestoredRef.current = false;
+      return;
+    }
     authGetConfig().then((config) => {
       if (config.locked_parameters?.length) {
         setLockedParameters(new Set(config.locked_parameters));
       }
-    }).catch(() => { /* silent — user could be offline or token expired */ });
+    }).catch(() => { /* silent — user could be offline or token expired */ })
+      .finally(() => { configRestoredRef.current = true; });
+  // Re-runs when jwt changes (null → stored value after Zustand rehydration on F5)
+  }, [jwt]);
+
+  // Auto-persist locked parameters to the server DB on every change (1 s debounce).
+  // This ensures reload restores the latest state even without explicit file save.
+  // Guard: only writes after configRestoredRef is true to avoid overwriting the DB
+  // with an empty Set during the initial mount before authGetConfig resolves.
+  const persistDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    if (!jwt || !configRestoredRef.current) return;
+    if (persistDebounceRef.current) clearTimeout(persistDebounceRef.current);
+    persistDebounceRef.current = setTimeout(() => {
+      authUpdateConfig(ollamaApiKey, selectedModel, Array.from(lockedParameters)).catch(() => { /* silent */ });
+    }, 1000);
+    return () => {
+      if (persistDebounceRef.current) clearTimeout(persistDebounceRef.current);
+    };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [lockedParameters]);
 
   // Auto-cleanup session files when window closes (beforeunload with keepalive)
   useEffect(() => {

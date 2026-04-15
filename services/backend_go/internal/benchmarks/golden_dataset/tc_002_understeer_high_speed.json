@@ -1,0 +1,25 @@
+{
+  "id": "TC-002",
+  "role": "aero",
+  "description": "Subviraje en curvas rápidas — ala trasera excesiva reduce velocidad punta",
+  "telemetry_summary": "Lap 7: Rectas T11-T12 velocidad punta 285km/h (referencia 305km/h). Curvas rápidas T7 (radio 120m, 195km/h): UndersteerAngle 1.8°. Grip_Fract delantero 0.72. DragCoeff estimado 0.42. DownforceBalance 58% trasero. Velocidad media sector 2: 12km/h bajo referencia.",
+  "session_stats": {
+    "circuit": "Monza",
+    "car": "Formula ISI 2012",
+    "best_lap_time": 88.234,
+    "total_laps": 15,
+    "avg_speed_kmh": 225.1
+  },
+  "setup_sections": {
+    "REARWING": {
+      "RearWingSetting": "28 deg"
+    },
+    "FRONTWING": {
+      "FrontWingSetting": "22 deg"
+    }
+  },
+  "expected_direction": {
+    "REARWING.RearWingSetting": "decrease"
+  },
+  "expected_keywords": ["subviraje", "ala trasera", "resistencia", "velocidad punta", "drag"]
+}
