@@ -164,6 +164,10 @@ func (p *Pipeline) AnalyzeWithProgress(ctx context.Context, telemetrySummary str
 	} else {
 		chiefResult = filterLockedChiefOutput(chiefResult, allFixedParams)
 		chiefResult = filterInvalidSetupParams(chiefResult, filteredSetup)
+		// Supplement chief output with specialist proposals it didn't explicitly include.
+		// Implements the documented merge strategy: specialist proposals are the floor,
+		// chief overrides only the params it explicitly returns.
+		chiefResult = mergeSpecialistFloor(chiefResult, specialistReports)
 		emit(ProgressEvent{Type: "progress", Agent: "chief", Message: "Ingeniero jefe: " + truncate(chiefResult.Reasoning, 300)})
 	}
 
@@ -207,9 +211,9 @@ func (p *Pipeline) runDrivingAgent(ctx context.Context, summary string, stats *d
 // Falls back to the client's defaults when routing is absent or empty.
 func (p *Pipeline) modelForRole(role string) (string, float64) {
 	if p.Routing == nil {
-		return "", 0 // empty → client defaults
+		return "", -1 // empty → client defaults
 	}
-	return p.Routing.ForRole(role, ""), p.Routing.TempForRole(role, 0)
+	return p.Routing.ForRole(role, ""), p.Routing.TempForRole(role, -1)
 }
 
 // --- Telemetry domain specialists ---
@@ -1119,6 +1123,64 @@ func filterInvalidSectionReports(reports []domain.SectionReport, setup *domain.S
 	return filtered
 }
 
+// mergeSpecialistFloor supplements the chief's output with specialist proposals the chief did
+// not explicitly include. This implements the documented merge strategy: "build from specialist
+// proposals first; chief overrides only for params it explicitly returns." Specialist reports
+// passed in must already be physics-validated and locked-param-filtered. The chief's proposals
+// take precedence for any (section, parameter) pair it explicitly returns; everything else is
+// taken from the specialists, preventing chief LLM output truncation from silently dropping
+// valid findings.
+func mergeSpecialistFloor(chief *chiefOutput, specialistReports []domain.SectionReport) *chiefOutput {
+	if chief == nil || len(specialistReports) == 0 {
+		return chief
+	}
+
+	// Index what the chief already covers: section → set of parameter names.
+	chiefCovered := make(map[string]map[string]bool)
+	for _, sec := range chief.Sections {
+		if _, ok := chiefCovered[sec.Section]; !ok {
+			chiefCovered[sec.Section] = make(map[string]bool)
+		}
+		for _, item := range sec.Items {
+			chiefCovered[sec.Section][item.Parameter] = true
+		}
+	}
+
+	// Build a stable index: section name → position in chief.Sections slice.
+	chiefSectionIdx := make(map[string]int, len(chief.Sections))
+	for i, sec := range chief.Sections {
+		chiefSectionIdx[sec.Section] = i
+	}
+
+	added := 0
+	for _, rep := range specialistReports {
+		if len(rep.Items) == 0 {
+			continue
+		}
+		covered, secPresent := chiefCovered[rep.Section]
+		if !secPresent {
+			// Chief has no entry for this section — add the entire specialist section.
+			chief.Sections = append(chief.Sections, rep)
+			added += len(rep.Items)
+			continue
+		}
+		// Chief mentions this section — add only the params it omitted.
+		idx := chiefSectionIdx[rep.Section]
+		for _, item := range rep.Items {
+			if !covered[item.Parameter] {
+				chief.Sections[idx].Items = append(chief.Sections[idx].Items, item)
+				covered[item.Parameter] = true
+				added++
+			}
+		}
+	}
+
+	if added > 0 {
+		log.Info().Int("added", added).Msg("mergeSpecialistFloor: supplemented chief with specialist proposals")
+	}
+	return chief
+}
+
 func (p *Pipeline) formatResponse(drivingAnalysis string, telemetryAnalysis string, specialistReports []domain.SectionReport, chief *chiefOutput, setup *domain.Setup, stats *domain.SessionStats, summary string) *domain.AnalysisResponse {
 	setupAnalysis := make(map[string][]domain.SetupChange)
 	fullSetup := make(map[string][]domain.SetupChange)
@@ -1852,4 +1914,20 @@ func normalizeMojibake(s string) string {
 		"â", "'",
 	)
 	return replacer.Replace(s)
+}
+
+// RunDomainEngineer exposes a single domain-engineer run for benchmarking.
+// Returns the parsed SectionReports and the raw findings summary.
+func (p *Pipeline) RunDomainEngineer(ctx context.Context, role string, telemetrySummary string, stats *domain.SessionStats, setup *domain.Setup, fixedParams []string) ([]domain.SectionReport, string, error) {
+	fixedStr := strings.Join(fixedParams, ", ")
+	out, err := p.runSingleDomainEngineer(ctx, role, telemetrySummary, stats, setup, fixedStr)
+	if err != nil {
+		return nil, "", err
+	}
+	return out.Sections, out.FindingsSummary, nil
+}
+
+// RunDrivingAgentBench exposes the driving agent run for benchmarking.
+func (p *Pipeline) RunDrivingAgentBench(ctx context.Context, telemetrySummary string, stats *domain.SessionStats) (string, error) {
+	return p.runDrivingAgent(ctx, telemetrySummary, stats)
 }
