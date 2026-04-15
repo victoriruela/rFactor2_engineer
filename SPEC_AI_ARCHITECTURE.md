@@ -6,6 +6,78 @@
 
 ---
 
+## Implementation Status
+
+| Phase | Description | Status | Notes |
+|-------|-------------|--------|-------|
+| **Phase 1** | Physics Grounding (rules, knowledge files, validation.go) | ✅ **DONE** | 63 rules en `data/physics_rules.json`; 6 knowledge files en `data/knowledge/`; `internal/agents/validation.go` implementado y conectado al pipeline |
+| **Phase 2** | Domain Engineers Architecture (pipeline restructure) | ✅ **DONE** | 4 Domain Engineers activos en `AnalyzeWithProgress`; `contradictions.go` activo; `validateAgentReport` llamado tras domain engineers y tras chief; legacy per-section specialists dormant |
+| **Phase 3** | Model Routing Engine (per-role model + temp) | ✅ **DONE** | `data/model_routing.json` en producción; `config.go` + `pipeline.go` + `client.go` gestionan routing por rol; Config tab desplegado |
+| **Phase 4** | Frontend — Read-Only Model Display | ✅ **DONE** | Selector de modelo eliminado del tab Análisis; Config tab con routing UI; asignaciones configurables por rol |
+| **Phase 5** | Benchmarking Infrastructure (rF2-Bench) | ✅ **DONE** | Golden dataset (20 casos, 10 escenarios), runner, judge, report, CLI rf2bench |
+
+### Current Production Model Assignments (April 2026)
+
+| Role | Model | Temperature |
+|------|-------|-------------|
+| `driving` | `kimi-k2:1t` | 0.4 |
+| `suspension` | `cogito-2.1:671b` | 0.2 |
+| `chassis` | `gemma4:31b` | 0.2 |
+| `aero` | `gemma4:31b` | 0.2 |
+| `powertrain` | `gemma3:12b` | 0.2 |
+| `chief` | `kimi-k2:1t` | 0.3 |
+
+> **Note**: Phase 3 model routing usa los roles `driving`, `suspension`, `chassis`, `aero`, `powertrain`, `chief` que mapean a los Domain Engineers del pipeline activo (Phase 2 implementada). Los roles `suspension`, `chassis`, `aero`, `powertrain` corresponden a los 4 Domain Engineers paralelos.
+
+### Phase 1 — What Was Built
+
+#### `services/backend_go/data/physics_rules.json`
+63 rules across 8 domains (A–G + Validation). Loaded at pipeline startup via `LoadPhysicsRules()`. **Wired** en `AnalyzeWithProgress` — se ejecuta tras domain engineers y tras el Chief.
+
+#### `services/backend_go/data/knowledge/`
+6 Markdown knowledge files injected into domain prompts via RAG:
+- `tire_thermodynamics.md` — Grip curve, contact patch, temp distribution
+- `aerodynamic_balance.md` — Front/rear downforce, drag, speed-dependent handling
+- `suspension_geometry.md` — Spring rates, ride heights, damper tuning
+- `braking_systems.md` — Bias, duct cooling, trail braking
+- `differential_dynamics.md` — Lock %, traction trade-offs
+- `rf2_parameter_guide.md` — rF2-specific parameter guide, `.svm` format
+
+#### `services/backend_go/internal/agents/validation.go`
+- `PhysicsRule`, `PhysicsRuleset`, `ValidationResult`, `AgentValidationSummary` types
+- `LoadPhysicsRules(path)` — reads and parses `physics_rules.json`
+- `validateRecommendation(change, rules, fixedParams)` — checks VC-xxx anti-hallucination rules
+- `validateAgentReport(section, rules, fixedParams)` — validates full section output, returns filtered section + summary
+- **Wired** en `AnalyzeWithProgress`: llamado para cada sección de cada domain engineer y para cada sección del Chief output
+
+### Phase 2 — What Was Built
+
+#### `services/backend_go/internal/agents/pipeline.go` — `AnalyzeWithProgress()`
+Pipeline activo (6 LLM calls, 3 tiempos de espera en serie):
+```
+1. runDrivingAgent()            sequential   → análisis de conducción
+2. runDomainEngineers()         4 parallel   → suspension, chassis, aero, powertrain
+3. validateAgentReport()        deterministic → filtra violaciones físicas por sección
+4. detectContradictions()       deterministic → detección algorítmica de conflictos
+5. runChiefEngineerV2()        sequential   → consolida con brief de contradicciones
+6. validateAgentReport()        deterministic → filtra violaciones físicas en output chief
+7. Post-processing              deterministic → simetría ejes, coherencia, reason hygiene
+```
+**Nota**: El código de `runTelemetrySpecialists()` (4 expertos de telemetría) y `runSpecialistsWithProgress()` (14 especialistas por sección) sigue presente pero **dormido** — ya no es llamado desde `AnalyzeWithProgress`.
+
+#### `services/backend_go/internal/agents/contradictions.go`
+- `detectContradictions(domainResults)` — compara propuestas pairwise por parámetro y dirección
+- `inferChangeDirection(oldVal, newVal)` — determina si el cambio es increase/decrease
+- `formatContradictionsForChief(contradictions)` — formatea el brief de conflictos para el Chief
+- `formatDomainReportsForChief(domainResults)` — serializa propuestas de domain engineers para el Chief
+- Incluye **parameter coupling matrix** (RearWingSetting ↔ RearRideHeightSetting, etc.)
+
+#### `services/backend_go/internal/agents/prompts.go` — Domain Engineer prompts
+4 prompts activos: `SUSPENSION_ENGINEER_PROMPT`, `CHASSIS_ENGINEER_PROMPT`, `AERO_ENGINEER_PROMPT`, `POWERTRAIN_ENGINEER_PROMPT` + `CHIEF_ENGINEER_V2_PROMPT`.  
+Prompts legacy presentes pero no usados: `SECTION_AGENT_PROMPT`, `CHIEF_ENGINEER_PROMPT`, `GLOBAL_SETUP_AGENT_PROMPT`.
+
+---
+
 ## Table of Contents
 
 1. [Problem Statement & Goals](#1-problem-statement--goals)
@@ -341,6 +413,8 @@ Post-processing (symmetry, coherence, reason hygiene)
 **Wall clock: 3 durations** (driving → 4 domain parallel → chief)
 **Token budget: ~25K** (vs ~75K with 14 specialists — 67% reduction)
 
+> **Estado actual**: Esta arquitectura está **implementada y en producción**. El pipeline activo en `AnalyzeWithProgress()` usa exactamente esta estructura. El código legacy de `runTelemetrySpecialists()` y `runSpecialistsWithProgress()` sigue presente en el archivo pero no es llamado desde el flujo principal.
+
 ### 3.3 Why This Architecture
 
 | Dimension | Old (14 specialists) | New (4 domain engineers) |
@@ -593,21 +667,19 @@ func (c *Client) GenerateWithRole(ctx context.Context, role string, prompt strin
 
 ```json
 {
-  "version": "1.0",
-  "model_assignments": {
-    "driving": {"model": "qwen2.5:7b", "temperature": 0.4},
-    "suspension": {"model": "qwen2.5:7b", "temperature": 0.2},
-    "chassis": {"model": "llama3.1:8b", "temperature": 0.2},
-    "aero": {"model": "qwen2.5:7b", "temperature": 0.2},
-    "powertrain": {"model": "llama3.1:8b", "temperature": 0.2},
-    "chief": {"model": "llama3.1:70b", "temperature": 0.3}
-  },
-  "fallback_chains": {
-    "driving": ["qwen2.5:7b", "llama3.1:8b", "mistral:7b"],
-    "chief": ["llama3.1:70b", "qwen2.5:72b", "mistral-large:123b"]
+  "version": 1,
+  "assignments": {
+    "driving":    {"model": "kimi-k2:1t",        "temperature": 0.4},
+    "suspension": {"model": "cogito-2.1:671b",   "temperature": 0.2},
+    "chassis":    {"model": "gemma4:31b",         "temperature": 0.2},
+    "aero":       {"model": "gemma4:31b",         "temperature": 0.2},
+    "powertrain": {"model": "gemma3:12b",         "temperature": 0.2},
+    "chief":      {"model": "kimi-k2:1t",         "temperature": 0.3}
   }
 }
 ```
+
+> **Production values** above reflect current production routing (April 2026). These replace the illustrative defaults from the original spec draft. The schema changed from `model_assignments` → `assignments` during Phase 3 implementation. Fallback chains are intentionally omitted in Phase 3; they remain in the spec as a Phase 5+ improvement candidate.
 
 **Load priority**: `model_routing.json` → env vars → hardcoded defaults.
 
@@ -817,44 +889,68 @@ Displays active model per role, fetched from `GET /api/models/routing`:
 
 ## 7. Implementation Roadmap
 
-### Phase 1: Physics Grounding (data layer, no pipeline restructuring)
-1. Create `data/physics_rules.json` with 60+ rules (all domains A–G above)
-2. Create `data/knowledge/*.md` files (6 domain knowledge files)
-3. Implement `validateRecommendation()` in Go
-4. Wire validation into pipeline post-processing
-5. Add Chain-of-Thought scaffolding constants
+### ✅ Phase 1: Physics Grounding (DONE)
+1. ~~Create `data/physics_rules.json` with 60+ rules~~ — 63 rules implementadas
+2. ~~Create `data/knowledge/*.md` files (6 domain knowledge files)~~ — 6 archivos creados
+3. ~~Implement `validateRecommendation()` in Go~~ — implementado en `validation.go`
+4. ~~Wire validation into pipeline post-processing~~ — wired tras domain engineers y chief
+5. ~~Add Chain-of-Thought scaffolding constants~~ — incluido en domain engineer prompts
 
-### Phase 2: Domain Engineers Architecture (pipeline restructuring)
-1. Create 4 domain engineer prompts (Suspension, Chassis, Aero, Powertrain)
-2. Refactor pipeline: replace 4 telemetry experts + 14 section specialists with 4 domain engineers
-3. Implement contradiction detection (deterministic Phase 2)
-4. Update Chief prompt for conflict resolution with `conflict_resolutions[]`
-5. Inject RAG knowledge from `data/knowledge/*.md` into domain engineer prompts
-6. Wire symbolic verification after domain engineers and after Chief
-7. Add optional peer review phase with `RF2_ENABLE_PEER_REVIEW` config flag
+### ✅ Phase 2: Domain Engineers Architecture (DONE)
+1. ~~Create 4 domain engineer prompts~~ — `SUSPENSION/CHASSIS/AERO/POWERTRAIN_ENGINEER_PROMPT`
+2. ~~Refactor pipeline: replace 4 telemetry experts + 14 section specialists~~ — activo en `AnalyzeWithProgress`
+3. ~~Implement contradiction detection~~ — `contradictions.go` con coupling matrix
+4. ~~Update Chief prompt for conflict resolution with `conflict_resolutions[]`~~ — `CHIEF_ENGINEER_V2_PROMPT`
+5. ~~Inject RAG knowledge from `data/knowledge/*.md`~~ — inyectado en domain engineer prompts
+6. ~~Wire symbolic verification after domain engineers and after Chief~~ — wired
+7. Optional peer review phase with `RF2_ENABLE_PEER_REVIEW` — **no implementado** (requiere benchmark evidence primero)
 
-### Phase 3: Model Routing Engine
-1. Extend `config.Config` with `ModelConfig` per-role fields
-2. Create `config/model_routing.json` schema and loader
-3. Modify `ollama.Client` to accept per-call model + temperature
-4. Update pipeline to use `GenerateWithRole()` for each call
-5. Implement fallback chains with availability checking
-6. Add `GET /api/models/routing` endpoint
+### ✅ Phase 3: Model Routing Engine (DONE)
+1. ~~Extend `config.Config` with per-role model/temp fields~~ — implementado en `config.go`
+2. ~~Create `model_routing.json` schema and loader~~ — `data/model_routing.json` en producción
+3. ~~Modify `ollama.Client` to accept per-call model + temperature~~ — `GenerateWithModel()` en `client.go`
+4. ~~Update pipeline to use per-role routing~~ — `modelForRole()` en `pipeline.go`
+5. Fallback chains with availability checking — **no implementado** (Phase 5+ candidate)
+6. ~~Add `GET /api/models/routing` endpoint~~ — activo
 
-### Phase 4: Frontend Changes
-1. Remove model selector from Analysis tab
-2. Remove `selectedModel` from store, request, auth config
-3. Add `ModelRoutingInfo` read-only component
-4. Wire to `GET /api/models/routing`
-5. Rename "Refrescar modelos" → "Test Connection"
+### ✅ Phase 4: Frontend Changes (DONE)
+1. ~~Remove model selector from Analysis tab~~ — eliminado
+2. ~~Remove `selectedModel` from store, request, auth config~~ — eliminado
+3. ~~Add Config tab with per-role model + temperature UI~~ — desplegado en producción
+4. ~~Wire to save/restore routing via `PUT /api/auth/config`~~ — activo
 
-### Phase 5: Benchmarking Infrastructure
-1. Create `benchmarks/golden_dataset/` with 50+ test cases
-2. Implement benchmark orchestrator (`run_benchmark.go`)
-3. Implement judge evaluator (`evaluate_with_judge.go`)
-4. Implement report generator
-5. Run initial benchmark across 5 candidate families
-6. Populate `model_routing.json` with empirical winners
+### ✅ Phase 5: Benchmarking Infrastructure (DONE)
+
+**What Was Built:**
+- `benchmarks/golden_dataset/scenarios/` — 10 JSONL scenario files, 20 test cases total
+  - Scenarios: brake_imbalance, understeer_midcorner, oversteer_entry, thermal_degradation, aero_imbalance, bottoming_out, cold_tire_spin, differential_tuning, snap_oversteer_exit, driver_inconsistency
+  - Coverage: suspension (6 cases), chassis (4 cases), aero (2 cases), powertrain (4 cases), driving (2 cases)
+  - Each case: telemetry_summary, setup_context, CaseExpected with must_mention/must_not_contain, physics_rules_that_apply
+- `benchmarks/golden_dataset/metadata.json` — dataset index with role and difficulty distribution
+- `benchmarks/golden_dataset/judge_rubric.md` — 5-dimension rubric + judge prompt template
+- `internal/benchmark/types.go` — BenchCase, BenchResult, JudgeScore types + JSONL loader
+- `internal/benchmark/runner.go` — orchestrator invoking Pipeline.RunDomainEngineer / RunDrivingAgentBench
+- `internal/benchmark/judge.go` — LLM-as-a-Judge via OpenAI-compatible API (GPT-4o default)
+- `internal/benchmark/report.go` — Markdown report generator with per-role stats table
+- `cmd/rf2bench/main.go` — CLI: `go run ./cmd/rf2bench` with flags for role, difficulty, judge config
+- `internal/agents/pipeline.go` — added `RunDomainEngineer()` and `RunDrivingAgentBench()` exports
+
+**Usage:**
+```bash
+# Run all cases without judge (fast smoke test)
+go run ./cmd/rf2bench -no-judge
+
+# Run with GPT-4o judge, filter to suspension only
+BENCH_JUDGE_KEY=sk-... go run ./cmd/rf2bench -role suspension -judge-model gpt-4o
+
+# Run against specific scenario file
+go run ./cmd/rf2bench -dataset benchmarks/golden_dataset/scenarios/brake_imbalance.jsonl
+```
+
+**Remaining (Phase 5+):**
+- ~~Run initial benchmark across candidate model families~~ — can now be run via CLI
+- ~~Update `model_routing.json` with empirical winners~~ — fed back via existing `cmd/benchmark`
+- Expand golden dataset to 50+ cases (current: 20)
 
 ---
 
