@@ -203,6 +203,12 @@ export async function saveModelRouting(
   await api.put('/models/routing', { assignments });
 }
 
+// Lists models available on the server's configured Ollama instance (no client auth params needed).
+export async function listAvailableModels(): Promise<ModelInfo[]> {
+  const { data } = await api.get<{ models: ModelInfo[] }>('/models/available');
+  return data.models ?? [];
+}
+
 // ── Benchmark (SSE) ──
 
 export interface BenchmarkProgressEvent {

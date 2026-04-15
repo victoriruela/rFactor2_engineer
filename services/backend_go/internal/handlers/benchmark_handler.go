@@ -122,7 +122,19 @@ func (h *ModelsHandler) RunBenchmark(c *gin.Context) {
 }
 
 // SaveModelRouting handles PUT /api/models/routing — saves manual routing overrides.
+// Only admin users may modify the global model assignments.
 func (h *ModelsHandler) SaveModelRouting(c *gin.Context) {
+	claims, exists := c.Get("auth_claims")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "no autorizado"})
+		return
+	}
+	cl := claims.(*auth.Claims)
+	if !cl.IsAdmin {
+		c.JSON(http.StatusForbidden, gin.H{"error": "solo administradores pueden modificar la asignación de modelos"})
+		return
+	}
+
 	var req struct {
 		Assignments map[string]config.ModelAssignment `json:"assignments"`
 	}
