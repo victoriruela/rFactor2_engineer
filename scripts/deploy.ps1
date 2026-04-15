@@ -25,6 +25,13 @@ function Step($msg) { Write-Host "" ; Write-Host "==> $msg" -ForegroundColor Cya
 function OK($msg)   { Write-Host "    OK: $msg" -ForegroundColor Green }
 function Die($msg)  { Write-Host "    FAIL: $msg" -ForegroundColor Red ; exit 1 }
 
+function Get-EntryHashFromHtml($html) {
+    if ($html -match 'entry-([a-f0-9]+)\.js') {
+        return $Matches[1]
+    }
+    return $null
+}
+
 function Ssh-Run($cmd) {
     $out = & ssh $SshTarget $cmd 2>&1
     return ($out | Out-String).Trim()
@@ -45,6 +52,28 @@ OK "GOOS/GOARCH limpios. GOOS del entorno = $(& go env GOOS)"
 
 # -- 2. Compilar linux/amd64 --
 Step "Compilando para linux/amd64"
+# Guardarrail estricto: regenerar siempre el bundle web antes del build Go.
+$ExpoDir = Join-Path $Root "apps\expo_app"
+$ExpoDistDir = Join-Path $ExpoDir "dist"
+$StaticEmbedDir = Join-Path $GoDir "cmd\server\static"
+
+Push-Location $ExpoDir
+& npx expo export --platform web
+$expoBuildExit = $LASTEXITCODE
+Pop-Location
+if ($expoBuildExit -ne 0) { Die "expo export fallo con exit $expoBuildExit" }
+if (-not (Test-Path $ExpoDistDir)) { Die "No se encontro Expo dist en $ExpoDistDir" }
+
+# Copiar Expo dist al directorio static embebido antes de compilar.
+Remove-Item "$StaticEmbedDir\*" -Recurse -Force -ErrorAction SilentlyContinue
+Copy-Item "$ExpoDistDir\*" $StaticEmbedDir -Recurse -Force
+OK "Expo dist copiado a static embed"
+
+$distIndexPath = Join-Path $ExpoDistDir "index.html"
+if (-not (Test-Path $distIndexPath)) { Die "No se encontro index.html en Expo dist" }
+$distIndexHtml = Get-Content -Path $distIndexPath -Raw
+$expectedEntryHash = Get-EntryHashFromHtml $distIndexHtml
+if (-not $expectedEntryHash) { Die "No se encontro entry-*.js en index.html de Expo dist" }
 # Guardarrail: normalizar script de entrada web como modulo para permitir import.meta
 if (Test-Path $StaticIndexPath) {
     $indexHtmlLocal = Get-Content -Path $StaticIndexPath -Raw
@@ -55,10 +84,20 @@ if (Test-Path $StaticIndexPath) {
     }
 }
 
+# Guardarrail: validar que static embebido apunta al mismo hash que Expo dist.
+$staticIndexHtml = Get-Content -Path $StaticIndexPath -Raw
+$embeddedEntryHash = Get-EntryHashFromHtml $staticIndexHtml
+if (-not $embeddedEntryHash) { Die "No se encontro entry-*.js en static/index.html embebido" }
+if ($embeddedEntryHash -ne $expectedEntryHash) {
+    Die "Hash de bundle desalineado: dist=$expectedEntryHash static=$embeddedEntryHash"
+}
+OK "Hash bundle sincronizado: $expectedEntryHash"
+
 Set-Location $GoDir
 $env:GOOS   = "linux"
 $env:GOARCH = "amd64"
-& go build -o $BinName ./cmd/server
+$buildTs = Get-Date -Format 'yyyyMMddHHmmss'
+& go build -ldflags "-X main.buildVersion=$buildTs" -o $BinName ./cmd/server
 $buildExit = $LASTEXITCODE
 Remove-Item Env:GOOS   -ErrorAction SilentlyContinue
 Remove-Item Env:GOARCH -ErrorAction SilentlyContinue
@@ -102,16 +141,19 @@ foreach ($path in @("/", "/api/health")) {
 
 # -- 7. Verificar bundle JS --
 Step "Verificando que el bundle JS esta accesible"
-$indexContent = Ssh-Run "curl -s -m 10 $PublicURL/"
-if ($indexContent -match "entry-([a-f0-9]+)\.js") {
-    $hash       = $Matches[1]
-    $bundleUrl  = "$PublicURL/_expo/static/js/web/entry-$hash.js"
-    $bundleCode = Ssh-Run "curl -s -o /dev/null -w '%{http_code}' -m 15 $bundleUrl"
-    if ($bundleCode -ne "200") { Die "Bundle entry-$hash.js -> $bundleCode (esperado 200)" }
-    OK "Bundle entry-$hash.js -> $bundleCode"
-} else {
+$indexContent = (& curl.exe -s -m 15 "$PublicURL/") | Out-String
+$publicEntryHash = Get-EntryHashFromHtml $indexContent
+if (-not $publicEntryHash) {
     Die "No se encontro entry-*.js en index.html servido"
 }
+if ($publicEntryHash -ne $expectedEntryHash) {
+    Die "Hash publico desactualizado: esperado=$expectedEntryHash publico=$publicEntryHash"
+}
+$bundleUrl = "$PublicURL/_expo/static/js/web/entry-$publicEntryHash.js"
+$bundleCode = (& curl.exe -s -o NUL -w "%{http_code}" -m 15 "$bundleUrl") | Out-String
+$bundleCode = $bundleCode.Trim()
+if ($bundleCode -ne "200") { Die "Bundle entry-$publicEntryHash.js -> $bundleCode (esperado 200)" }
+OK "Bundle entry-$publicEntryHash.js -> $bundleCode"
 
 # Guardarrail: la entrada web debe cargarse como modulo para permitir import.meta
 if ($indexContent -notmatch '<script[^>]*type="module"[^>]*entry-[a-f0-9]+\.js') {

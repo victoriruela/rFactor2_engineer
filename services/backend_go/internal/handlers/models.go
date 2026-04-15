@@ -14,14 +14,15 @@ import (
 
 // ModelsHandler proxies model listing from Ollama.
 type ModelsHandler struct {
-	Client  *ollama.Client
-	DataDir string
-	AuthDB  *auth.DB
+	Client       *ollama.Client
+	DataDir      string
+	AuthDB       *auth.DB
+	BuildVersion string
 }
 
 // NewModelsHandler creates a models handler.
-func NewModelsHandler(client *ollama.Client, dataDir string, authDB *auth.DB) *ModelsHandler {
-	return &ModelsHandler{Client: client, DataDir: dataDir, AuthDB: authDB}
+func NewModelsHandler(client *ollama.Client, dataDir string, authDB *auth.DB, buildVersion string) *ModelsHandler {
+	return &ModelsHandler{Client: client, DataDir: dataDir, AuthDB: authDB, BuildVersion: buildVersion}
 }
 
 // ListModels handles GET /api/models
@@ -79,9 +80,21 @@ func (h *ModelsHandler) HealthCheck(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"status": status,
-		"ollama": ollamaOK,
+		"status":  status,
+		"ollama":  ollamaOK,
+		"version": h.BuildVersion,
 	})
+}
+
+// ListAvailableModels handles GET /api/models/available — lists Ollama models using server credentials.
+func (h *ModelsHandler) ListAvailableModels(c *gin.Context) {
+	models, err := h.Client.ListModels(c.Request.Context())
+	if err != nil {
+		log.Warn().Err(err).Msg("failed to list available Ollama models")
+		c.JSON(http.StatusBadGateway, gin.H{"error": "No se pudieron obtener los modelos: " + err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"models": models})
 }
 
 // GetModelRouting handles GET /api/models/routing — returns per-role model assignments.

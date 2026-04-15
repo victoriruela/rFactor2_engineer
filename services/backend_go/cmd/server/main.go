@@ -34,6 +34,10 @@ var staticFS embed.FS
 
 var expoEntryScriptRE = regexp.MustCompile(`<script\s+src="(/_expo/static/js/web/entry-[a-f0-9]+\.js)"\s+defer></script>`)
 
+// buildVersion is injected at compile time via -ldflags "-X main.buildVersion=<timestamp>".
+// Falls back to "dev" when building locally without the flag.
+var buildVersion = "dev"
+
 func main() {
 	// ── Logging ──
 	zerolog.TimeFieldFormat = zerolog.TimeFormatUnix
@@ -109,7 +113,7 @@ func main() {
 
 	// ── Handlers ──
 	analysisH := handlers.NewAnalysisHandler(cfg.DataDir, ollamaClient)
-	modelsH := handlers.NewModelsHandler(ollamaClient, cfg.DataDir, authDB)
+	modelsH := handlers.NewModelsHandler(ollamaClient, cfg.DataDir, authDB, buildVersion)
 	tracksH := handlers.NewTracksHandler()
 
 	// ── Router ──
@@ -142,6 +146,7 @@ func main() {
 
 			// Models
 			protected.GET("/models", modelsH.ListModels)
+			protected.GET("/models/available", modelsH.ListAvailableModels)
 			protected.GET("/models/routing", modelsH.GetModelRouting)
 			protected.PUT("/models/routing", modelsH.SaveModelRouting)
 			protected.POST("/models/benchmark", modelsH.RunBenchmark)
