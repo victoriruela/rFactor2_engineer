@@ -1,12 +1,15 @@
 // cmd/benchmark — standalone benchmark runner.
-// Reads OLLAMA_BASE_URL and OLLAMA_API_KEY from env, tests all available cloud models
-// against the 6 agent roles, and writes the best assignment to model_routing.json.
+// Tests all available cloud models against the 6 agent roles and writes the
+// best assignment to model_routing.json.
+//
+// The API key is resolved in order:
+//  1. OLLAMA_API_KEY env var
+//  2. ollama_api_key of the admin user in RF2_DATA_DIR/rf2_users.db
 //
 // Usage (from services/backend_go/):
 //
 //	OLLAMA_BASE_URL=https://www.ollama.com \
-//	OLLAMA_API_KEY=<key> \
-//	RF2_DATA_DIR=/opt/rfactor2_engineer/data \
+//	RF2_DATA_DIR=./data \
 //	BENCHMARK_MAX_CANDIDATES=200 \
 //	./benchmark
 package main
@@ -19,6 +22,7 @@ import (
 	"path/filepath"
 	"strconv"
 
+	"github.com/viciruela/rfactor2-engineer/internal/auth"
 	"github.com/viciruela/rfactor2-engineer/internal/benchmarks"
 	"github.com/viciruela/rfactor2-engineer/internal/config"
 )
@@ -28,6 +32,20 @@ func getEnv(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+// readAPIKeyFromDB opens the users SQLite DB and returns the admin user's API key.
+func readAPIKeyFromDB(dataDir string) string {
+	db, err := auth.OpenDB(dataDir)
+	if err != nil {
+		return ""
+	}
+	defer db.Close()
+	user, err := db.GetUserByUsername("Mulder_admin")
+	if err != nil || user == nil {
+		return ""
+	}
+	return user.OllamaAPIKey
 }
 
 func main() {
@@ -41,8 +59,16 @@ func main() {
 		maxCandidates = 200
 	}
 
+	// Auto-read API key from local DB if not provided via env
 	if apiKey == "" {
-		fmt.Fprintln(os.Stderr, "OLLAMA_API_KEY is required")
+		apiKey = readAPIKeyFromDB(dataDir)
+		if apiKey != "" {
+			fmt.Println("API key loaded from local database.")
+		}
+	}
+
+	if apiKey == "" {
+		fmt.Fprintln(os.Stderr, "OLLAMA_API_KEY is required (or save it via the web UI into the admin profile)")
 		os.Exit(1)
 	}
 

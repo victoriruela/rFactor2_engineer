@@ -219,7 +219,7 @@ func (c *Client) GenerateWithModel(ctx context.Context, prompt, system, model st
 	if model == "" {
 		model = c.Model
 	}
-	if temp <= 0 {
+	if temp < 0 {
 		temp = c.Temp
 	}
 

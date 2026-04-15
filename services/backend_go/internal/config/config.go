@@ -46,7 +46,7 @@ func (mr *ModelRouting) ForRole(role, globalDefault string) string {
 // TempForRole returns the temperature for a given role, falling back to defaultTemp.
 func (mr *ModelRouting) TempForRole(role string, defaultTemp float64) float64 {
 	if mr != nil {
-		if a, ok := mr.Assignments[role]; ok && a.Temperature > 0 {
+		if a, ok := mr.Assignments[role]; ok {
 			return a.Temperature
 		}
 	}
