@@ -1,8 +1,8 @@
 ﻿import { useCallback, useEffect, useMemo, useState } from 'react';
-import { View, Text, StyleSheet, Pressable, ScrollView, ActivityIndicator, TextInput } from 'react-native';
+import { View, Text, StyleSheet, Pressable, ScrollView, ActivityIndicator } from 'react-native';
 import { useAppStore } from '../../src/store/useAppStore';
-import { analyzePreparsedStream, listModelRouting, authUpdateConfig } from '../../src/api';
-import type { ProgressEvent, SetupChange, ModelRoutingAssignment } from '../../src/api';
+import { analyzePreparsedStream, authUpdateConfig } from '../../src/api';
+import type { ProgressEvent, SetupChange } from '../../src/api';
 import SetupTable from '../../src/components/SetupTable';
 import MarkdownText from '../../src/components/MarkdownText';
 import ChiefReasoningFormatter from '../../src/components/ChiefReasoningFormatter';
@@ -34,24 +34,14 @@ export default function AnalysisScreen() {
     isAnalyzing, setAnalyzing,
     analysisResult, setAnalysisResult,
     analysisError, setAnalysisError,
-    ollamaApiKey, setOllamaApiKey,
+    ollamaApiKey,
     lockedParameters,
     preparsedPayload,
     isUploading,
-    jwt,
   } = useAppStore();
   const [progressMessages, setProgressMessages] = useState<ProgressEvent[]>([]);
   const [progressExpanded, setProgressExpanded] = useState(true);
-  const [draftOllamaApiKey, setDraftOllamaApiKey] = useState(ollamaApiKey);
   const [analysisElapsed, setAnalysisElapsed] = useState(0);
-  const [savingConfig, setSavingConfig] = useState(false);
-  const [routingAssignments, setRoutingAssignments] = useState<ModelRoutingAssignment[] | null>(null);
-  const [routingFallback, setRoutingFallback] = useState<string>('');
-  const [configSavedMsg, setConfigSavedMsg] = useState<string | null>(null);
-
-  useEffect(() => {
-    setDraftOllamaApiKey(ollamaApiKey);
-  }, [ollamaApiKey]);
 
   useEffect(() => {
     if (!isAnalyzing) {
@@ -67,33 +57,6 @@ export default function AnalysisScreen() {
     const sec = s % 60;
     return m > 0 ? `${m}m ${sec}s` : `${sec}s`;
   };
-
-  const handleSaveApiKey = useCallback(async () => {
-    setSavingConfig(true);
-    setConfigSavedMsg(null);
-    const apiKey = draftOllamaApiKey.trim();
-    setOllamaApiKey(apiKey);
-    try {
-      await authUpdateConfig(apiKey, '');
-      setConfigSavedMsg('Guardado ✓');
-      setTimeout(() => setConfigSavedMsg(null), 2500);
-    } catch {
-      setConfigSavedMsg('Error al guardar');
-      setTimeout(() => setConfigSavedMsg(null), 2500);
-    } finally {
-      setSavingConfig(false);
-    }
-  }, [draftOllamaApiKey, setOllamaApiKey]);
-
-  // Fetch model routing info from server on mount
-  useEffect(() => {
-    listModelRouting()
-      .then((res) => {
-        setRoutingAssignments(res.routing);
-        setRoutingFallback(res.fallback ?? '');
-      })
-      .catch(() => { /* routing info is optional */ });
-  }, []);
 
   const filteredSetupAnalysis = useMemo<Record<string, SetupChange[]>>(() => {
     const source = analysisResult?.setup_analysis ?? {};
@@ -131,7 +94,7 @@ export default function AnalysisScreen() {
 
     try {
       setProgressMessages([{ type: 'progress', agent: 'driving', message: 'Analizando payload parseado en cliente...' }]);
-      const apiKey = draftOllamaApiKey.trim();
+      const apiKey = ollamaApiKey?.trim() ?? '';
       const result = await analyzePreparsedStream(
         preparsedPayload,
         '',
@@ -156,7 +119,7 @@ export default function AnalysisScreen() {
       setProgressExpanded(false);
 
       // Auto-save API key to user profile
-      authUpdateConfig(draftOllamaApiKey.trim(), '').catch(() => { /* silent */ });
+      authUpdateConfig(ollamaApiKey?.trim() ?? '', '').catch(() => { /* silent */ });
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : 'Error en el análisis';
       setAnalysisError(msg);
@@ -168,7 +131,7 @@ export default function AnalysisScreen() {
     lockedParameters,
     analysisResult,
     isUploading,
-    draftOllamaApiKey,
+    ollamaApiKey,
     setAnalyzing,
     setAnalysisResult,
     setAnalysisError,
@@ -177,49 +140,6 @@ export default function AnalysisScreen() {
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
       <Text style={styles.title}>Análisis AI</Text>
-
-      {/* API Key config */}
-      <View style={styles.modelHeaderRow}>
-        <Text style={styles.label}>Configuración Ollama:</Text>
-        <Pressable
-          style={[styles.refreshBtn, (savingConfig || !jwt) && styles.disabled]}
-          onPress={() => { void handleSaveApiKey(); }}
-          disabled={savingConfig || !jwt}
-        >
-          <Text style={styles.refreshBtnText}>
-            {configSavedMsg ?? (savingConfig ? 'Guardando...' : 'Guardar API Key')}
-          </Text>
-        </Pressable>
-      </View>
-
-      <View style={styles.modelConfigRow}>
-        <Text style={styles.label}>API Key Ollama:</Text>
-        <TextInput
-          style={styles.modelInput}
-          value={draftOllamaApiKey}
-          onChangeText={setDraftOllamaApiKey}
-          placeholder="sk-..."
-          placeholderTextColor="#777"
-          autoCapitalize="none"
-          autoCorrect={false}
-          secureTextEntry
-        />
-      </View>
-
-      {/* Model routing — informational only */}
-      {routingAssignments && routingAssignments.length > 0 && (
-        <View style={styles.routingSection}>
-          <Text style={styles.routingSectionTitle}>Modelos por Rol (selección automática)</Text>
-          <Text style={styles.routingFallback}>Fallback global: {routingFallback || 'llama3.2:latest'}</Text>
-          {routingAssignments.map((a) => (
-            <View key={a.role} style={styles.routingRow}>
-              <Text style={styles.routingRole}>{AGENT_LABELS[a.role] ?? a.role}</Text>
-              <Text style={styles.routingModel}>{a.effective_model}</Text>
-              <Text style={styles.routingTemp}>T={a.temperature}</Text>
-            </View>
-          ))}
-        </View>
-      )}
 
       {/* Analyze button */}
       <Pressable
